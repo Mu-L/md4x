@@ -6,14 +6,17 @@
   "type": "module",
   "exports": {
     "./wasm": {
-      "unwasm": "./lib/unwasm.mjs",
-      "default": "./lib/wasm.mjs"
+      "unwasm": "./lib/wasm/unwasm.mjs",
+      "default": "./lib/wasm/defult.mjs"
     },
     "./napi": "./lib/napi.mjs",
     "./build/md4x.wasm": "./build/md4x.wasm",
     ".": {
       "node": "./lib/napi.mjs",
-      "default": "./lib/wasm.mjs"
+      "default": {
+        "unwasm": "./lib/wasm/unwasm.mjs",
+        "default": "./lib/wasm/defult.mjs"
+      }
     }
   },
   "types": "./lib/types.d.mts",
