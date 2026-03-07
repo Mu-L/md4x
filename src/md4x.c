@@ -5011,7 +5011,7 @@ md_process_inlines(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines)
 
                     /* link/image closer may span multiple lines. */
                     if(mark->ch == ']') {
-                        while(mark->end > line->end)
+                        while(mark->end > line->end && line < lines + n_lines - 1)
                             line++;
                     }
 

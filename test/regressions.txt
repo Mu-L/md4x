@@ -766,3 +766,33 @@ Bare `=` at start of attrs:
 .
 <p><span foo>text</span></p>
 ````````````````````````````````
+
+
+## Fuzz: table cell inline line overflow
+
+A link with attributes containing pipes inside a table row caused the `]`
+closer mark to extend past the single-line cell boundary in
+`md_process_inlines`, overflowing the stack-allocated `MD_LINE` array.
+
+```````````````````````````````` example
+h| B | C |
+| --- | --: | :-: |
+| [Link](url){a | b | c |
+.
+<table>
+<thead>
+<tr>
+<th>h</th>
+<th align="right">B</th>
+<th align="center">C</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="url">Link</a>{a</td>
+<td align="right">b</td>
+<td align="center">c</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
