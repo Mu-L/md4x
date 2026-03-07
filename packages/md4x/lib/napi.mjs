@@ -2,6 +2,13 @@
 
 let binding;
 
+function str(input) {
+  if (input == null) return "";
+  if (typeof input !== "string")
+    throw new TypeError("md4x: input must be a string");
+  return input;
+}
+
 function getBinding(opts) {
   if (binding) return binding;
   if (opts?.binding) {
@@ -33,12 +40,12 @@ const HEAL_FLAG = 0x0100;
 export function renderToHtml(input, opts) {
   let flags = opts?.full ? 0x0008 : 0;
   if (opts?.heal) flags |= HEAL_FLAG;
-  return getBinding().renderToHtml(input, flags);
+  return getBinding().renderToHtml(str(input), flags);
 }
 
 export function renderToAST(input, opts) {
   const flags = opts?.heal ? HEAL_FLAG : 0;
-  return getBinding().renderToAST(input, flags);
+  return getBinding().renderToAST(str(input), flags);
 }
 
 export function parseAST(input, opts) {
@@ -47,17 +54,17 @@ export function parseAST(input, opts) {
 
 export function renderToAnsi(input, opts) {
   const flags = opts?.heal ? HEAL_FLAG : 0;
-  return getBinding().renderToAnsi(input, flags);
+  return getBinding().renderToAnsi(str(input), flags);
 }
 
 export function renderToMeta(input, opts) {
   const flags = opts?.heal ? HEAL_FLAG : 0;
-  return getBinding().renderToMeta(input, flags);
+  return getBinding().renderToMeta(str(input), flags);
 }
 
 export function renderToText(input, opts) {
   const flags = opts?.heal ? HEAL_FLAG : 0;
-  return getBinding().renderToText(input, flags);
+  return getBinding().renderToText(str(input), flags);
 }
 
 export function parseMeta(input, opts) {
@@ -69,5 +76,5 @@ export function parseMeta(input, opts) {
 }
 
 export function heal(input) {
-  return getBinding().heal(input);
+  return getBinding().heal(str(input));
 }

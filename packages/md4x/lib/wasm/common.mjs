@@ -28,10 +28,17 @@ export const _imports = {
   },
 };
 
+function str(input) {
+  if (input == null) return "";
+  if (typeof input !== "string")
+    throw new TypeError("md4x: input must be a string");
+  return input;
+}
+
 function render(exports, fn, input, ...extra) {
   const { memory, md4x_alloc, md4x_free, md4x_result_ptr, md4x_result_size } =
     exports;
-  const encoded = new TextEncoder().encode(input);
+  const encoded = new TextEncoder().encode(str(input));
   const ptr = md4x_alloc(encoded.length);
   new Uint8Array(memory.buffer).set(encoded, ptr);
   const ret = fn(ptr, encoded.length, ...extra);

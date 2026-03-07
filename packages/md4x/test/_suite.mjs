@@ -1572,4 +1572,183 @@ export function defineSuite({
       expect(result).not.toContain("\0");
     });
   });
+
+  describe("input validation", () => {
+    const renderers = [
+      ["renderToHtml", renderToHtml],
+      ["renderToAST", renderToAST],
+      ["renderToAnsi", renderToAnsi],
+      ["renderToMeta", renderToMeta],
+      ["renderToText", renderToText],
+      ["heal", heal],
+    ];
+
+    for (const [name, fn] of renderers) {
+      describe(name, () => {
+        it("treats null as empty string", async () => {
+          expect(() => fn(null)).not.toThrow();
+        });
+
+        it("treats undefined as empty string", async () => {
+          expect(() => fn(undefined)).not.toThrow();
+        });
+
+        it("treats no arguments as empty string", async () => {
+          expect(() => fn()).not.toThrow();
+        });
+
+        it("throws TypeError on number input", async () => {
+          expect(() => fn(42)).toThrow(TypeError);
+          expect(() => fn(42)).toThrow("md4x: input must be a string");
+        });
+
+        it("throws TypeError on object input", async () => {
+          expect(() => fn({})).toThrow(TypeError);
+          expect(() => fn({})).toThrow("md4x: input must be a string");
+        });
+
+        it("throws TypeError on array input", async () => {
+          expect(() => fn([])).toThrow(TypeError);
+        });
+
+        it("throws TypeError on boolean input", async () => {
+          expect(() => fn(true)).toThrow(TypeError);
+        });
+      });
+    }
+
+    it("renderToHtml(null) returns empty string", async () => {
+      expect(await renderToHtml(null)).toBe("");
+    });
+
+    it("renderToHtml(undefined) returns empty string", async () => {
+      expect(await renderToHtml(undefined)).toBe("");
+    });
+
+    it("renderToHtml() with no args returns empty string", async () => {
+      expect(await renderToHtml()).toBe("");
+    });
+
+    it("renderToAST(null) returns empty nodes", async () => {
+      const result = JSON.parse(await renderToAST(null));
+      expect(result.nodes).toEqual([]);
+    });
+
+    it("renderToMeta(null) returns empty headings", async () => {
+      const result = JSON.parse(await renderToMeta(null));
+      expect(result.headings).toEqual([]);
+    });
+
+    it("parseAST(null) returns empty tree", async () => {
+      const tree = await parseAST(null);
+      expect(tree.nodes).toEqual([]);
+      expect(tree.frontmatter).toEqual({});
+    });
+
+    it("parseAST throws TypeError on number input", async () => {
+      expect(() => parseAST(42)).toThrow(TypeError);
+    });
+
+    it("parseMeta(null) returns empty meta", async () => {
+      const meta = await parseMeta(null);
+      expect(meta.headings).toEqual([]);
+    });
+
+    it("parseMeta throws TypeError on number input", async () => {
+      expect(() => parseMeta(42)).toThrow(TypeError);
+    });
+
+    it("heal(null) returns empty string", async () => {
+      expect(await heal(null)).toBe("");
+    });
+
+    it("heal(undefined) returns empty string", async () => {
+      expect(await heal(undefined)).toBe("");
+    });
+  });
+
+  describe("error handling", () => {
+    describe("edge-case inputs", () => {
+      it("handles only whitespace input", async () => {
+        expect(await renderToHtml("   \n\n  \t  \n")).toBe("");
+      });
+
+      it("handles extremely long line without crashing", async () => {
+        const longLine = "a".repeat(100_000);
+        const result = await renderToHtml(longLine);
+        expect(result).toContain(longLine);
+      });
+
+      it("handles deeply nested blockquotes", async () => {
+        const input = "> ".repeat(100) + "deep";
+        const result = await renderToHtml(input);
+        expect(result).toContain("deep");
+      });
+
+      it("handles deeply nested lists", async () => {
+        const lines = [];
+        for (let i = 0; i < 50; i++) {
+          lines.push("  ".repeat(i) + "- item " + i);
+        }
+        const result = await renderToHtml(lines.join("\n"));
+        expect(result).toContain("item 0");
+      });
+
+      it("handles unclosed code fence", async () => {
+        const result = await renderToHtml("```js\nsome code\nmore code");
+        expect(result).toContain("some code");
+      });
+
+      it("handles unclosed frontmatter", async () => {
+        const result = await renderToHtml("---\ntitle: hello\nno closing");
+        expect(typeof result).toBe("string");
+      });
+
+      it("handles null bytes in input", async () => {
+        const result = await renderToHtml("hello\0world");
+        expect(result).toContain("hello");
+      });
+
+      it("handles many unclosed emphasis markers", async () => {
+        const input = "**".repeat(500);
+        const result = await renderToHtml(input);
+        expect(typeof result).toBe("string");
+      });
+
+      it("handles many unclosed brackets", async () => {
+        const input = "[".repeat(500);
+        const result = await renderToHtml(input);
+        expect(typeof result).toBe("string");
+      });
+
+      it("parseAST handles malformed components gracefully", async () => {
+        const tree = await parseAST("::broken{invalid\ncontent\n::");
+        expect(tree).toHaveProperty("nodes");
+      });
+
+      it("parseAST handles deeply nested components", async () => {
+        let input = "";
+        for (let i = 0; i < 20; i++) {
+          input += ":".repeat(i + 3) + "comp" + i + "\n";
+        }
+        for (let i = 19; i >= 0; i--) {
+          input += ":".repeat(i + 3) + "\n";
+        }
+        const tree = await parseAST(input);
+        expect(tree).toHaveProperty("nodes");
+      });
+
+      it("heal handles input that is already valid", async () => {
+        const input = "# Hello\n\nA **bold** paragraph.";
+        expect(await heal(input)).toBe(input);
+      });
+
+      it("heal handles all unclosed markers at once", async () => {
+        const input = "**bold *italic `code ~~strike";
+        const result = await heal(input);
+        expect(typeof result).toBe("string");
+        expect(result.length).toBeGreaterThanOrEqual(input.length);
+      });
+    });
+  });
 }
