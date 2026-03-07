@@ -161,8 +161,10 @@ LibFuzzer harnesses for all renderers and the heal utility. Requires clang with 
 
 ```sh
 # Build & run a fuzzer (builds automatically, 60s default):
-./test/fuzzers/run.sh html              # html fuzzer, 60s
-./test/fuzzers/run.sh ast 300           # ast fuzzer, 300s
+./test/fuzzers/run.sh html                        # html fuzzer, 60s, 1 core
+./test/fuzzers/run.sh ast --timeout 300           # ast fuzzer, 300s
+./test/fuzzers/run.sh heal --cores 4              # heal fuzzer, 4 cores
+./test/fuzzers/run.sh html --cores 4 --timeout 0  # html fuzzer, forever, 4 cores
 
 # Build all fuzzers (without running):
 ./test/fuzzers/build.sh
