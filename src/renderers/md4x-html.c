@@ -724,7 +724,9 @@ code_meta_cleanup(MD_HTML* r)
 {
     if(r->code_blocks != NULL) {
         int i;
-        for(i = 0; i < r->n_code_blocks; i++)
+        /* Free committed entries + the in-progress entry if parse was aborted. */
+        int count = r->n_code_blocks + (r->in_code_block ? 1 : 0);
+        for(i = 0; i < count; i++)
             free(r->code_blocks[i].highlights);
         free(r->code_blocks);
     }
@@ -737,11 +739,26 @@ emit_json_str(void (*out)(const MD_CHAR*, MD_SIZE, void*), void* ud,
     MD_SIZE i, beg = 0;
     out("\"", 1, ud);
     for(i = 0; i < size; i++) {
-        if(str[i] == '"' || str[i] == '\\') {
+        unsigned char ch = (unsigned char) str[i];
+        if(ch == '"' || ch == '\\' || ch < 0x20) {
             if(i > beg)
                 out(str + beg, i - beg, ud);
-            out("\\", 1, ud);
-            beg = i;
+            if(ch == '"' || ch == '\\') {
+                out("\\", 1, ud);
+                out(str + i, 1, ud);
+            } else if(ch == '\n') {
+                out("\\n", 2, ud);
+            } else if(ch == '\r') {
+                out("\\r", 2, ud);
+            } else if(ch == '\t') {
+                out("\\t", 2, ud);
+            } else {
+                /* Other control chars: \u00XX */
+                static const char hex[] = "0123456789abcdef";
+                char esc[6] = { '\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0xf] };
+                out(esc, 6, ud);
+            }
+            beg = i + 1;
         }
     }
     if(i > beg)

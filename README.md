@@ -162,6 +162,40 @@ Note: markdown-it parser returns an array of tokens while md4x returns nested co
 
 </details>
 
+### Code Highlighting
+
+`renderToHtml` supports a `highlighter` option for custom syntax highlighting of fenced code blocks. The highlighter receives the raw code (HTML-unescaped) and block metadata (language, filename, highlighted lines), and returns a replacement HTML string or `undefined` to keep the default.
+
+````js
+import { renderToHtml } from "md4x";
+import { createHighlighter } from "shiki";
+
+const highlighter = await createHighlighter({
+  themes: ["github-dark"],
+  langs: ["js", "ts", "html", "css"],
+});
+
+const html = renderToHtml("```js\nconst x = 1;\n```", {
+  highlighter: (code, block) => {
+    if (!block.lang) return; // keep default for unknown languages
+    return highlighter.codeToHtml(code, {
+      lang: block.lang,
+      theme: "github-dark",
+    });
+  },
+});
+````
+
+Code block metadata from the info string is parsed automatically:
+
+````md
+```ts [app.ts] {1,3-5}
+// block.lang = "ts"
+// block.filename = "app.ts"
+// block.highlights = [1, 3, 4, 5]
+```
+````
+
 ### Markdown Healing
 
 `heal()` fixes incomplete markdown from streaming LLM output — closing unclosed bold, italic, strikethrough, inline code, code blocks, links, and more. Useful for rendering partial markdown in real-time as tokens arrive (inspired by [streamdown/remend](https://github.com/vercel/streamdown/tree/main/packages/remend)).

@@ -1245,6 +1245,48 @@ export function defineSuite({
       expect(html).toContain('<pre class="custom">highlighted</pre>');
       expect(html).not.toContain('<code class="language-js">');
     });
+
+    it("highlight ranges metadata is preserved", async () => {
+      const { blocks } = await collectBlocks(
+        "```js {1-3,5,7-9}\na\nb\nc\nd\ne\nf\ng\nh\ni\n```",
+      );
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].highlights).toEqual([1, 2, 3, 5, 7, 8, 9]);
+    });
+
+    it("multiple code blocks with highlights all cleaned up", async () => {
+      const md = [
+        "```js {1}\na\n```",
+        "",
+        "```py {2,3}\nb\nc\n```",
+        "",
+        "```rs {1-2}\nd\ne\n```",
+      ].join("\n");
+      const { blocks } = await collectBlocks(md);
+      expect(blocks).toHaveLength(3);
+      expect(blocks[0].highlights).toEqual([1]);
+      expect(blocks[1].highlights).toEqual([2, 3]);
+      expect(blocks[2].highlights).toEqual([1, 2]);
+    });
+
+    it("escapes control characters in filename JSON", async () => {
+      // Tab in filename: ```js [file\tname.js]
+      const { blocks } = await collectBlocks(
+        "```js [file\tname.js]\ncode\n```",
+      );
+      expect(blocks).toHaveLength(1);
+      // The filename should round-trip through JSON without corruption
+      expect(blocks[0].filename).toBe("file\tname.js");
+    });
+
+    it("escapes quotes and backslashes in filename JSON", async () => {
+      const { blocks } = await collectBlocks(
+        '```js [file\\"name.js]\ncode\n```',
+      );
+      expect(blocks).toHaveLength(1);
+      // Filename with backslash and quote should survive JSON parsing
+      expect(typeof blocks[0].filename).toBe("string");
+    });
   });
 
   describe("renderToAnsi", () => {
