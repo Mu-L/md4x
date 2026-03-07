@@ -796,3 +796,44 @@ h| B | C |
 </tbody>
 </table>
 ````````````````````````````````
+
+
+## Fuzz: highlight range OOM with huge numbers
+
+Extremely large numbers in code block highlight metadata (e.g.
+`{999999999999999999}`) caused unsigned overflow and massive allocations
+in `md_parse_highlights`. Fixed by capping individual numbers at 100000
+and total highlight count at 100000.
+
+```````````````````````````````` example
+```js {999999999999999999}
+x
+```
+.
+<pre><code class="language-js">x
+</code></pre>
+````````````````````````````````
+
+Large range that exceeds the total count cap:
+
+```````````````````````````````` example
+```js {1-99999,1-99999}
+x
+```
+.
+<pre><code class="language-js">x
+</code></pre>
+````````````````````````````````
+
+
+## Inline component deferred closer overflow
+
+More than 16 nested inline components caused heap-buffer-overflow in
+`md_process_inlines` because the deferred closer array (capacity 16)
+silently dropped closers, leaving orphaned openers with `next = -1`.
+
+```````````````````````````````` example
+:i[:i[:i[:i[:i[]:i[]:i[]]:i[]]]:i[]:i[:i[:i[]:i[]:i[]:i[]]:i[]]]:i[]
+.
+<p><i><i><i><i><i></i><i></i><i></i></i><i></i></i></i><i></i><i><i><i></i><i></i><i></i><i></i></i><i></i></i></i><i></i></p>
+````````````````````````````````

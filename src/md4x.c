@@ -3391,7 +3391,7 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                             closer_end = comp_end;
                         }
 
-                        if(has_content) {
+                        if(has_content && n_deferred_comp_closers < 16) {
                             int opener_index;
                             /* Add opener mark. The closer must be added AFTER
                              * content inline marks are collected to maintain
@@ -3401,12 +3401,10 @@ md_collect_marks(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines, int table_m
                             /* Dummy for props range (placed right after opener) */
                             ADD_MARK('D', props_beg, props_end, 0);
                             /* Defer closer creation until after content scanning */
-                            if(n_deferred_comp_closers < 16) {
-                                deferred_comp_closers[n_deferred_comp_closers].opener_index = opener_index;
-                                deferred_comp_closers[n_deferred_comp_closers].closer_beg = closer_beg;
-                                deferred_comp_closers[n_deferred_comp_closers].closer_end = closer_end;
-                                n_deferred_comp_closers++;
-                            }
+                            deferred_comp_closers[n_deferred_comp_closers].opener_index = opener_index;
+                            deferred_comp_closers[n_deferred_comp_closers].closer_beg = closer_beg;
+                            deferred_comp_closers[n_deferred_comp_closers].closer_end = closer_end;
+                            n_deferred_comp_closers++;
                             /* Register skip region: from content_end to comp_end
                              * to prevent scanning inside ]{props} */
                             if(n_skip_regions < 16) {
@@ -4978,7 +4976,7 @@ md_process_inlines(MD_CTX* ctx, const MD_LINE* lines, MD_SIZE n_lines)
                                     raw_a, raw_a_sz));
 
                         if(mark->ch == ']') {
-                            while(mark->end > line->end)
+                            while(mark->end > line->end && line < lines + n_lines - 1)
                                 line++;
                         }
                         break;
@@ -5495,8 +5493,10 @@ md_parse_highlights(const CHAR* str, SZ size, unsigned* out_count)
             break;
         while(pos < size && str[pos] >= _T('0') && str[pos] <= _T('9')) {
             start_num = start_num * 10 + (unsigned)(str[pos] - _T('0'));
+            if(start_num > 100000) break;
             pos++;
         }
+        if(start_num > 100000) break;
         end_num = start_num;
 
         /* Range? */
@@ -5507,12 +5507,16 @@ md_parse_highlights(const CHAR* str, SZ size, unsigned* out_count)
                 break;
             while(pos < size && str[pos] >= _T('0') && str[pos] <= _T('9')) {
                 end_num = end_num * 10 + (unsigned)(str[pos] - _T('0'));
+                if(end_num > 100000) break;
                 pos++;
             }
+            if(end_num > 100000) break;
         }
 
         /* Safety limit. */
         if(end_num < start_num || (end_num - start_num) > 10000)
+            break;
+        if(count + (end_num - start_num + 1) > 100000)
             break;
         for(n = start_num; n <= end_num; n++) {
             if(count >= capacity) {

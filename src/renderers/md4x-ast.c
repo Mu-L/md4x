@@ -183,6 +183,11 @@ json_attr_to_str(const MD_ATTRIBUTE* attr)
 static void
 json_append_child(JSON_CTX* ctx, JSON_NODE* child)
 {
+    if(ctx->current == NULL) {
+        ctx->error = 1;
+        json_node_free(child);
+        return;
+    }
     if(ctx->current->first_child == NULL) {
         ctx->current->first_child = child;
         ctx->current->last_child = child;
