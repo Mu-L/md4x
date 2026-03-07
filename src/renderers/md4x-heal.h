@@ -4,6 +4,10 @@
  *
  * Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
  *
+ * Based on logic from https://github.com/vercel/streamdown/tree/main/packages/remend
+ * Written by Hayden Bleasel <https://github.com/haydenbleasel>
+ * Copyright (c) 2023 Vercel Inc.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
@@ -23,43 +27,33 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef MD4X_META_H
-#define MD4X_META_H
-
-#include "md4x.h"
+#ifndef MD4X_HEAL_H
+#define MD4X_HEAL_H
 
 #ifdef __cplusplus
     extern "C" {
 #endif
 
 
-/* If set, debug output from md_parse() is sent to stderr. */
-#define MD_META_FLAG_DEBUG              0x0001
-#define MD_META_FLAG_SKIP_UTF8_BOM     0x0002
-#define MD_META_FLAG_HEAL              0x0100
-
-
-/* Render Markdown metadata (frontmatter + headings) as a flat JSON object.
+/* Heal (fix/complete) incomplete streaming Markdown text.
  *
- * Produces {"key":"val",...,"headings":[{"level":N,"text":"..."},...]}.
- * Frontmatter YAML props are spread at the top level.
+ * This is a pre-parser text transform that closes unclosed formatting markers,
+ * completes incomplete links/images, closes open code blocks, and fixes other
+ * partial Markdown so it renders correctly mid-stream.
  *
  * Params input and input_size specify the Markdown input.
- * Callback process_output() gets called with chunks of JSON output.
+ * Callback process_output() gets called with chunks of healed output.
  * Param userdata is just propagated back to process_output() callback.
- * Param parser_flags are flags from md4x.h propagated to md_parse().
- * Param renderer_flags is bitmask of MD_META_FLAG_xxxx.
  *
- * Returns -1 on error (if md_parse() fails or memory allocation fails.)
- * Returns 0 on success.
+ * Returns 0 on success, -1 on error.
  */
-int md_meta(const MD_CHAR* input, MD_SIZE input_size,
-            void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-            void* userdata, unsigned parser_flags, unsigned renderer_flags);
+int md_heal(const char* input, unsigned input_size,
+            void (*process_output)(const char*, unsigned, void*),
+            void* userdata);
 
 
 #ifdef __cplusplus
     }  /* extern "C" { */
 #endif
 
-#endif  /* MD4X_META_H */
+#endif  /* MD4X_HEAL_H */
