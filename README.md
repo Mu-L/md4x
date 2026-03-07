@@ -23,6 +23,10 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 - **C library** — SAX-like streaming parser, zero-copy, no AST allocation overhead
 - **Zig package** — Consumable as a Zig dependency
 
+## Showcase
+
+- [pi0/md4x](https://github.com/pi0/mdshot)— Render beautiful screenshots from Markdown.
+
 ## CLI
 
 ```sh
