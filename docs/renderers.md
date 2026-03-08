@@ -115,6 +115,7 @@ int md_ansi(const MD_CHAR* input, MD_SIZE input_size,
 | `MD_ANSI_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr  |
 | `MD_ANSI_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                  |
 | `MD_ANSI_FLAG_NO_COLOR`      | `0x0004` | Suppress ANSI escape codes (plain text output) |
+| `MD_ANSI_FLAG_CODE_META`     | `0x0008` | Append code block metadata after null byte      |
 
 ### Rendering Details
 

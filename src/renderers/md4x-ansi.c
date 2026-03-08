@@ -92,6 +92,20 @@
 #define ALERT_BAR           "\xe2\x96\x8c"
 
 
+/* Code block metadata entry (heap-allocated when MD_ANSI_FLAG_CODE_META is set) */
+typedef struct MD_ANSI_CODE_META {
+    MD_SIZE start;          /* Byte offset: start of code block (before ANSI_DIM) */
+    MD_SIZE end;            /* Byte offset: end of code block (after ANSI_DIM_OFF) */
+    char lang[64];
+    MD_SIZE lang_size;
+    char filename[256];
+    MD_SIZE filename_size;
+    unsigned* highlights;
+    unsigned highlight_count;
+    char prefix[256];       /* Line indent prefix (captured from render_indent + "  ") */
+    MD_SIZE prefix_size;
+} MD_ANSI_CODE_META;
+
 typedef struct MD_ANSI_tag MD_ANSI;
 struct MD_ANSI_tag {
     void (*process_output)(const MD_CHAR*, MD_SIZE, void*);
@@ -109,6 +123,12 @@ struct MD_ANSI_tag {
     const char* alert_color; /* ANSI color escape for current alert bar */
     int component_nesting;  /* block component nesting depth */
     int in_comp_frontmatter; /* inside component frontmatter (suppress output) */
+
+    /* Code block metadata tracking (only active when MD_ANSI_FLAG_CODE_META is set) */
+    MD_SIZE output_offset;
+    MD_ANSI_CODE_META* code_blocks;
+    int n_code_blocks;
+    int code_blocks_cap;
 };
 
 
@@ -120,6 +140,8 @@ static inline void
 render_verbatim(MD_ANSI* r, const MD_CHAR* text, MD_SIZE size)
 {
     r->process_output(text, size, r->userdata);
+    if(r->flags & MD_ANSI_FLAG_CODE_META)
+        r->output_offset += size;
 }
 
 #define RENDER_VERBATIM(r, verbatim)                                    \
@@ -307,6 +329,139 @@ alert_type_color(const MD_CHAR* name, MD_SIZE size)
 }
 
 
+/*****************************************
+ ***  Code block metadata tracking     ***
+ *****************************************/
+
+static MD_ANSI_CODE_META*
+ansi_code_meta_push(MD_ANSI* r)
+{
+    if(r->code_blocks == NULL) {
+        r->code_blocks = (MD_ANSI_CODE_META*) malloc(8 * sizeof(MD_ANSI_CODE_META));
+        if(r->code_blocks == NULL) return NULL;
+        r->code_blocks_cap = 8;
+    } else if(r->n_code_blocks >= r->code_blocks_cap) {
+        int new_cap = r->code_blocks_cap * 2;
+        MD_ANSI_CODE_META* p = (MD_ANSI_CODE_META*) realloc(r->code_blocks, new_cap * sizeof(MD_ANSI_CODE_META));
+        if(p == NULL) return NULL;
+        r->code_blocks = p;
+        r->code_blocks_cap = new_cap;
+    }
+    memset(&r->code_blocks[r->n_code_blocks], 0, sizeof(MD_ANSI_CODE_META));
+    return &r->code_blocks[r->n_code_blocks];
+}
+
+static void
+ansi_code_meta_cleanup(MD_ANSI* r)
+{
+    if(r->code_blocks != NULL) {
+        int i;
+        int count = r->n_code_blocks + (r->in_code_block ? 1 : 0);
+        for(i = 0; i < count; i++)
+            free(r->code_blocks[i].highlights);
+        free(r->code_blocks);
+    }
+}
+
+/* Capture buffer for redirecting output to capture the indent prefix. */
+typedef struct {
+    char* buf;
+    MD_SIZE size;
+    MD_SIZE cap;
+} ANSI_CAPTURE_BUF;
+
+static void
+ansi_capture_append(const MD_CHAR* text, MD_SIZE size, void* userdata)
+{
+    ANSI_CAPTURE_BUF* cap = (ANSI_CAPTURE_BUF*) userdata;
+    MD_SIZE n = (cap->size + size <= cap->cap) ? size : (cap->cap - cap->size);
+    if(n > 0) {
+        memcpy(cap->buf + cap->size, text, n);
+        cap->size += n;
+    }
+}
+
+static void
+ansi_emit_json_str(void (*out)(const MD_CHAR*, MD_SIZE, void*), void* ud,
+                   const char* str, MD_SIZE size)
+{
+    MD_SIZE i, beg = 0;
+    out("\"", 1, ud);
+    for(i = 0; i < size; i++) {
+        unsigned char ch = (unsigned char) str[i];
+        if(ch == '"' || ch == '\\' || ch < 0x20) {
+            if(i > beg)
+                out(str + beg, i - beg, ud);
+            if(ch == '"' || ch == '\\') {
+                out("\\", 1, ud);
+                out(str + i, 1, ud);
+            } else if(ch == '\n') {
+                out("\\n", 2, ud);
+            } else if(ch == '\r') {
+                out("\\r", 2, ud);
+            } else if(ch == '\t') {
+                out("\\t", 2, ud);
+            } else if(ch == 0x1b) {
+                out("\\u001b", 6, ud);
+            } else {
+                static const char hex[] = "0123456789abcdef";
+                char esc[6] = { '\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0xf] };
+                out(esc, 6, ud);
+            }
+            beg = i + 1;
+        }
+    }
+    if(i > beg)
+        out(str + beg, i - beg, ud);
+    out("\"", 1, ud);
+}
+
+static void
+render_ansi_code_meta_json(MD_ANSI* r)
+{
+    void (*out)(const MD_CHAR*, MD_SIZE, void*) = r->process_output;
+    void* ud = r->userdata;
+    char buf[64];
+    int i, n;
+
+    out("\0", 1, ud);
+    out("[", 1, ud);
+    for(i = 0; i < r->n_code_blocks; i++) {
+        MD_ANSI_CODE_META* m = &r->code_blocks[i];
+        if(i > 0) out(",", 1, ud);
+
+        n = snprintf(buf, sizeof(buf), "{\"s\":%u,\"e\":%u",
+                     (unsigned)m->start, (unsigned)m->end);
+        out(buf, (MD_SIZE)n, ud);
+
+        if(m->lang_size > 0) {
+            out(",\"l\":", 5, ud);
+            ansi_emit_json_str(out, ud, m->lang, m->lang_size);
+        }
+        if(m->filename_size > 0) {
+            out(",\"f\":", 5, ud);
+            ansi_emit_json_str(out, ud, m->filename, m->filename_size);
+        }
+        if(m->highlight_count > 0) {
+            unsigned j;
+            out(",\"h\":[", 6, ud);
+            for(j = 0; j < m->highlight_count; j++) {
+                if(j > 0) out(",", 1, ud);
+                n = snprintf(buf, sizeof(buf), "%u", m->highlights[j]);
+                out(buf, (MD_SIZE)n, ud);
+            }
+            out("]", 1, ud);
+        }
+        if(m->prefix_size > 0) {
+            out(",\"i\":", 5, ud);
+            ansi_emit_json_str(out, ud, m->prefix, m->prefix_size);
+        }
+        out("}", 1, ud);
+    }
+    out("]", 1, ud);
+}
+
+
 /**************************************
  ***  ANSI renderer implementation  ***
  **************************************/
@@ -403,6 +558,47 @@ enter_block_callback(MD_BLOCKTYPE type, void* detail, void* userdata)
             }
             r->in_code_block = 1;
             r->need_indent = 1;
+            if(r->flags & MD_ANSI_FLAG_CODE_META) {
+                MD_ANSI_CODE_META* meta = ansi_code_meta_push(r);
+                if(meta != NULL) {
+                    const MD_BLOCK_CODE_DETAIL* det = (const MD_BLOCK_CODE_DETAIL*) detail;
+                    meta->start = r->output_offset;
+                    if(det->lang.text != NULL && det->lang.size > 0) {
+                        MD_SIZE sz = det->lang.size < sizeof(meta->lang) ? det->lang.size : sizeof(meta->lang) - 1;
+                        memcpy(meta->lang, det->lang.text, sz);
+                        meta->lang_size = sz;
+                    }
+                    if(det->filename.text != NULL && det->filename.size > 0) {
+                        MD_SIZE sz = det->filename.size < sizeof(meta->filename) ? det->filename.size : sizeof(meta->filename) - 1;
+                        memcpy(meta->filename, det->filename.text, sz);
+                        meta->filename_size = sz;
+                    }
+                    if(det->highlights != NULL && det->highlight_count > 0) {
+                        meta->highlights = (unsigned*) malloc(det->highlight_count * sizeof(unsigned));
+                        if(meta->highlights != NULL) {
+                            memcpy(meta->highlights, det->highlights, det->highlight_count * sizeof(unsigned));
+                            meta->highlight_count = det->highlight_count;
+                        }
+                    }
+                    /* Capture the indent prefix by temporarily redirecting output. */
+                    {
+                        char pfx_buf[256];
+                        ANSI_CAPTURE_BUF cap = { pfx_buf, 0, sizeof(pfx_buf) };
+                        void (*saved_out)(const MD_CHAR*, MD_SIZE, void*) = r->process_output;
+                        void* saved_ud = r->userdata;
+                        r->process_output = ansi_capture_append;
+                        r->userdata = &cap;
+                        render_indent(r);
+                        RENDER_VERBATIM(r, "  ");
+                        r->process_output = saved_out;
+                        r->userdata = saved_ud;
+                        if(cap.size <= sizeof(meta->prefix)) {
+                            memcpy(meta->prefix, pfx_buf, cap.size);
+                            meta->prefix_size = cap.size;
+                        }
+                    }
+                }
+            }
             render_ansi(r, ANSI_DIM);
             break;
 
@@ -573,6 +769,10 @@ leave_block_callback(MD_BLOCKTYPE type, void* detail, void* userdata)
 
         case MD_BLOCK_CODE:
             render_ansi(r, ANSI_DIM_OFF);
+            if((r->flags & MD_ANSI_FLAG_CODE_META) && r->n_code_blocks < r->code_blocks_cap) {
+                r->code_blocks[r->n_code_blocks].end = r->output_offset;
+                r->n_code_blocks++;
+            }
             r->in_code_block = 0;
             r->need_newline = 1;
             break;
@@ -856,5 +1056,15 @@ md_ansi(const MD_CHAR* input, MD_SIZE input_size,
         }
     }
 
-    return md_parse(input, input_size, &parser, (void*) &render);
+    {
+        int ret = md_parse(input, input_size, &parser, (void*) &render);
+
+        if(renderer_flags & MD_ANSI_FLAG_CODE_META) {
+            if(ret == 0)
+                render_ansi_code_meta_json(&render);
+            ansi_code_meta_cleanup(&render);
+        }
+
+        return ret;
+    }
 }

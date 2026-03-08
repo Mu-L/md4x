@@ -1,4 +1,7 @@
-import { parseHtmlWithHighlighting } from "../_shared.mjs";
+import {
+  parseHtmlWithHighlighting,
+  parseAnsiWithHighlighting,
+} from "../_shared.mjs";
 
 // --- internal ---
 
@@ -57,6 +60,24 @@ function render(exports, fn, input, ...extra) {
   return result;
 }
 
+/* Render with a meta function, returning raw bytes for highlighter processing. */
+function renderMetaBytes(exports, metaFn, input) {
+  const { memory, md4x_alloc, md4x_free, md4x_result_ptr, md4x_result_size } =
+    exports;
+  const encoded = new TextEncoder().encode(str(input));
+  const ptr = md4x_alloc(encoded.length);
+  new Uint8Array(memory.buffer).set(encoded, ptr);
+  const ret = metaFn(ptr, encoded.length);
+  md4x_free(ptr);
+  if (ret !== 0) {
+    throw new Error("md4x: render failed");
+  }
+  const outPtr = md4x_result_ptr();
+  const outSize = md4x_result_size();
+  const bytes = new Uint8Array(memory.buffer, outPtr, outSize);
+  return { bytes, outPtr };
+}
+
 const HEAL_FLAG = 0x0100;
 
 export function renderToHtml(input, opts) {
@@ -66,27 +87,13 @@ export function renderToHtml(input, opts) {
   if (!opts?.highlighter) {
     return render(exports, exports.md4x_to_html, input, flags);
   }
-  const {
-    memory,
-    md4x_alloc,
-    md4x_free,
-    md4x_to_html_meta,
-    md4x_result_ptr,
-    md4x_result_size,
-  } = exports;
-  const encoded = new TextEncoder().encode(str(input));
-  const ptr = md4x_alloc(encoded.length);
-  new Uint8Array(memory.buffer).set(encoded, ptr);
-  const ret = md4x_to_html_meta(ptr, encoded.length);
-  md4x_free(ptr);
-  if (ret !== 0) {
-    throw new Error("md4x: render failed");
-  }
-  const outPtr = md4x_result_ptr();
-  const outSize = md4x_result_size();
-  const bytes = new Uint8Array(memory.buffer, outPtr, outSize);
+  const { bytes, outPtr } = renderMetaBytes(
+    exports,
+    exports.md4x_to_html_meta,
+    input,
+  );
   const result = parseHtmlWithHighlighting(bytes, opts.highlighter);
-  md4x_free(outPtr);
+  exports.md4x_free(outPtr);
   return result;
 }
 
@@ -103,7 +110,18 @@ export function parseAST(input, opts) {
 export function renderToAnsi(input, opts) {
   const flags = opts?.heal ? HEAL_FLAG : 0;
   const exports = _getExports();
-  return render(exports, exports.md4x_to_ansi, input, flags);
+  if (!opts?.highlighter) {
+    return render(exports, exports.md4x_to_ansi, input, flags);
+  }
+  const s = opts?.heal ? heal(str(input)) : str(input);
+  const { bytes, outPtr } = renderMetaBytes(
+    exports,
+    exports.md4x_to_ansi_meta,
+    s,
+  );
+  const result = parseAnsiWithHighlighting(bytes, opts.highlighter);
+  exports.md4x_free(outPtr);
+  return result;
 }
 
 export function renderToMeta(input, opts) {

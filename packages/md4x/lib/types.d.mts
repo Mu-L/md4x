@@ -34,6 +34,14 @@ export interface RenderOptions {
   heal?: boolean;
 }
 
+export interface AnsiOptions extends RenderOptions {
+  /**
+   * Custom highlighter function for fenced code blocks. If provided, code blocks
+   * are passed through this callback which can return custom ANSI-highlighted output.
+   */
+  highlighter?: AnsiCodeBlockHighlighter;
+}
+
 export interface HtmlOptions extends RenderOptions {
   /** Generate a full HTML document with `<!DOCTYPE html>`, `<head>`, and `<body>`. */
   full?: boolean;
@@ -70,3 +78,25 @@ export interface HtmlWithCodeBlocks {
   /** Metadata for each fenced code block in document order */
   codeBlocks: CodeBlock[];
 }
+
+export interface AnsiCodeBlock {
+  /** Character offset in ANSI string where code block starts (including DIM escape) */
+  start: number;
+  /** Character offset in ANSI string where code block ends (including DIM_OFF escape) */
+  end: number;
+  /** Language identifier (empty string if none) */
+  lang: string;
+  /** Filename from `[filename]` syntax */
+  filename?: string;
+  /** Highlighted line numbers from `{1-3,5}` syntax */
+  highlights?: number[];
+  /** Line indent prefix (includes ANSI escapes for colored bars in nested contexts) */
+  prefix?: string;
+}
+
+export type AnsiCodeBlockHighlighter = (
+  /** Raw code content (indentation stripped) */
+  code: string,
+  /** Code block metadata (lang, filename, highlights, offsets) */
+  block: AnsiCodeBlock,
+) => string | undefined;

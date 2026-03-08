@@ -2,6 +2,7 @@ import type {
   ComarkTree,
   ComarkMeta,
   HtmlOptions,
+  AnsiOptions,
   RenderOptions,
 } from "./types.mjs";
 
@@ -14,6 +15,7 @@ export type {
   ComarkHeading,
   ComarkMeta,
   HtmlOptions,
+  AnsiOptions,
   RenderOptions,
 } from "./types.mjs";
 
@@ -24,6 +26,7 @@ export interface NAPIBinding {
   renderToHtmlMeta(input: string): Buffer;
   renderToAST(input: string, flags?: number): string;
   renderToAnsi(input: string, flags?: number): string;
+  renderToAnsiMeta(input: string): Buffer;
   renderToMeta(input: string, flags?: number): string;
   renderToText(input: string, flags?: number): string;
   heal(input: string): string;
@@ -43,10 +46,7 @@ export declare function parseAST(
   input: string,
   opts?: RenderOptions,
 ): ComarkTree;
-export declare function renderToAnsi(
-  input: string,
-  opts?: RenderOptions,
-): string;
+export declare function renderToAnsi(input: string, opts?: AnsiOptions): string;
 export declare function renderToMeta(
   input: string,
   opts?: RenderOptions,

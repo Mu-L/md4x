@@ -1,4 +1,7 @@
-import { parseHtmlWithHighlighting } from "./_shared.mjs";
+import {
+  parseHtmlWithHighlighting,
+  parseAnsiWithHighlighting,
+} from "./_shared.mjs";
 
 // --- internal ---
 
@@ -63,7 +66,15 @@ export function parseAST(input, opts) {
 
 export function renderToAnsi(input, opts) {
   const flags = opts?.heal ? HEAL_FLAG : 0;
-  return getBinding().renderToAnsi(str(input), flags);
+  if (!opts?.highlighter) {
+    return getBinding().renderToAnsi(str(input), flags);
+  }
+  const s = opts?.heal ? getBinding().heal(str(input)) : str(input);
+  const buf = getBinding().renderToAnsiMeta(s);
+  return parseAnsiWithHighlighting(
+    new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+    opts.highlighter,
+  );
 }
 
 export function renderToMeta(input, opts) {

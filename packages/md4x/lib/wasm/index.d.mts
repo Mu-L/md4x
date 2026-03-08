@@ -2,6 +2,7 @@ import type {
   ComarkTree,
   ComarkMeta,
   HtmlOptions,
+  AnsiOptions,
   RenderOptions,
 } from "../types.mjs";
 
@@ -14,6 +15,7 @@ export type {
   ComarkHeading,
   ComarkMeta,
   HtmlOptions,
+  AnsiOptions,
   RenderOptions,
 } from "../types.mjs";
 
@@ -36,10 +38,7 @@ export declare function parseAST(
   input: string,
   opts?: RenderOptions,
 ): ComarkTree;
-export declare function renderToAnsi(
-  input: string,
-  opts?: RenderOptions,
-): string;
+export declare function renderToAnsi(input: string, opts?: AnsiOptions): string;
 export declare function renderToMeta(
   input: string,
   opts?: RenderOptions,
