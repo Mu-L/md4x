@@ -38,6 +38,8 @@ extern "C"
 #define MD_ANSI_FLAG_SKIP_UTF8_BOM 0x0002
 #define MD_ANSI_FLAG_NO_COLOR 0x0004
 #define MD_ANSI_FLAG_CODE_META 0x0008
+#define MD_ANSI_FLAG_SHOW_URLS 0x0010
+#define MD_ANSI_FLAG_SHOW_FRONTMATTER 0x0020
 #define MD_ANSI_FLAG_HEAL 0x0100
 
     /* Render Markdown into ANSI terminal output.

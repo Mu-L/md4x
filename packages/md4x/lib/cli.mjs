@@ -24,6 +24,8 @@ const { values, positionals } = parseArgs({
     "html-title": { type: "string" },
     "html-css": { type: "string" },
     heal: { type: "boolean", default: false },
+    "show-urls": { type: "boolean", default: false },
+    "show-frontmatter": { type: "boolean", default: false },
     stat: { type: "boolean", short: "s", default: false },
     help: { type: "boolean", short: "h", default: false },
     version: { type: "boolean", short: "v", default: false },
@@ -47,6 +49,8 @@ ${_g("General options:")}
   ${_c("-o")}, ${_c("--output")}=${_d("FILE")}     Output file ${_d("(default: stdout)")}
   ${_c("-t")}, ${_c("--format")}=${_d("FORMAT")}   Output format: ${_c("html")}, ${_c("text")}, ${_c("ast")}, ${_c("ansi")}, ${_c("meta")}, ${_c("heal")} ${_d("(default: ansi for TTY, text otherwise)")}
       ${_c("--heal")}             Heal incomplete markdown before rendering
+      ${_c("--show-urls")}         Show link URLs after link text ${_d("(ANSI only)")}
+      ${_c("--show-frontmatter")}  Show frontmatter content ${_d("(ANSI only)")}
   ${_c("-s")}, ${_c("--stat")}            Measure parsing time
   ${_c("-h")}, ${_c("--help")}            Display this help and exit
   ${_c("-v")}, ${_c("--version")}         Display version and exit
@@ -165,7 +169,11 @@ switch (format) {
     output = renderToHtml(input, healOpt);
     break;
   case "ansi":
-    output = renderToAnsi(input, healOpt);
+    output = renderToAnsi(input, {
+      ...healOpt,
+      showUrls: values["show-urls"],
+      showFrontmatter: values["show-frontmatter"],
+    });
     break;
   case "text":
     output = renderToText(input, healOpt);

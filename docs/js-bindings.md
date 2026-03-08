@@ -127,15 +127,15 @@ All extensions (`MD_DIALECT_ALL`) are enabled by default. No parser/renderer fla
 
 Both `renderToHtml` and `renderToAnsi` accept an optional `highlighter` callback for custom code block highlighting:
 
-```js
+````js
 const ansi = renderToAnsi("```js\nconst x = 1;\n```", {
   highlighter: (code, block) => {
     // code = "const x = 1;"
     // block = { lang: "js", filename?: string, highlights?: number[], prefix: "  " }
     return "\x1b[33mconst\x1b[0m x = 1;"; // custom ANSI highlighted
-  }
+  },
 });
-```
+````
 
 When `highlighter` is provided, code blocks are rendered with metadata tracking. For each fenced code block, the highlighter receives the raw code text (with indentation stripped) and a metadata object containing `lang`, optional `filename`, optional `highlights` array, and the `prefix` string used for line indentation (including ANSI escapes for nested contexts like blockquotes). If the highlighter returns a string, the code block content is replaced with the highlighted output (automatically re-indented with the prefix). If it returns `undefined`, the default dim rendering is used.
 

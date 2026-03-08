@@ -1,7 +1,7 @@
 # 📄 MD4X
 
 [![npm version][npm version]][npm link]
-![md4x.wasm gzip size][wasm size]
+![][wasm size]
 
 Fast and Small markdown parser and renderer based on [mity/md4c](https://github.com/mity/md4c/).
 
@@ -379,8 +379,6 @@ md_parse(input, input_size, &parser, NULL);
 ## License
 
 [MIT](./LICENSE.md)
-
----
 
 [npm version]: https://badgen.net/npm/v/md4x?color=F0DB4F
 [npm link]: https://npmx.dev/package/md4x

@@ -108,7 +108,9 @@ export function parseAST(input, opts) {
 }
 
 export function renderToAnsi(input, opts) {
-  const flags = opts?.heal ? HEAL_FLAG : 0;
+  let flags = opts?.heal ? HEAL_FLAG : 0;
+  if (opts?.showUrls) flags |= 0x0010;
+  if (opts?.showFrontmatter) flags |= 0x0020;
   const exports = _getExports();
   if (!opts?.highlighter) {
     return render(exports, exports.md4x_to_ansi, input, flags);

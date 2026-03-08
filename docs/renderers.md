@@ -110,12 +110,14 @@ int md_ansi(const MD_CHAR* input, MD_SIZE input_size,
 
 ### Renderer Flags (`MD_ANSI_FLAG_*`)
 
-| Flag                         | Value    | Description                                    |
-| ---------------------------- | -------- | ---------------------------------------------- |
-| `MD_ANSI_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr  |
-| `MD_ANSI_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                  |
-| `MD_ANSI_FLAG_NO_COLOR`      | `0x0004` | Suppress ANSI escape codes (plain text output) |
-| `MD_ANSI_FLAG_CODE_META`     | `0x0008` | Append code block metadata after null byte      |
+| Flag                            | Value    | Description                                          |
+| ------------------------------- | -------- | ---------------------------------------------------- |
+| `MD_ANSI_FLAG_DEBUG`            | `0x0001` | Send debug output from `md_parse()` to stderr        |
+| `MD_ANSI_FLAG_SKIP_UTF8_BOM`    | `0x0002` | Skip UTF-8 BOM at input start                        |
+| `MD_ANSI_FLAG_NO_COLOR`         | `0x0004` | Suppress ANSI escape codes (plain text output)       |
+| `MD_ANSI_FLAG_CODE_META`        | `0x0008` | Append code block metadata after null byte           |
+| `MD_ANSI_FLAG_SHOW_URLS`        | `0x0010` | Show link URLs after link text (default: OSC 8 only) |
+| `MD_ANSI_FLAG_SHOW_FRONTMATTER` | `0x0020` | Show frontmatter as dim text (default: suppressed)   |
 
 ### Rendering Details
 
@@ -134,6 +136,8 @@ int md_ansi(const MD_CHAR* input, MD_SIZE input_size,
 - Images: `[image: alt]` in dim
 - Alerts: colored thick left bar (`▌`) with type-specific colors (note/info=blue, tip/success=green, important=magenta, warning=yellow, caution/danger=red), bold type label on first line
 - Components: cyan for generic; alert-like components (`::note`, `::tip`, `::important`, `::warning`, `::caution`) and `::alert{type="..."}` render with the same colored bar style as alerts
+- Frontmatter: suppressed by default (enable with `MD_ANSI_FLAG_SHOW_FRONTMATTER` for dim text output)
+- Raw HTML: stripped (not rendered)
 - Entities resolved to UTF-8 characters
 
 Uses streaming renderer pattern (like HTML renderer), no AST construction.

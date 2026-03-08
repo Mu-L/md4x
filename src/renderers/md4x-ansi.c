@@ -642,8 +642,10 @@ enter_block_callback(MD_BLOCKTYPE type, void* detail, void* userdata)
         case MD_BLOCK_FRONTMATTER:
             if(r->component_nesting > 0) {
                 r->in_comp_frontmatter = 1;
-            } else {
+            } else if(r->flags & MD_ANSI_FLAG_SHOW_FRONTMATTER) {
                 render_ansi(r, ANSI_DIM);
+            } else {
+                r->in_comp_frontmatter = 1;
             }
             break;
 
@@ -874,8 +876,9 @@ enter_span_callback(MD_SPANTYPE type, void* detail, void* userdata)
             break;
         }
         case MD_SPAN_IMG:
-            render_ansi(r, ANSI_DIM);
-            RENDER_VERBATIM(r, "[image: ");
+        //   render_ansi(r, ANSI_DIM);
+        //     RENDER_VERBATIM(r, "[image: ");
+        /* Images are suppressed — alt text is silently skipped via image_nesting_level */
             break;
         case MD_SPAN_CODE:              render_ansi(r, ANSI_COLOR_CYAN); break;
         case MD_SPAN_DEL:               render_ansi(r, ANSI_STRIKETHROUGH); break;
@@ -911,7 +914,7 @@ leave_span_callback(MD_SPANTYPE type, void* detail, void* userdata)
             if(!(r->flags & MD_ANSI_FLAG_NO_COLOR) && a->href.size > 0)
                 RENDER_VERBATIM(r, ANSI_HYPERLINK_CLOSE);
             /* Show URL as dim fallback for terminals without OSC 8 */
-            if(a->href.size > 0 && !a->is_autolink) {
+            if((r->flags & MD_ANSI_FLAG_SHOW_URLS) && a->href.size > 0 && !a->is_autolink) {
                 render_ansi(r, ANSI_LINK_URL);
                 RENDER_VERBATIM(r, " (");
                 render_attribute(r, &a->href, render_verbatim);
@@ -921,8 +924,6 @@ leave_span_callback(MD_SPANTYPE type, void* detail, void* userdata)
             break;
         }
         case MD_SPAN_IMG:
-            RENDER_VERBATIM(r, "]");
-            render_ansi(r, ANSI_DIM_OFF);
             break;
         case MD_SPAN_CODE:              render_ansi(r, ANSI_COLOR_DEFAULT); break;
         case MD_SPAN_DEL:               render_ansi(r, ANSI_STRIKE_OFF); break;
@@ -965,8 +966,7 @@ text_callback(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdat
             break;
 
         case MD_TEXT_HTML:
-            /* Raw HTML: output verbatim in terminal */
-            render_verbatim(r, text, size);
+            /* Raw HTML: suppress in terminal output */
             break;
 
         case MD_TEXT_ENTITY:

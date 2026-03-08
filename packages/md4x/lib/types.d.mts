@@ -40,6 +40,10 @@ export interface AnsiOptions extends RenderOptions {
    * are passed through this callback which can return custom ANSI-highlighted output.
    */
   highlighter?: AnsiCodeBlockHighlighter;
+  /** Show link URLs after link text (e.g. `text (url)`). Default: false (links are clickable via OSC 8). */
+  showUrls?: boolean;
+  /** Show frontmatter content as dim text. Default: false (frontmatter is suppressed). */
+  showFrontmatter?: boolean;
 }
 
 export interface HtmlOptions extends RenderOptions {
