@@ -1439,6 +1439,19 @@ export function defineSuite({
       const meta = await parseMeta("# Using `parseMeta` API");
       expect(meta.headings[0].text).toBe("Using parseMeta API");
     });
+
+    it("ignores component frontmatter", async () => {
+      const meta = await parseMeta(
+        "---\ntitle: Installation\ndescription: How to install.\n---\n\n" +
+          "## Try it online\n\n" +
+          "::card\n---\ntitle: Stackblitz\nicon: simple-icons:stackblitz\n---\nContent.\n::\n",
+      );
+      expect(meta.title).toBe("Installation");
+      expect(meta.description).toBe("How to install.");
+      expect(meta.icon).toBeUndefined();
+      expect(meta.headings).toHaveLength(1);
+      expect(meta.headings[0].text).toBe("Try it online");
+    });
   });
 
   describe("renderToText", () => {
