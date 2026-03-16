@@ -286,6 +286,106 @@ main(int argc, char** argv)
 ~~~
 
 
+## Supplementary Unicode Plane (Emoji, Math Symbols)
+
+Characters outside the Basic Multilingual Plane (U+10000+) require 4-byte
+UTF-8 sequences. These must survive parsing, emphasis flanking, and rendering.
+
+Emoji in a heading:
+
+```````````````````````````````` example
+# Hello 🚀 World
+.
+<h1>Hello 🚀 World</h1>
+````````````````````````````````
+
+Emphasis around emoji:
+
+```````````````````````````````` example
+*🚀*
+.
+<p><em>🚀</em></p>
+````````````````````````````````
+
+Strong emphasis with supplementary math symbol (U+1D573 𝕳):
+
+```````````````````````````````` example
+**bold 𝕳 text**
+.
+<p><strong>bold 𝕳 text</strong></p>
+````````````````````````````````
+
+Emphasis flanking with emoji as word boundary:
+
+```````````````````````````````` example
+🚀*foo*🚀
+.
+<p>🚀<em>foo</em>🚀</p>
+````````````````````````````````
+
+Inline code with emoji:
+
+```````````````````````````````` example
+`code 🔥`
+.
+<p><code>code 🔥</code></p>
+````````````````````````````````
+
+Link text with supplementary characters:
+
+```````````````````````````````` example
+[link 🌍](http://example.com)
+.
+<p><a href="http://example.com">link 🌍</a></p>
+````````````````````````````````
+
+List item with emoji:
+
+```````````````````````````````` example
+- item 🚀
+- item 🎉
+.
+<ul>
+<li>item 🚀</li>
+<li>item 🎉</li>
+</ul>
+````````````````````````````````
+
+Blockquote with supplementary character:
+
+```````````````````````````````` example
+> quote 𝕳
+.
+<blockquote>
+<p>quote 𝕳</p>
+</blockquote>
+````````````````````````````````
+
+Multiple supplementary characters in a row:
+
+```````````````````````````````` example
+🚀🎉🔥🌍
+.
+<p>🚀🎉🔥🌍</p>
+````````````````````````````````
+
+Mixed BMP and supplementary in emphasis:
+
+```````````````````````````````` example
+*hello 🚀 café 𝕳 naïve*
+.
+<p><em>hello 🚀 café 𝕳 naïve</em></p>
+````````````````````````````````
+
+CJK supplementary (U+20000 𠀀):
+
+```````````````````````````````` example
+𠀀
+.
+<p>𠀀</p>
+````````````````````````````````
+
+
 ## Flag `MD_FLAG_COLLAPSEWHITESPACE`
 
 ```````````````````````````````` example

@@ -1847,6 +1847,78 @@ export function defineSuite({
     });
   });
 
+  describe("supplementary unicode plane (emoji, math symbols)", () => {
+    it("preserves emoji in HTML heading", async () => {
+      expect(await renderToHtml("# Hello 🚀 World")).toBe(
+        "<h1>Hello 🚀 World</h1>\n",
+      );
+    });
+
+    it("preserves emoji in emphasis", async () => {
+      expect(await renderToHtml("*🚀*")).toBe("<p><em>🚀</em></p>\n");
+    });
+
+    it("preserves supplementary math symbol (U+1D573) in strong", async () => {
+      expect(await renderToHtml("**bold 𝕳 text**")).toBe(
+        "<p><strong>bold 𝕳 text</strong></p>\n",
+      );
+    });
+
+    it("handles emphasis flanking with emoji boundary", async () => {
+      expect(await renderToHtml("🚀*foo*🚀")).toBe("<p>🚀<em>foo</em>🚀</p>\n");
+    });
+
+    it("preserves emoji in inline code", async () => {
+      expect(await renderToHtml("`code 🔥`")).toBe(
+        "<p><code>code 🔥</code></p>\n",
+      );
+    });
+
+    it("preserves emoji in link text", async () => {
+      expect(await renderToHtml("[link 🌍](http://example.com)")).toBe(
+        '<p><a href="http://example.com">link 🌍</a></p>\n',
+      );
+    });
+
+    it("preserves multiple supplementary chars in a row", async () => {
+      expect(await renderToHtml("🚀🎉🔥🌍")).toBe("<p>🚀🎉🔥🌍</p>\n");
+    });
+
+    it("preserves CJK supplementary (U+20000)", async () => {
+      expect(await renderToHtml("𠀀")).toBe("<p>𠀀</p>\n");
+    });
+
+    it("preserves emoji in AST", async () => {
+      const ast = await parseAST("# Hello 🚀");
+      expect(ast.nodes[0][2]).toBe("Hello 🚀");
+    });
+
+    it("preserves emoji in frontmatter via AST", async () => {
+      const ast = await parseAST("---\ntitle: Hello 🚀\n---\n# Heading");
+      expect(ast.frontmatter.title).toBe("Hello 🚀");
+    });
+
+    it("preserves supplementary chars in meta", async () => {
+      const meta = await parseMeta("# Heading 𝕳 🚀");
+      expect(meta.headings[0].text).toBe("Heading 𝕳 🚀");
+    });
+
+    it("preserves emoji in text renderer", async () => {
+      expect(await renderToText("**bold 🚀** and *italic 𝕳*")).toBe(
+        "bold 🚀 and italic 𝕳\n",
+      );
+    });
+
+    it("preserves emoji in ANSI renderer", async () => {
+      const result = await renderToAnsi("# Hello 🚀");
+      expect(result).toContain("Hello 🚀");
+    });
+
+    it("preserves emoji through heal", async () => {
+      expect(await heal("**bold 🚀")).toContain("🚀");
+    });
+  });
+
   describe("error handling", () => {
     describe("edge-case inputs", () => {
       it("handles only whitespace input", async () => {
