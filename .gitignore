@@ -69,6 +69,7 @@ node_modules
 # Zig
 .zig-cache/
 zig-out/
+zig-pkg/
 
 # Fuzzers
 fuzz-out/

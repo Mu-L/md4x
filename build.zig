@@ -73,10 +73,10 @@ pub fn build(b: *std.Build) void {
         .name = "md4x",
         .root_module = b.createModule(mod_opts),
     });
-    exe.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
-    exe.addCSourceFiles(.{ .files = &cli_sources, .flags = c_flags });
-    exe.addCSourceFiles(libyaml_src);
-    for (include_paths) |p| exe.addIncludePath(p);
+    exe.root_module.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
+    exe.root_module.addCSourceFiles(.{ .files = &cli_sources, .flags = c_flags });
+    exe.root_module.addCSourceFiles(libyaml_src);
+    for (include_paths) |p| exe.root_module.addIncludePath(p);
     b.installArtifact(exe);
 
     // --- Fuzzer targets ---
@@ -112,10 +112,10 @@ fn addWasm(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
         }),
     });
     md4x_wasm.rdynamic = true;
-    md4x_wasm.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
-    md4x_wasm.addCSourceFiles(.{ .files = &wasm_sources, .flags = c_flags });
-    md4x_wasm.addCSourceFiles(opts.libyaml_src);
-    for (opts.include_paths) |p| md4x_wasm.addIncludePath(p);
+    md4x_wasm.root_module.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
+    md4x_wasm.root_module.addCSourceFiles(.{ .files = &wasm_sources, .flags = c_flags });
+    md4x_wasm.root_module.addCSourceFiles(opts.libyaml_src);
+    for (opts.include_paths) |p| md4x_wasm.root_module.addIncludePath(p);
     md4x_wasm.root_module.export_symbol_names = &.{
         "md4x_alloc",
         "md4x_free",
@@ -186,11 +186,11 @@ fn addNapi(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
                 .strip = opts.strip,
             }),
         });
-        napi_lib.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
-        napi_lib.addCSourceFiles(.{ .files = &napi_sources, .flags = napi_c_flags });
-        napi_lib.addCSourceFiles(opts.libyaml_src);
-        for (opts.include_paths) |p| napi_lib.addIncludePath(p);
-        napi_lib.addIncludePath(.{ .cwd_relative = napi_include });
+        napi_lib.root_module.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
+        napi_lib.root_module.addCSourceFiles(.{ .files = &napi_sources, .flags = napi_c_flags });
+        napi_lib.root_module.addCSourceFiles(opts.libyaml_src);
+        for (opts.include_paths) |p| napi_lib.root_module.addIncludePath(p);
+        napi_lib.root_module.addIncludePath(.{ .cwd_relative = napi_include });
 
         if (nt.dlltool_machine) |machine| {
             const dlltool = b.addSystemCommand(&.{
@@ -201,7 +201,7 @@ fn addNapi(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
                 "-l",
             });
             const implib = dlltool.addOutputFileArg("node_api.lib");
-            napi_lib.addObjectFile(implib);
+            napi_lib.root_module.addObjectFile(implib);
         } else {
             napi_lib.linker_allow_shlib_undefined = true;
         }
