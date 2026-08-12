@@ -352,6 +352,21 @@ pub fn md_rollback(ctx: *MD_CTX, opener_index: c_int, closer_index: c_int, how: 
     }
 }
 
+// Turn the marks in [mark_index0, mark_index1) into dummy ('D') marks so no
+// later analysis pass can pair them with anything. Unlike MD_ROLLBACK_ALL this
+// clears ONLY `resolved`: the remaining flag bits stay readable, and `beg`/
+// `end`/`prev`/`next` are untouched so the `ptr_stack` chain and its stored
+// title lengths survive.
+// md4c 44c90ca (post-fork-point).
+pub fn md_disable_marks(ctx: *MD_CTX, mark_index0: c_int, mark_index1: c_int) void {
+    var i: c_int = mark_index0;
+    while (i < mark_index1) : (i += 1) {
+        const mark = &ctx.marks.items[@intCast(i)];
+        mark.ch = 'D';
+        mark.flags &= ~MarkFlags.resolved;
+    }
+}
+
 // md4x.c ~2783.
 pub fn md_build_mark_char_map(ctx: *MD_CTX) void {
     @memset(&ctx.mark_char_map, 0);
@@ -1160,6 +1175,14 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
         var attr: MD_LINK_ATTR = .{};
         var is_link: c_int = 0;
 
+        if (opener.ch == 'D') {
+            // We could have disabled this in a previous iteration (it fell
+            // inside a resolved link URL); processing it would just burn CPU
+            // cycles, or worse, resurrect a mark that was deliberately killed.
+            opener_index = next_index;
+            continue;
+        }
+
         if (next_index >= 0) {
             next_opener = &ctx.marks.items[@intCast(next_index)];
             next_closer = &ctx.marks.items[@intCast(next_opener.?.next)];
@@ -1273,13 +1296,15 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
             if (closer.end < ctx.size and ctx.ch(closer.end) == '(') {
                 // Might be inline link.
                 var inline_link_end: OFF = OFF_MAX;
+                // Hoisted out of the scan below: once the link is confirmed,
+                // this is one past the last mark swallowed by the "(...)".
+                var following_mark_index: c_int = closer_index + 1;
                 is_link = md_is_inline_link_spec(ctx, lines, closer.end, &inline_link_end, &attr);
                 if (is_link < 0) return -1;
 
                 if (is_link != 0) {
-                    var i: c_int = closer_index + 1;
-                    while (i < ctx.nMarks()) {
-                        const m = &ctx.marks.items[@intCast(i)];
+                    while (following_mark_index < ctx.nMarks()) {
+                        const m = &ctx.marks.items[@intCast(following_mark_index)];
                         if (m.beg >= inline_link_end) break;
                         if ((m.flags & (MarkFlags.opener | MarkFlags.resolved)) == (MarkFlags.opener | MarkFlags.resolved)) {
                             if (ctx.marks.items[@intCast(m.next)].beg >= inline_link_end) {
@@ -1289,15 +1314,20 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                                 is_link = 0;
                                 break;
                             }
-                            i = m.next + 1;
+                            following_mark_index = m.next + 1;
                         } else {
-                            i += 1;
+                            following_mark_index += 1;
                         }
                     }
                 }
 
                 if (is_link != 0) {
+                    // Eat the "(...)".
                     closer.end = inline_link_end;
+                    // Everything the URL swallowed must stop being a mark, or an
+                    // opener inside the URL pairs with a closer outside it and
+                    // emits an unbalanced enter_span/leave_span.
+                    md_disable_marks(ctx, closer_index + 1, following_mark_index);
                 }
             }
 

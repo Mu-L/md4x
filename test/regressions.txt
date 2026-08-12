@@ -926,3 +926,62 @@ in it has to be escaped like normal text instead of being emitted verbatim.
 .
 <p><img src="/url" alt="&lt;x title=&quot; y&quot; onerror=&quot;alert(1)&quot;&gt;"></p>
 ````````````````````````````````
+
+
+## [Issue 278](https://github.com/mity/md4c/issues/278) / [Issue 294](https://github.com/mity/md4c/issues/294)
+
+Characters swallowed into an inline link URL must not be interpreted as
+Markdown syntax. The marks inside the `(...)` are disabled once the link is
+resolved, so they can no longer pair with a mark outside it — otherwise a span
+opener inside the URL matches a closer after the link (or vice versa) and the
+parser emits an unbalanced `enter_span` / `leave_span` pair, not merely odd HTML.
+
+The `*` inside the URL must not open emphasis that the `*` before the `[` would
+have to close:
+
+```````````````````````````````` example
+*[foo](bar*baz)
+.
+<p>*<a href="bar*baz">foo</a></p>
+````````````````````````````````
+
+And it must not leave an orphan closer behind either:
+
+```````````````````````````````` example
+[[:](a*b)*~
+.
+<p>[<a href="a*b">:</a>*~</p>
+````````````````````````````````
+
+The same holds for the other span types whose marks may fall inside a URL —
+LaTeX math:
+
+```````````````````````````````` example
+![b]($) .~$
+.
+<p><img src="$" alt="b"> .~$</p>
+````````````````````````````````
+
+and strikethrough:
+
+```````````````````````````````` example
+[a](b~c)~d~
+.
+<p><a href="b~c">a</a><del>d</del></p>
+````````````````````````````````
+
+A `[` disabled inside a URL must stay disabled: bracket resolution skips it
+instead of re-resolving it, which would silently swallow its byte range.
+Everything after the link keeps parsing normally.
+
+```````````````````````````````` example
+[a](b[c]d)*x*
+.
+<p><a href="b%5Bc%5Dd">a</a><em>x</em></p>
+````````````````````````````````
+
+```````````````````````````````` example
+[a](b[c]d)[e](f*g)*h*
+.
+<p><a href="b%5Bc%5Dd">a</a><a href="f*g">e</a><em>h</em></p>
+````````````````````````````````
