@@ -596,8 +596,37 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
     else
         is_in_tight_list = (ctx.containers.items[@intCast(ctx.nContainers() - 1)].is_loose == 0);
 
-    const btype = block.getType();
     const block_lines: [*]const MD_BLOCK = @ptrCast(block);
+
+    // For a large table, check its density: if it is too low, suppress the
+    // interpretation as a table, as a safety measure against quadratic output
+    // size explosion (every missing cell is "helpfully" filled in with an empty
+    // <td></td>). See https://github.com/mity/md4c/issues/345. Upstream mutates
+    // `block->type` in place; demoting the local is equivalent, because the
+    // only later reader of the stored type (`md_process_all_blocks`) uses it
+    // just to pick MD_LINE vs MD_VERBATIMLINE, and `.table` and `.p` agree.
+    const raw_btype = block.getType();
+    const btype = blk: {
+        if (raw_btype != c.BlockType.table) break :blk raw_btype;
+
+        const n_cols: usize = block.bits.data;
+        const n_rows: usize = block.n_lines;
+        // n_cols > 32 also keeps the divisions below well defined.
+        if (n_cols <= 32 or n_rows <= 4096 / n_cols) break :blk raw_btype;
+
+        // Input bytes encoding the table: every line's contents, plus one byte
+        // per line break. `usize` because Zig traps on overflow in Debug.
+        const lines = @as([*]const MD_LINE, @ptrCast(@alignCast(block_lines + 1)))[0..n_rows];
+        var table_input_size: usize = n_rows;
+        for (lines) |l| table_input_size += l.end - l.beg;
+
+        if (table_input_size / n_cols < n_rows / 4) {
+            // Fewer than ~25% as many input bytes as cells to be generated.
+            ctx.log("Suppressing too sparse table (see https://github.com/mity/md4c/issues/345)");
+            break :blk c.BlockType.p;
+        }
+        break :blk raw_btype;
+    };
 
     // The detail is the union arm named by the runtime block type; the switch
     // below fills in whatever fields that arm actually carries. (This replaces

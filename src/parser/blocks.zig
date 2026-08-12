@@ -59,7 +59,12 @@ const md_process_line = process.md_process_line;
 // md_process_all_blocks / md_process_line / md_process_doc / md_parse glue is
 // Pass E. Reference C = the FIXED src/md4x.c.
 
-pub const TABLE_MAXCOLCOUNT: c_uint = 128; // md4x.c #define (DoS cap).
+// The column count is stored in the 16-bit `MD_BLOCK.bits.data`, so refuse at
+// the opener rather than truncating at emission (see conventions.md). Upstream
+// md4c deleted its cap entirely in 589681b and now silently wraps mod 65536
+// (65 536 columns emit zero `<th>`), which md4x deliberately does not copy.
+// DoS protection is the density check in `md_process_leaf_block`, not this cap.
+pub const TABLE_MAXCOLCOUNT: c_uint = 65535;
 
 // `MD_MIN` for unsigned values.
 pub inline fn MIN_u(a: c_uint, b: c_uint) c_uint {
