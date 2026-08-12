@@ -1,41 +1,80 @@
 # Renderers
 
-## HTML Renderer API (`md4x-html.h`)
+> Every renderer implements the five SAX callbacks of `abi.Parser`
+> (`enter_block` / `leave_block` / `enter_span` / `leave_span` / `text`). Since
+> Phase 4c those are plain Zig functions — no `callconv(.c)` — and the block or
+> span type arrives as the active tag of a `*const abi.BlockDetail` /
+> `*const abi.SpanDetail`, which each renderer resolves with an exhaustive
+> `switch (detail.*)`. `text` takes a `[]const u8` slice, and `debug_log` a
+> `[]const u8` message. See `docs/parser-api.md` for the callback table.
+
+## HTML Renderer API (`src/renderers/md4x-html.zig`)
 
 Convenience library that wraps `md_parse()` and produces HTML output:
 
-```c
-int md_html(const MD_CHAR* input, MD_SIZE input_size,
-            void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-            void* userdata, unsigned parser_flags, unsigned renderer_flags);
+```zig
+pub fn md_html(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
 ```
 
 Only `<body>` contents are generated. Frontmatter blocks are suppressed from output.
 
 Extended API with full-HTML document generation:
 
-```c
-typedef struct MD_HTML_OPTS {
-    const char* title;      /* Document title override (NULL = use frontmatter) */
-    const char* css_url;    /* CSS stylesheet URL (NULL = omit) */
-} MD_HTML_OPTS;
+```zig
+pub const MD_HTML_OPTS = extern struct {
+    title: ?[*:0]const u8 = null,   // Document title override (null = use frontmatter)
+    css_url: ?[*:0]const u8 = null, // CSS stylesheet URL (null = omit)
+};
 
-int md_html_ex(const MD_CHAR* input, MD_SIZE input_size,
-               void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-               void* userdata, unsigned parser_flags, unsigned renderer_flags,
-               const MD_HTML_OPTS* opts);
+pub fn md_html_ex(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+    opts: ?*const MD_HTML_OPTS,
+) c_int;
 ```
 
-When `MD_HTML_FLAG_FULL_HTML` is set, `md_html_ex()` generates a complete HTML document (`<!DOCTYPE html>`, `<head>`, `<body>`). If YAML frontmatter exists, `title` and `description` fields are used in `<head>`. The `opts->title` overrides the frontmatter title. `opts` may be NULL.
+When `MD_HTML_FLAG_FULL_HTML` is set, `md_html_ex()` generates a complete HTML document (`<!DOCTYPE html>`, `<head>`, `<body>`). If YAML frontmatter exists, `title` and `description` fields are used in `<head>`. `opts.title` overrides the frontmatter title. `opts` may be null.
 
 ### Renderer Flags (`MD_HTML_FLAG_*`)
 
-| Flag                             | Value    | Description                                         |
-| -------------------------------- | -------- | --------------------------------------------------- |
-| `MD_HTML_FLAG_DEBUG`             | `0x0001` | Send debug output from `md_parse()` to stderr       |
-| `MD_HTML_FLAG_VERBATIM_ENTITIES` | `0x0002` | Do not translate HTML entities                      |
-| `MD_HTML_FLAG_SKIP_UTF8_BOM`     | `0x0004` | Skip UTF-8 BOM at input start                       |
-| `MD_HTML_FLAG_FULL_HTML`         | `0x0008` | Generate full HTML document (requires `md_html_ex`) |
+| Flag                             | Value    | Description                                                |
+| -------------------------------- | -------- | ---------------------------------------------------------- |
+| `MD_HTML_FLAG_DEBUG`             | `0x0001` | Send debug output from `md_parse()` to stderr              |
+| `MD_HTML_FLAG_VERBATIM_ENTITIES` | `0x0002` | Do not translate HTML entities                             |
+| `MD_HTML_FLAG_SKIP_UTF8_BOM`     | `0x0004` | Skip UTF-8 BOM at input start                              |
+| `MD_HTML_FLAG_FULL_HTML`         | `0x0008` | Generate full HTML document (requires `md_html_ex`)        |
+| `MD_HTML_FLAG_CODE_META`         | `0x0010` | Append a code-block metadata JSON array after a NUL byte   |
+| `MD_HTML_FLAG_HEAL`              | `0x0100` | Run `md_heal()` on the input first, then render the result |
+
+`MD_HTML_FLAG_CODE_META` makes the renderer record, for every fenced/indented
+code block, the byte range its rendered output occupies plus the block's
+metadata. After a successful parse it flushes the body and appends a `NUL` byte
+followed by a JSON array — one object per code block, in document order:
+
+```json
+[{ "s": 0, "e": 42, "l": "js", "f": "app.js", "h": [1, 2] }]
+```
+
+`s`/`e` are the start/end byte offsets in the emitted HTML; `l` (language), `f`
+(filename) and `h` (highlight line numbers) are omitted when absent. The JS
+bindings use this to support the `highlighter` callback — `md4x_to_html` (wasm)
+and `renderToHtml` (napi) always pass this flag. `l` is capped at 64 bytes and
+`f` at 256 bytes (fixed-size capture buffers).
+
+`MD_HTML_FLAG_HEAL` is a pre-pass, not a rendering mode: `md_html_ex()` runs
+`md_heal()` over the input, then re-enters itself with the healed buffer and the
+flag cleared. It is what the CLI's `--heal` option sets for HTML output.
 
 ### Rendering Details
 
@@ -47,25 +86,25 @@ When `MD_HTML_FLAG_FULL_HTML` is set, `md_html_ex()` generates a complete HTML d
 - URL attributes are percent-encoded; HTML content is entity-escaped
 - Alerts render as `<blockquote class="alert alert-{type}">` (type lowercased in class)
 
-## Shared Property Parser (`md4x-props.h`)
+## Shared Property Parser (`src/renderers/md4x-props.zig`)
 
-Header-only utility for parsing component property strings (`{key="value" bool #id .class :bind='json'}`). Used by both JSON and HTML renderers.
+Zig module for parsing component property strings (`{key="value" bool #id .class :bind='json'}`). Imported by every renderer that handles props.
 
-```c
-#include "md4x-props.h"
+```zig
+const props = @import("md4x-props.zig");
 
-MD_PARSED_PROPS parsed;
-md_parse_props(raw, size, &parsed);
+var parsed: props.MD_PARSED_PROPS = undefined;
+props.md_parse_props(raw, size, &parsed);
 ```
 
 **Parsed output (`MD_PARSED_PROPS`):**
 
-| Field                     | Type                         | Description                                    |
-| ------------------------- | ---------------------------- | ---------------------------------------------- |
-| `props[32]`               | `MD_PROP[]`                  | Parsed props (key/value pairs, booleans, bind) |
-| `n_props`                 | `int`                        | Number of parsed props                         |
-| `id` / `id_size`          | `const MD_CHAR*` / `MD_SIZE` | `#id` shorthand (last wins)                    |
-| `class_buf` / `class_len` | `MD_CHAR[512]` / `MD_SIZE`   | Merged `.class` values (space-separated)       |
+| Field                     | Type                            | Description                                    |
+| ------------------------- | ------------------------------- | ---------------------------------------------- |
+| `props[32]`               | `[32]MD_PROP`                   | Parsed props (key/value pairs, booleans, bind) |
+| `n_props`                 | `c_int`                         | Number of parsed props                         |
+| `id` / `id_size`          | `[*c]const MD_CHAR` / `MD_SIZE` | `#id` shorthand (last wins)                    |
+| `class_buf` / `class_len` | `[512]MD_CHAR` / `MD_SIZE`      | Merged `.class` values (space-separated)       |
 
 **Prop types (`MD_PROP_TYPE`):**
 
@@ -77,47 +116,59 @@ md_parse_props(raw, size, &parsed);
 
 All `key`/`value` pointers are zero-copy references into the original raw string (not null-terminated — use `*_size` fields).
 
-## AST Renderer API (`md4x-ast.h`)
+## AST Renderer API (`src/renderers/md4x-ast.zig`)
 
 Renders Markdown into a Comark AST (array-based JSON format):
 
-```c
-int md_ast(const MD_CHAR* input, MD_SIZE input_size,
-            void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-            void* userdata, unsigned parser_flags, unsigned renderer_flags);
+```zig
+pub fn md_ast(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
 ```
 
 Produces `{"nodes":[...],"frontmatter":{...},"meta":{}}` where each node is either a plain JSON string (text) or a tuple array `["tag", {props}, ...children]`. Frontmatter YAML is parsed into the top-level `frontmatter` object (not included in `nodes`). HTML comments are represented as `[null, {}, "comment body"]`.
 
-**Internal architecture:** Unlike the streaming HTML/ANSI renderers, the AST renderer builds an in-memory tree of `JSON_NODE` structs during parsing, then serializes the tree to JSON. Each node has a `detail` union for type-specific data (code block info, link href, component props, etc.). Nodes with `tag_is_dynamic = 1` are user-defined components — their tag name is heap-allocated and they use the `detail.component` union member exclusively. All dispatch on `node->tag` (in `json_node_free`, `json_write_props`, `json_serialize_node`) must check `tag_is_dynamic` first to avoid union misinterpretation when a component name collides with a built-in tag.
+**Internal architecture:** Unlike the streaming HTML/ANSI renderers, the AST renderer builds an in-memory tree of `JsonNode` structs during parsing, then serializes the tree to JSON. The whole tree is **arena-allocated** (`JsonCtx.arena`) and freed wholesale, so there is no per-node free. Each node carries a **flat `Detail` struct** — one field per variant, not a union — which structurally rules out the type-confusion bug class the C renderer suffered from. Nodes with `tag_is_dynamic = true` are user-defined components. All tag dispatch (`jsonWriteProps`, `jsonSerializeNode`) must still resolve `tag_is_dynamic` / `tag_kind` **first**, so a component whose name collides with a built-in tag reads the right `Detail` field. See `AGENTS.md` for the full rule. On the input side, `jsonEnterBlock` / `jsonEnterSpan` switch on the incoming `abi.BlockDetail` / `abi.SpanDetail` union and resolve the dynamic-component arm before any built-in tag, so the same rule holds where the node is built.
 
 ### AST Renderer Flags (`MD_AST_FLAG_*`)
 
-| Flag                        | Value    | Description                                   |
-| --------------------------- | -------- | --------------------------------------------- |
-| `MD_AST_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr |
-| `MD_AST_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                 |
+| Flag                        | Value    | Description                                                |
+| --------------------------- | -------- | ---------------------------------------------------------- |
+| `MD_AST_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr              |
+| `MD_AST_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                              |
+| `MD_AST_FLAG_HEAL`          | `0x0100` | Run `md_heal()` on the input first, then render the result |
 
-## ANSI Renderer API (`md4x-ansi.h`)
+## ANSI Renderer API (`src/renderers/md4x-ansi.zig`)
 
 Renders Markdown into ANSI terminal output with escape codes for styling:
 
-```c
-int md_ansi(const MD_CHAR* input, MD_SIZE input_size,
-            void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-            void* userdata, unsigned parser_flags, unsigned renderer_flags);
+```zig
+pub fn md_ansi(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
 ```
 
 ### Renderer Flags (`MD_ANSI_FLAG_*`)
 
-| Flag                            | Value    | Description                                          |
-| ------------------------------- | -------- | ---------------------------------------------------- |
-| `MD_ANSI_FLAG_DEBUG`            | `0x0001` | Send debug output from `md_parse()` to stderr        |
-| `MD_ANSI_FLAG_SKIP_UTF8_BOM`    | `0x0002` | Skip UTF-8 BOM at input start                        |
-| `MD_ANSI_FLAG_NO_COLOR`         | `0x0004` | Suppress ANSI escape codes (plain text output)       |
-| `MD_ANSI_FLAG_CODE_META`        | `0x0008` | Append code block metadata after null byte           |
-| `MD_ANSI_FLAG_SHOW_URLS`        | `0x0010` | Show link URLs after link text (default: OSC 8 only) |
-| `MD_ANSI_FLAG_SHOW_FRONTMATTER` | `0x0020` | Show frontmatter as dim text (default: suppressed)   |
+| Flag                            | Value    | Description                                                |
+| ------------------------------- | -------- | ---------------------------------------------------------- |
+| `MD_ANSI_FLAG_DEBUG`            | `0x0001` | Send debug output from `md_parse()` to stderr              |
+| `MD_ANSI_FLAG_SKIP_UTF8_BOM`    | `0x0002` | Skip UTF-8 BOM at input start                              |
+| `MD_ANSI_FLAG_NO_COLOR`         | `0x0004` | Suppress ANSI escape codes (plain text output)             |
+| `MD_ANSI_FLAG_CODE_META`        | `0x0008` | Append code block metadata after null byte                 |
+| `MD_ANSI_FLAG_SHOW_URLS`        | `0x0010` | Show link URLs after link text (default: OSC 8 only)       |
+| `MD_ANSI_FLAG_SHOW_FRONTMATTER` | `0x0020` | Show frontmatter as dim text (default: suppressed)         |
+| `MD_ANSI_FLAG_HEAL`             | `0x0100` | Run `md_heal()` on the input first, then render the result |
 
 ### Rendering Details
 
@@ -142,12 +193,12 @@ int md_ansi(const MD_CHAR* input, MD_SIZE input_size,
 
 Uses streaming renderer pattern (like HTML renderer), no AST construction.
 
-## Shared JSON Writer (`md4x-json.h`)
+## Shared JSON Writer (`src/renderers/md4x-json.zig`)
 
-Header-only utility providing JSON serialization and YAML-to-JSON conversion helpers. Used by both the AST and meta renderers.
+Zig module providing JSON serialization and YAML-to-JSON conversion helpers (libyaml-backed). Imported by the AST and meta renderers.
 
-```c
-#include "md4x-json.h"
+```zig
+const json = @import("md4x-json.zig");
 ```
 
 **Key components:**
@@ -157,14 +208,19 @@ Header-only utility providing JSON serialization and YAML-to-JSON conversion hel
 - `json_write_escaped()` / `json_write_string()` — JSON-escaped string output
 - `json_write_yaml_props()` — Parses YAML frontmatter and writes key-value pairs as JSON properties (using libyaml)
 
-## Meta Renderer API (`md4x-meta.h`)
+## Meta Renderer API (`src/renderers/md4x-meta.zig`)
 
 Lightweight metadata extractor that parses frontmatter and headings from Markdown:
 
-```c
-int md_meta(const MD_CHAR* input, MD_SIZE input_size,
-            void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-            void* userdata, unsigned parser_flags, unsigned renderer_flags);
+```zig
+pub fn md_meta(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
 ```
 
 Produces a flat JSON object with frontmatter properties spread at the top level plus a `headings` array. No AST construction — uses SAX callbacks to capture only frontmatter text and heading plain text.
@@ -184,10 +240,11 @@ Produces a flat JSON object with frontmatter properties spread at the top level 
 
 ### Renderer Flags (`MD_META_FLAG_*`)
 
-| Flag                         | Value    | Description                                   |
-| ---------------------------- | -------- | --------------------------------------------- |
-| `MD_META_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr |
-| `MD_META_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                 |
+| Flag                         | Value    | Description                                                |
+| ---------------------------- | -------- | ---------------------------------------------------------- |
+| `MD_META_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr              |
+| `MD_META_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                              |
+| `MD_META_FLAG_HEAL`          | `0x0100` | Run `md_heal()` on the input first, then render the result |
 
 ### Rendering Details
 
@@ -197,22 +254,28 @@ Produces a flat JSON object with frontmatter properties spread at the top level 
 - HTML entities in headings are resolved to UTF-8 characters
 - Uses streaming renderer pattern (like HTML renderer), no AST construction
 
-## Text Renderer API (`md4x-text.h`)
+## Text Renderer API (`src/renderers/md4x-text.zig`)
 
 Strips markdown formatting and produces plain text output:
 
-```c
-int md_text(const MD_CHAR* input, MD_SIZE input_size,
-            void (*process_output)(const MD_CHAR*, MD_SIZE, void*),
-            void* userdata, unsigned parser_flags, unsigned renderer_flags);
+```zig
+pub fn md_text(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
 ```
 
 ### Renderer Flags (`MD_TEXT_FLAG_*`)
 
-| Flag                         | Value    | Description                                   |
-| ---------------------------- | -------- | --------------------------------------------- |
-| `MD_TEXT_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr |
-| `MD_TEXT_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                 |
+| Flag                         | Value    | Description                                                |
+| ---------------------------- | -------- | ---------------------------------------------------------- |
+| `MD_TEXT_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr              |
+| `MD_TEXT_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                              |
+| `MD_TEXT_FLAG_HEAL`          | `0x0100` | Run `md_heal()` on the input first, then render the result |
 
 ### Rendering Details
 
@@ -234,16 +297,72 @@ int md_text(const MD_CHAR* input, MD_SIZE input_size,
 - Raw HTML: stripped (no output)
 - Uses streaming renderer pattern (like HTML renderer), no AST construction
 
-## Heal Utility API (`md4x-heal.h`)
+## Markdown Renderer API (`src/renderers/md4x-markdown.zig`)
+
+Re-renders the parsed document back to Markdown (normalizing the source syntax):
+
+```zig
+pub fn md_markdown(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
+```
+
+Backs the CLI's `--format=markdown`. Because it renders from the SAX stream and not
+from the source bytes, the output is normalized rather than round-tripped: setext
+headings become ATX, indented code becomes fenced, autolinks and wiki links become
+explicit `[text](url)` links, and anything with no Markdown spelling (raw HTML,
+component props) is dropped or emitted as a tag.
+
+### Renderer Flags (`MD_MARKDOWN_FLAG_*`)
+
+| Flag                             | Value    | Description                                                |
+| -------------------------------- | -------- | ---------------------------------------------------------- |
+| `MD_MARKDOWN_FLAG_DEBUG`         | `0x0001` | Send debug output from `md_parse()` to stderr              |
+| `MD_MARKDOWN_FLAG_SKIP_UTF8_BOM` | `0x0002` | Skip UTF-8 BOM at input start                              |
+| `MD_MARKDOWN_FLAG_HEAL`          | `0x0100` | Run `md_heal()` on the input first, then render the result |
+
+### Rendering Details
+
+- Headings: ATX only — `#` repeated up to 6 times plus a space (setext input is normalized to ATX)
+- Paragraphs: separated by a blank line
+- Lists: `- ` (unordered) or `N. ` (ordered, numbered from the list's `start`), 2-space indent per nesting level
+- Task lists: `- [x] ` / `- [ ] ` — the task marker takes precedence over the ordered-list number
+- Blockquotes: `> ` prefix, repeated per nesting level; every emitted line carries the current quote + list prefix
+- Alerts: rendered as a blockquote whose first line is `[!TYPE]`
+- Horizontal rules: `---`
+- Code blocks: always fenced (indented code included) — ` ``` `, or `~~~` when the source fence char was `~`; the full info string is re-emitted, including `[filename]` / `{1-3}` metadata
+- Inline: `*em*`, `**strong**`, `` `code` ``, `~~del~~`; underline has no Markdown spelling, so it is emitted as `<u>…</u>`
+- Links: `[text](href "title")` — the title is emitted only when present; images: `![alt](src "title")`
+- Autolinks are expanded to the explicit form (`<https://a.b>` → `[https://a.b](https://a.b)`)
+- Wiki links become regular links: `[[target]]` → `[target](target)`
+- LaTeX math: `$…$` and `$$…$$`
+- Tables: pipe tables (`| cell |`), with a delimiter row emitted after the header row using the recorded per-column alignment (`:---`, `:---:`, `---:`, or `---` for default); alignment is tracked for at most 128 columns
+- Hard breaks: `\` + newline; soft breaks: newline — both followed by the current indent
+- Frontmatter: dropped entirely (delimiters and content)
+- Raw HTML: stripped — HTML blocks, inline HTML, and comments alike
+- Block components: `<name>` / `</name>` on their own lines with a blank line before the content; a component title is emitted as `title="…"`. Inline components: `<name>…</name>`. Props/attributes (`{...}`) are not re-emitted
+- Slots (`template`) and attribute spans (`[text]{...}`) are transparent — children render normally
+- Entities are resolved to UTF-8 characters; NUL characters become U+FFFD
+- Uses streaming renderer pattern (like the HTML renderer), no AST construction
+
+## Heal Utility API (`src/renderers/md4x-heal.zig`)
 
 Fixes incomplete/streaming Markdown text so it renders correctly mid-stream. This is a **pre-parser text transform** — it does not use `md_parse()` and has no parser dependency.
 
 Inspired by [remend](https://github.com/vercel/streamdown/tree/main/packages/remend).
 
-```c
-int md_heal(const char* input, unsigned input_size,
-            void (*process_output)(const char*, unsigned, void*),
-            void* userdata);
+```zig
+pub fn md_heal(
+    input: [*]const u8,
+    input_size: c_uint,
+    process_output: *const fn ([*]const u8, c_uint, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+) c_int;
 ```
 
 Returns 0 on success, -1 on error.

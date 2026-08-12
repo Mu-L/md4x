@@ -1,30 +1,21 @@
 const std = @import("std");
 const zon = @import("build.zig.zon");
 
-const version = std.SemanticVersion.parse(zon.version) catch unreachable;
-
 // --- Source files ---
 
-const parser_source = "src/md4x.c";
-const renderer_sources = [_][]const u8{ "src/renderers/md4x-html.c", "src/renderers/md4x-ast.c", "src/renderers/md4x-ansi.c", "src/renderers/md4x-meta.c", "src/renderers/md4x-text.c", "src/renderers/md4x-markdown.c", "src/renderers/md4x-heal.c", "src/entity.c" };
-const cli_sources = renderer_sources ++ .{ "src/cli/md4x-cli.c", "src/cli/cmdline.c" };
-const wasm_sources = renderer_sources ++ .{"src/md4x-wasm.c"};
-const napi_sources = renderer_sources ++ .{"src/md4x-napi.c"};
+// The entire library is Zig: parser (src/md4x.zig + src/parser/), renderers
+// (src/renderers/<name>.zig), entity table (src/entity.zig), CLI driver
+// (src/cli/md4x-cli.zig), and the WASM/NAPI glue. The only C compiled into any
+// artifact is the vendored libyaml dependency. The shared ABI types live in
+// src/abi.zig (added as the "abi" module to every Zig compile step).
+//
+// Phase 4a: the parser, entity table, and renderers are no longer built as
+// separate static libraries that find each other through link-time C-ABI
+// symbols. Each artifact's root source `@import`s src/lib.zig, which pulls all
+// of them into that artifact's module graph, so they call each other by direct
+// Zig call. Adding a renderer means adding it to src/lib.zig, not here.
 
 // --- Compiler flags ---
-
-const c_flags: []const []const u8 = &.{
-    std.fmt.comptimePrint("-DMD_VERSION_MAJOR={d}", .{version.major}),
-    std.fmt.comptimePrint("-DMD_VERSION_MINOR={d}", .{version.minor}),
-    std.fmt.comptimePrint("-DMD_VERSION_RELEASE={d}", .{version.patch}),
-    "-Wall",
-    "-Wextra",
-    "-Wshadow",
-    "-Wdeclaration-after-statement",
-    "-O2",
-};
-const c_flags_utf8 = c_flags ++ &[_][]const u8{"-DMD4X_USE_UTF8"};
-const napi_c_flags = c_flags ++ &[_][]const u8{"-DNODE_GYP_MODULE_NAME=md4x"};
 
 const libyaml_c_flags: []const []const u8 = &.{
     "-DYAML_DECLARE_STATIC",
@@ -41,6 +32,10 @@ const PkgBuildOptions = struct {
     strip: bool,
     libyaml_src: std.Build.Module.AddCSourceFilesOptions,
     include_paths: []const std.Build.LazyPath,
+    /// Shared "abi" module. It must be ONE module instance per artifact:
+    /// creating it twice puts src/abi.zig in two modules, which Zig rejects
+    /// ("file exists in modules 'abi' and 'abi0'").
+    abi: *std.Build.Module,
 };
 
 pub fn build(b: *std.Build) void {
@@ -48,13 +43,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse .ReleaseFast;
 
     const strip = optimize != .Debug;
-
-    const mod_opts: std.Build.Module.CreateOptions = .{
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .link_libc = true,
-    };
 
     // --- libyaml (YAML parser for frontmatter) ---
 
@@ -67,21 +55,67 @@ pub fn build(b: *std.Build) void {
 
     const include_paths: []const std.Build.LazyPath = &.{ b.path("src"), b.path("src/renderers"), libyaml.path("include") };
 
+    // Shared ABI types module — created once and reused by every artifact (a
+    // second instance would put src/abi.zig in two modules, which Zig rejects).
+    const abi_mod = b.createModule(.{ .root_source_file = b.path("src/abi.zig") });
+
     // --- CLI executable ---
 
     const exe = b.addExecutable(.{
         .name = "md4x",
-        .root_module = b.createModule(mod_opts),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/md4x-cli.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .link_libc = true,
+            .single_threaded = true,
+        }),
     });
-    exe.root_module.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
-    exe.root_module.addCSourceFiles(.{ .files = &cli_sources, .flags = c_flags });
+    exe.root_module.addImport("abi", abi_mod);
+    // The CLI root lives in src/cli/, so it cannot `@import("../lib.zig")` (a
+    // module may not reach outside its own directory). The other artifacts'
+    // roots are in src/ and import it relatively. Same module graph either way.
+    exe.root_module.addImport("md4x", md4xLibModule(b, target, optimize, strip, include_paths, abi_mod));
+    const cli_options = b.addOptions();
+    cli_options.addOption([]const u8, "version", zon.version);
+    exe.root_module.addOptions("build_options", cli_options);
+    // libyaml is compiled into the exe: the html/ast/meta renderers call into it.
     exe.root_module.addCSourceFiles(libyaml_src);
     for (include_paths) |p| exe.root_module.addIncludePath(p);
     b.installArtifact(exe);
 
-    // --- Fuzzer targets ---
+    // --- Unit tests (`zig build test`) ---
+    // Compile src/md4x.zig as a test artifact. It imports src/entity.zig
+    // directly, so nothing needs linking in.
+    //
+    // The test artifact is pinned to a SAFE optimize mode, independently of the
+    // global -Doptimize default (which is .ReleaseFast, for the shipping
+    // artifacts). Bounds checks, @intCast range checks, overflow checks and
+    // `unreachable` panics are exactly what makes the OOM sweep and the abort
+    // matrix meaningful; under ReleaseFast the sweep's "never a crash"
+    // assertion degrades to "no hard segfault". -Doptimize=Debug still selects
+    // Debug (undefined-fill + allocator length validation); everything else
+    // maps to ReleaseSafe.
+    const test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .Debug else .ReleaseSafe;
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/md4x.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .single_threaded = true,
+        }),
+    });
+    for (include_paths) |p| unit_tests.root_module.addIncludePath(p);
+    unit_tests.root_module.addImport("abi", abi_mod);
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const test_step = b.step("test", "Run parser unit tests");
+    test_step.dependOn(&run_unit_tests.step);
 
-    addFuzzers(b);
+    // --- Fuzzer target (Zig-native, coverage-instrumented) ---
+
+    addZigFuzzer(b, target, include_paths, libyaml_src, abi_mod);
 
     // --- WASM & NAPI targets ---
 
@@ -91,6 +125,7 @@ pub fn build(b: *std.Build) void {
         .strip = pkg_optimize != .Debug,
         .libyaml_src = libyaml_src,
         .include_paths = include_paths,
+        .abi = abi_mod,
     };
     _ = addWasm(b, pkg_opts, .{
         .step_name = "wasm",
@@ -106,6 +141,23 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
     });
     _ = addNapi(b, pkg_opts);
+}
+
+/// The library root (src/lib.zig) as a named module: parser + entity table +
+/// every renderer, in one module graph, calling each other by direct Zig call.
+/// Only the CLI needs this form; see the comment at its call site.
+fn md4xLibModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, strip: bool, include_paths: []const std.Build.LazyPath, abi: *std.Build.Module) *std.Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .link_libc = true,
+        .single_threaded = true,
+    });
+    mod.addImport("abi", abi);
+    for (include_paths) |p| mod.addIncludePath(p);
+    return mod;
 }
 
 const WasmVariant = struct {
@@ -124,15 +176,16 @@ fn addWasm(b: *std.Build, opts: PkgBuildOptions, variant: WasmVariant) *std.Buil
     const md4x_wasm = b.addExecutable(.{
         .name = "md4x",
         .root_module = b.createModule(.{
+            .root_source_file = b.path("src/md4x-wasm.zig"),
             .target = wasm_target,
             .optimize = variant.optimize,
             .link_libc = true,
             .strip = opts.strip,
+            .single_threaded = true,
         }),
     });
     md4x_wasm.rdynamic = true;
-    md4x_wasm.root_module.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
-    md4x_wasm.root_module.addCSourceFiles(.{ .files = &wasm_sources, .flags = c_flags });
+    md4x_wasm.root_module.addImport("abi", opts.abi);
     md4x_wasm.root_module.addCSourceFiles(opts.libyaml_src);
     for (opts.include_paths) |p| md4x_wasm.root_module.addIncludePath(p);
     md4x_wasm.root_module.export_symbol_names = &.{
@@ -200,17 +253,25 @@ fn addNapi(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
             .linkage = .dynamic,
             .name = "md4x",
             .root_module = b.createModule(.{
+                .root_source_file = b.path("src/md4x-napi.zig"),
                 .target = cross_target,
                 .optimize = opts.optimize,
                 .link_libc = true,
                 .strip = opts.strip,
+                .single_threaded = true,
             }),
         });
-        napi_lib.root_module.addCSourceFile(.{ .file = b.path(parser_source), .flags = c_flags_utf8 });
-        napi_lib.root_module.addCSourceFiles(.{ .files = &napi_sources, .flags = napi_c_flags });
+        napi_lib.root_module.addImport("abi", opts.abi);
         napi_lib.root_module.addCSourceFiles(opts.libyaml_src);
         for (opts.include_paths) |p| napi_lib.root_module.addIncludePath(p);
-        napi_lib.root_module.addIncludePath(.{ .cwd_relative = napi_include });
+        // node_api.h lives outside the project tree (node_modules). Resolve to an
+        // absolute path so the root Zig module's @cImport translate-c step finds
+        // it regardless of the sub-process working directory.
+        const napi_include_abs = if (std.fs.path.isAbsolute(napi_include))
+            napi_include
+        else
+            b.pathFromRoot(napi_include);
+        napi_lib.root_module.addIncludePath(.{ .cwd_relative = napi_include_abs });
 
         if (nt.dlltool_machine) |machine| {
             const dlltool = b.addSystemCommand(&.{
@@ -239,8 +300,29 @@ fn addNapi(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
     return napi_all_step;
 }
 
-fn addFuzzers(b: *std.Build) void {
-    const fuzz_build = b.addSystemCommand(&.{ "sh", "test/fuzzers/build.sh" });
-    const fuzz_step = b.step("fuzz", "Build all fuzzer harnesses (requires clang)");
-    fuzz_step.dependOn(&fuzz_build.step);
+/// Zig-native, coverage-instrumented fuzz harness (`src/fuzz.zig`). It imports
+/// src/lib.zig, so the parser + renderer sources are compiled into the test
+/// binary and Zig's own fuzzer (`zig build fuzz-zig --fuzz`) instruments them,
+/// steering inputs by real coverage of the library internals.
+///
+/// Built ReleaseSafe regardless of -Doptimize so runtime safety checks (OOB,
+/// overflow, unreachable, bad casts) are always armed during fuzzing; without
+/// them a miscompiled UB would pass silently. libyaml (C) is linked for the
+/// html/ast/meta paths but is not instrumented.
+fn addZigFuzzer(b: *std.Build, target: std.Build.ResolvedTarget, include_paths: []const std.Build.LazyPath, libyaml_src: std.Build.Module.AddCSourceFilesOptions, abi: *std.Build.Module) void {
+    const fuzz_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/fuzz.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+            .link_libc = true,
+            .single_threaded = true,
+        }),
+    });
+    for (include_paths) |p| fuzz_tests.root_module.addIncludePath(p);
+    fuzz_tests.root_module.addImport("abi", abi);
+    fuzz_tests.root_module.addCSourceFiles(libyaml_src);
+    const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
+    const fuzz_zig_step = b.step("fuzz-zig", "Run the Zig-native fuzz harness (add --fuzz for coverage-guided fuzzing)");
+    fuzz_zig_step.dependOn(&run_fuzz_tests.step);
 }

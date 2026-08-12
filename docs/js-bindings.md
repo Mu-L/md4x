@@ -3,11 +3,13 @@
 ## WASM Target
 
 ```sh
-zig build wasm                     # packages/md4x/build/md4x.wasm       (ReleaseFast, ~302K)
-zig build wasm-small               # packages/md4x/build/md4x-small.wasm (ReleaseSmall, ~287K)
+zig build wasm                     # packages/md4x/build/md4x.wasm       (ReleaseFast, ~310K)
+zig build wasm-small               # packages/md4x/build/md4x-small.wasm (ReleaseSmall, ~252K)
 ```
 
-Builds a `wasm32-wasi` WASM binary with exported functions. `wasm` is the binary shipped as an asset and loaded by `md4x/wasm`; `wasm-small` is the `ReleaseSmall` variant inlined into the `md4x/standalone` bundle (it is excluded from the npm tarball, since it ships inside that module). The WASM module requires minimal WASI imports (`fd_close`, `fd_seek`, `fd_write`, `proc_exit`) which can be stubbed for browser use.
+Builds a `wasm32-wasi` WASM binary with exported functions. `wasm` is the binary shipped as an asset and loaded by `md4x/wasm` (`ReleaseFast`, `pkg_optimize` in `build.zig`, shared with the NAPI targets); `wasm-small` is the `ReleaseSmall` variant inlined into the `md4x/standalone` bundle (it is excluded from the npm tarball, since it ships inside that module). The WASM module requires minimal WASI imports (`fd_close`, `fd_seek`, `fd_write`, `proc_exit`) which can be stubbed for browser use.
+
+> **Note on WASM performance:** The WASM target is built `ReleaseFast` (same as NAPI), but it is consistently slower than the native NAPI binding (roughly 3x on `renderToHtml`, 2x on `parseAST` for the medium fixture) due to the WebAssembly runtime plus the cost of copying input/output across the JS↔WASM memory boundary on every call. Renderer-side allocation optimizations (e.g. the AST arena, HTML output buffering) help the native path more than WASM, since wasm's linear-memory allocator has a different cost profile than the system `malloc`. Prefer NAPI where raw throughput matters; WASM is the portable fallback for non-Node environments.
 
 **Exported functions:**
 
@@ -159,7 +161,7 @@ import { renderToHtml } from "md4x/napi";
 const html = renderToHtml("# Hello");
 ```
 
-The NAPI API is sync. All extensions are enabled by default (`MD_DIALECT_ALL`). `renderToAST` returns the raw JSON string from the C renderer. `parseAST` parses it into a `ComarkTree` object.
+The NAPI API is sync. All extensions are enabled by default (`MD_DIALECT_ALL`). `renderToAST` returns the raw JSON string from the AST renderer. `parseAST` parses it into a `ComarkTree` object.
 
 `init(opts?)` is optional for NAPI — the native binding loads lazily on first render call. It accepts an optional options object with a `binding` property to provide a custom NAPI binding.
 
@@ -194,7 +196,7 @@ All extensions (`MD_DIALECT_ALL`) are enabled by default. No parser/renderer fla
 | `renderToText(input: string)` | `string`                                 | `string`                                 |
 | `heal(input: string)`         | `string`                                 | `string`                                 |
 
-`renderToAST` returns the raw JSON string from the C renderer. `parseAST` calls `renderToAST` and parses the result into a `ComarkTree` object. `renderToMeta` returns the raw JSON string from the meta renderer. `parseMeta` calls `renderToMeta`, parses the result, and falls back to the first heading as `title` if no frontmatter title exists. See `lib/types.d.ts` for types.
+`renderToAST` returns the raw JSON string from the AST renderer. `parseAST` calls `renderToAST` and parses the result into a `ComarkTree` object. `renderToMeta` returns the raw JSON string from the meta renderer. `parseMeta` calls `renderToMeta`, parses the result, and falls back to the first heading as `title` if no frontmatter title exists. See `lib/types.d.ts` for types.
 
 Both `renderToHtml` and `renderToAnsi` accept an optional `highlighter` callback for custom code block highlighting:
 

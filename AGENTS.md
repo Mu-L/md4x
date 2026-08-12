@@ -3,47 +3,52 @@
 > **Always keep this file (`AGENTS.md`) and referenced `docs/*.md` files updated when making changes to the project.**
 > **Always update `CHANGELOG.md` when adding removing user-facing features, APIs, build targets, CLI options, or library behavior.**
 
-> C Markdown parser library (fork of [mity/md4c](https://github.com/mity/md4c))
+> Markdown parser library (Zig port of [mity/md4c](https://github.com/mity/md4c))
 
-- **Version:** 0.5.2 (next: 0.5.3 WIP)
 - **License:** MIT
-- **Language:** C (C89/C99 compatible)
+- **Language:** Zig (port of [mity/md4c](https://github.com/mity/md4c); the only C left in any artifact is the vendored libyaml)
 - **Spec:** CommonMark 0.31.2
 - **Build:** Zig (`zig build`)
 - **JS Runtime:** Bun (do **not** use npm, pnpm, yarn, or npx — use `bun`/`bunx` exclusively)
 - **Formatting:** Always run `bun fmt` after finishing code changes
 
+> **Implementation note:** MD4X is a **Zig library + JS bindings**. The entire implementation (parser, all renderers, entity table, CLI driver, and wasm/napi glue) is Zig; output is byte-for-byte identical to the original C implementation.
+>
+> **There is no external C ABI.** The public `.h` headers, the stable-exported-symbol promise, and drop-in md4c compatibility were **dropped** (see `PLAN.md`). `src/abi.zig` is now the single source of truth for the shared parser types, enums, flags, and the `Parser` callback table. The only C-callable boundaries left are the **wasm exports** and the **napi module registration** — those stay `export` + `callconv(.c)` deliberately.
+>
+> **Compatibility surface that IS preserved:** byte-for-byte output of every renderer, the CLI's stdout for every format/flag, and the wasm/napi exported function set + Comark AST JSON shape consumed by the JS package. The _internal_ calling convention is not frozen.
+
 ## Project Structure
 
 ```
 src/
-  md4x.c              # Core parser (~6500 LoC)
-  md4x.h              # Parser public API
-  entity.c             # HTML entity lookup table (generated)
-  entity.h             # Entity header
-  md4x-wasm.c          # WASM exports (alloc/free + renderer wrappers)
-  md4x-napi.c          # Node.js NAPI addon (module registration + renderer wrappers)
+  lib.zig             # Library root: parser + entity + all renderers in ONE module
+  md4x.zig            # Parser root (md_parse; imports src/parser/ modules)
+  abi.zig             # Shared types/enums/flags, detail unions, Parser (types only, leaf)
+  parser/             # Parser implementation, split from the monolithic md4x.zig
+    types.zig         # MD_CTX + internal structs, enums, shared @import("abi")
+    util.zig          # char/UTF-8/unicode helpers, buffers, entity recognizers, attributes
+    refdefs.zig       # ref-def dictionary + link/autolink/wiki recognizers
+    inlines.zig       # inline mark engine (emphasis mod-3) + span/text emission
+    blocks.zig        # line classification + container/block analysis
+    process.zig       # block-content processing + md_process_doc
+  unicode_tables.zig  # Generated Unicode tables (case folding, punct, whitespace)
+  entity.zig           # HTML entity lookup table (generated)
+  md4x-wasm.zig        # WASM exports (alloc/free + renderer wrappers)
+  md4x-napi.zig        # Node.js NAPI addon (module registration + renderer wrappers)
+  fuzz.zig             # Zig-native coverage-instrumented fuzz harness (zig build fuzz-zig --fuzz)
   renderers/
-    md4x-props.h       # Shared component property parser (header-only)
-    md4x-json.h        # Shared JSON writer + YAML-to-JSON helpers (header-only)
-    md4x-html.c        # HTML renderer library (~500 LoC)
-    md4x-html.h        # HTML renderer public API
-    md4x-ast.c        # AST renderer library (~530 LoC)
-    md4x-ast.h        # AST renderer public API
-    md4x-ansi.c        # ANSI terminal renderer library (~450 LoC)
-    md4x-ansi.h        # ANSI renderer public API
-    md4x-meta.c        # Meta renderer library (~300 LoC)
-    md4x-meta.h        # Meta renderer public API
-    md4x-text.c        # Plain text renderer library (~350 LoC)
-    md4x-text.h        # Plain text renderer public API
-    md4x-markdown.c    # Markdown renderer library (~820 LoC)
-    md4x-markdown.h    # Markdown renderer public API
-    md4x-heal.c        # Markdown heal/completion utility (~600 LoC)
-    md4x-heal.h        # Heal utility public API
+    md4x-props.zig     # Shared component property parser (Zig module)
+    md4x-json.zig      # Shared JSON writer + YAML-to-JSON helpers (Zig module)
+    md4x-html.zig      # HTML renderer library
+    md4x-ast.zig       # AST renderer library
+    md4x-ansi.zig      # ANSI terminal renderer library
+    md4x-meta.zig      # Meta renderer library
+    md4x-text.zig      # Plain text renderer library
+    md4x-markdown.zig  # Markdown renderer library
+    md4x-heal.zig      # Markdown heal/completion utility
   cli/
-    md4x-cli.c           # CLI utility (multi-format: html, text, json, ansi, markdown, heal)
-    cmdline.c            # Command-line parser (from c-reusables)
-    cmdline.h            # Command-line parser API
+    md4x-cli.zig         # CLI utility driver (multi-format: html, text, json, ansi, markdown, heal)
     md4x.1               # Man page
 packages/md4x/           # npm package
   package.json           # Package manifest (name: md4x)
@@ -81,17 +86,20 @@ test/
   pathological-tests.py # Stress tests for DoS resistance
   prog.py              # Program execution wrapper
   normalize.py         # HTML normalization for comparison
-  fuzzers/             # LibFuzzer harnesses (html, ast, ansi, text, meta, heal)
-    build.sh           # Build script for all fuzzers (clang + sanitizers)
+  fuzzers/             # Fuzz corpora (the C/libFuzzer harnesses were removed)
     seed-corpus/       # Seed inputs (commonmark, gfm, frontmatter, components, etc.)
+    corpus/            # Accumulated fuzzer-discovered inputs
 scripts/
   run-tests.ts            # Main test runner (runs all suites)
+  diff-corpus.sh          # Output-parity harness (sha256 of all 6 renderer formats over the corpus)
   build-entity-map.ts     # Generates entity.c from WHATWG spec
   build-standalone.ts     # Bundles lib/standalone.mjs (rolldown, gzip+Z85 inlined wasm)
   build-folding-map.ts    # Unicode case folding map generator
   build-punct-map.ts      # Punctuation character map generator
   build-whitespace-map.ts # Whitespace classification generator
   _unicode-map.ts         # Shared helper for punct/whitespace map generators
+  _gen-tables-zig.py      # Generates src/unicode_tables.zig (case folding/punct/whitespace tables)
+  _gen-entity-zig.py      # Generates src/entity.zig from the WHATWG entity data
   coverity.sh             # Coverity Scan integration
   unicode/                # Unicode data files (CaseFolding.txt, DerivedGeneralCategory.txt)
 website/                 # Docs + playground (Vite + Vue)
@@ -129,31 +137,31 @@ zig build -Doptimize=Debug         # debug build
 zig build && zig-out/bin/md4x --help  # run md4x CLI
 ```
 
-Outputs to `zig-out/` (`bin/md4x`, `lib/libmd4x*.a`, `include/md4x*.h`).
+Installs only `zig-out/bin/md4x`. **No static libraries or headers are installed** — they were part of the dropped C ABI. The wasm/napi artifacts install directly into `packages/md4x/build/`.
 
 The project can also be consumed as a Zig package dependency via `build.zig.zon`.
 
-Produces four static libraries, one executable, and optional WASM/NAPI targets:
+**One Zig module graph per artifact.** `src/lib.zig` is the library root: it imports the parser, the entity table, and every renderer, and re-exports their entry points. Each artifact root pulls it in — `src/md4x-wasm.zig` (WASM), `src/md4x-napi.zig` (NAPI), and `src/fuzz.zig` via a relative `@import("lib.zig")`; `src/cli/md4x-cli.zig` via the named `md4x` module, because a module may not `@import` outside its own directory. The units therefore call each other by **direct Zig call**; there are no per-unit static libraries and no link-time C-ABI symbol resolution between them.
 
-- **libmd4x** — Parser library (compiled with `-DMD4X_USE_UTF8`)
-- **libmd4x-html** — HTML renderer (links against libmd4x)
-- **libmd4x-ast** — AST renderer (links against libmd4x)
-- **libmd4x-ansi** — ANSI terminal renderer (links against libmd4x)
-- **libmd4x-meta** — Meta renderer (links against libmd4x)
-- **libmd4x-text** — Plain text renderer (links against libmd4x)
-- **libmd4x-markdown** — Markdown renderer (links against libmd4x)
-- **libmd4x-heal** — Markdown heal/completion utility (standalone, no parser dependency)
+To add a renderer, add it to `src/lib.zig` — not to `build.zig`.
+
+Two build-graph rules worth knowing: the `abi` module must be created **once** and shared by every module in an artifact (a second `createModule` on `src/abi.zig` fails with _"file exists in modules 'abi' and 'abi0'"_), and `src/abi.zig` must stay a **pure leaf** — types only, no imports, no function declarations. Anything that would make `abi` import the parser or a renderer creates a cycle. Entry-point declarations belong in `src/lib.zig`.
+
+The WASM JS loader (`packages/md4x/lib/wasm/common.mjs`) provides no-op `args_`/`environ_` WASI import stubs that Zig's `wasm32-wasi` startup references.
+
+Build targets:
+
 - **md4x** — CLI utility (supports `--format=html|text|json|ansi|markdown|heal`)
 - **md4x.wasm** — WASM library (`zig build wasm`, ReleaseFast, output: `packages/md4x/build/md4x.wasm`)
 - **md4x-small.wasm** — Size-optimized WASM library (`zig build wasm-small`, ReleaseSmall, output: `packages/md4x/build/md4x-small.wasm`) — inlined into the `md4x/standalone` bundle, excluded from the npm tarball via `!build/md4x-small.wasm` in `files`
 - **md4x.{platform}-{arch}[-musl].node** — Cross-compiled NAPI addons (`zig build napi-all`, 9 targets)
 
-Compiler flags: `-Wall -Wextra -Wshadow -Wdeclaration-after-statement -O2`
+The only C compiled into any artifact is the vendored **libyaml**. Remaining `@cImport`s are all genuinely external headers: `node_api.h` (napi), `stdio.h`, `string.h`, `yaml.h`.
 
 ## Testing
 
 ```sh
-# Run all test suites:
+# Run all test suites (Zig unit tests + the .txt suites + pathological):
 bun scripts/run-tests.ts
 
 # Individual test suite:
@@ -161,45 +169,41 @@ python3 test/run-testsuite.py -s test/spec.txt -p zig-out/bin/md4x
 
 # Pathological inputs only:
 python3 test/pathological-tests.py -p zig-out/bin/md4x
+
+# Zig unit tests (parser internals, e.g. callback-abort behavior):
+zig build test                     # ReleaseSafe
+zig build test -Doptimize=Debug    # + undefined-fill and allocator length validation
 ```
 
 Test format: Markdown examples with `.` separator and expected HTML output. The test runner pipes input through `md4x` and compares normalized output.
+
+**The test artifact is pinned to a safe optimize mode** (`build.zig`: `.optimize = if (optimize == .Debug) .Debug else .ReleaseSafe`), independently of the global `-Doptimize` default of `.ReleaseFast` that the shipping artifacts use. Bounds checks, `@intCast` range checks, overflow checks and `unreachable` panics are exactly what make the OOM sweep's "never a crash" assertion mean anything — under `ReleaseFast` it would degrade to "no hard segfault". Do not hand the global `optimize` to the test artifact. The pin is self-checking: the `test artifact is built with runtime safety armed` case asserts `std.debug.runtime_safety`.
+
+**Both entry points run these in CI.** `bun scripts/run-tests.ts` invokes `zig build test` before the `.txt` suites, and `.github/workflows/ci.yml` has a dedicated `Zig unit tests` step running both `zig build test` and `zig build test -Doptimize=Debug` on every PR. They used to run in neither, so the three invariants below were unguarded on a PR.
+
+The HTML-diff suites cannot express parser-internal behavior; those invariants are covered by Zig unit tests in `src/md4x.zig`, run via `zig build test`:
+
+- **Abort matrix** — for each of the five SAX callbacks, that a negative code propagates verbatim and a positive one stops emission but returns 0. Plus the **doc-level exception**: `md_process_doc`'s own bookends test `!= 0`, not `< 0`, so a callback aborting on the `.doc` block propagates **both** signs verbatim — `md_parse` returns `5` for a `+5` and `-7` for a `-7`. That is genuine md4c parity; do not "fix" those two `!= 0` tests into `< 0`, and keep the doc-level cases, which are the only guard in either direction.
+- **OOM sweep** — a `FailingAllocator` walks every internal allocation index over a document exercising ref-defs, tables, code metadata, attributes, components, and autolinks, asserting each run is crash- and leak-free. The document also carries a link title with 15 substrings, which is the only thing driving `md_build_attr_append_substr` past its initial capacity of 8 — keep it (a growth path with no coverage is how the wrong-length free of PLAN item 1c survived).
+- **Golden SAX event trace** — the full ordered stream of `enter_block`/`leave_block`/`enter_span`/`leave_span`/`text` events over a document covering every block type, span type, and text type, with each detail union arm's field values and every `Attribute`'s substring type/offset table spelled out. The corpus harness only compares each renderer's final bytes, so it can miss a detail-packaging change that renderers paper over; this compares the raw SAX stream instead. **Phase 4c rewrote exactly this mechanism (and the expected string survived it unchanged), so treat a trace diff as a stop-the-line regression.** The expected value is a _recorded_ baseline: to re-record after a deliberate change, temporarily `std.debug.print` `probe.out.items` from the test, and say in the commit message what changed and why.
 
 Test suites: `spec.txt`, `spec-tables.txt`, `spec-strikethrough.txt`, `spec-tasklists.txt`, `spec-wiki-links.txt`, `spec-latex-math.txt`, `spec-permissive-autolinks.txt`, `spec-hard-soft-breaks.txt`, `spec-underline.txt`, `spec-frontmatter.txt`, `spec-components.txt`, `spec-attributes.txt`, `spec-alerts.txt`, `spec-markdown.txt`, `regressions.txt`, `coverage.txt`
 
 ## Fuzzing
 
-LibFuzzer harnesses for all renderers and the heal utility. Requires clang with LibFuzzer and libyaml.
+**`src/fuzz.zig` / `zig build fuzz-zig` is the only harness.** It `@import`s the parser + renderer sources directly, so Zig's own fuzzer instruments the library and steers inputs by **real coverage of the Zig internals**. No ASan/UBSan; it relies on Zig runtime safety checks (the artifact is built `ReleaseSafe`).
+
+> The former C/libFuzzer harnesses (`test/fuzzers/fuzz-*.c` + `build.sh`/`run.sh`) were **removed** with the C ABI — they drove the public headers, which no longer exist, and gave no coverage feedback on the Zig library anyway (`zig build-obj` emits no SanitizerCoverage tables, so libFuzzer only "saw" the C harness + libyaml). Their seed corpus is retained at `test/fuzzers/seed-corpus/` and reused by `fuzz-zig` and `scripts/diff-corpus.sh`.
 
 ```sh
-# Build & run a fuzzer (builds automatically, 60s default):
-./test/fuzzers/run.sh html                        # html fuzzer, 60s, 1 core
-./test/fuzzers/run.sh ast --timeout 300           # ast fuzzer, 300s
-./test/fuzzers/run.sh heal --cores 4              # heal fuzzer, 4 cores
-./test/fuzzers/run.sh html --cores 4 --timeout 0  # html fuzzer, forever, 4 cores
-
-# Build all fuzzers (without running):
-./test/fuzzers/build.sh
-
-# Build a single fuzzer:
-./test/fuzzers/build.sh html    # or: ast, ansi, text, meta, heal
+zig build fuzz-zig                 # smoke-run: exercise each harness once (+ parser unit tests)
+zig build fuzz-zig --fuzz          # coverage-guided fuzzing (serves a local web UI)
+zig build fuzz-zig --fuzz -- md_html   # fuzz a single named test
 ```
 
-Output goes to `fuzz-out/` (gitignored). Environment variables: `CC` (compiler, default: `clang`), `SANITIZERS` (default: `fuzzer,address,undefined`), `FUZZ_OUT_DIR` (output dir).
+Covers `md_parse` (parser-only, no-op SAX callbacks), the six renderers (`md_html`, `md_ast`, `md_ansi`, `md_text`, `md_meta`, `md_markdown`), and `md_heal`. Inputs are gated to valid, NUL-free UTF-8, matching the JS binding surface where input is always a valid UTF-8 string. libyaml is linked for the html/ast/meta paths but is not instrumented.
 
-**Harnesses:**
-
-| Harness             | Target          | Notes                                                 |
-| ------------------- | --------------- | ----------------------------------------------------- |
-| `fuzz-mdhtml.c`     | `md_html()`     | HTML renderer + libyaml                               |
-| `fuzz-mdast.c`      | `md_ast()`      | AST renderer (in-memory tree, libyaml) — highest risk |
-| `fuzz-mdansi.c`     | `md_ansi()`     | ANSI terminal renderer                                |
-| `fuzz-mdtext.c`     | `md_text()`     | Plain text renderer                                   |
-| `fuzz-mdmeta.c`     | `md_meta()`     | Metadata extractor + libyaml                          |
-| `fuzz-mdmarkdown.c` | `md_markdown()` | Markdown renderer                                     |
-| `fuzz-mdheal.c`     | `md_heal()`     | Heal utility (no flags, no parser dependency)         |
-
-All harnesses reject invalid UTF-8 input (returning `-1` to steer the fuzzer toward valid inputs), matching the JS binding surface where input is always a valid UTF-8 string. Seed corpus in `test/fuzzers/seed-corpus/` covers: CommonMark, GFM, LaTeX math, wiki links, frontmatter, components, attributes, alerts, underline, code block metadata, and heal edge cases.
+Seed corpus in `test/fuzzers/seed-corpus/` covers: CommonMark, GFM, LaTeX math, wiki links, frontmatter, components, attributes, alerts, underline, code block metadata, and heal edge cases.
 
 ## `md4x` CLI
 
@@ -210,13 +214,15 @@ md4x [OPTION]... [FILE]
 
 **General options:**
 
-| Option                  | Description                                                     |
-| ----------------------- | --------------------------------------------------------------- |
-| `-o`, `--output=FILE`   | Output file (default: stdout)                                   |
-| `-t`, `--format=FORMAT` | Output format: `html` (default), `text`, `json`, `ansi`, `heal` |
-| `-s`, `--stat`          | Measure parsing time                                            |
-| `-h`, `--help`          | Display help                                                    |
-| `-v`, `--version`       | Display version                                                 |
+| Option                  | Description                                                                 |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `-o`, `--output=FILE`   | Output file (default: stdout)                                               |
+| `-t`, `--format=FORMAT` | Output format: `html` (default), `text`, `json`, `ansi`, `markdown`, `heal` |
+| `--heal`                | Heal incomplete markdown before rendering (applies to any format)           |
+| `-s`, `--stat`          | Measure parsing time                                                        |
+| `--replay-fuzz`         | Replay a fuzzer input file through every renderer (crash-repro aid)         |
+| `-h`, `--help`          | Display help                                                                |
+| `-v`, `--version`       | Display version                                                             |
 
 All extensions are enabled by default (`MD_DIALECT_ALL`). No dialect preset flags.
 
@@ -234,7 +240,7 @@ All extensions are enabled by default (`MD_DIALECT_ALL`). No dialect preset flag
 
 ## Code Generation Scripts
 
-The `scripts/` directory contains TypeScript generators for lookup tables compiled into `md4x.c`:
+The `scripts/` directory contains generators for lookup tables compiled into the parser. The TypeScript generators below produce the legacy C tables; the Python generators (`_gen-tables-zig.py`, `_gen-entity-zig.py`) produce the Zig sources (`src/unicode_tables.zig`, `src/entity.zig`) used by the current build:
 
 - `build-entity-map.ts` — Fetches [WHATWG entities.json](https://html.spec.whatwg.org/entities.json), generates `entity.c`
 - `build-folding-map.ts` — Unicode case folding from `scripts/unicode/CaseFolding.txt`
@@ -246,45 +252,83 @@ These are run manually when updating Unicode compliance (currently Unicode 15.1)
 
 ## Development Best Practices
 
-### AST Renderer: Union Safety with Dynamic Components
+### Idiomatic Zig conventions (parser internals)
 
-The AST renderer (`md4x-ast.c`) uses a `JSON_NODE` struct with a C union for type-specific detail data. **Dynamic components** (`tag_is_dynamic = 1`) always use `detail.component` and have a heap-allocated tag name. Since a user can create a component with any name (e.g. `::alert{...}`, `::pre{...}`, `::a{...}`), the tag name may collide with built-in static tags.
+The parser internals have been moved off several C-isms; follow these patterns
+rather than reintroducing the old ones (all are internal-only — byte-for-byte
+output stays frozen; the internal calling convention itself is being idiomatized
+in Phase 4 of `PLAN.md`):
 
-**Critical rule:** In `json_node_free`, `json_write_props`, and `json_serialize_node`, always check `node->tag_is_dynamic` **before** any `strcmp(node->tag, ...)` dispatch. If dynamic, use the component code path exclusively — never fall through to static tag handlers. Violating this causes:
+- **Growable arrays:** the eight typed `MD_CTX` growable arrays (`marks`, `containers`, `ref_defs`, `block_component_info`, `slot_info`, `block_alert_info`, `inline_attrs`, `brace_pairs`) are `std.ArrayListUnmanaged(T)` backed by `c_allocator` — grow with `.append(c_allocator, …)` / `.ensureUnusedCapacity`, reset with `.clearRetainingCapacity()`, free with `.deinit(c_allocator)`, and index via `.items[i]` (bounds-checked) or `.items.ptr` only where raw pointer arithmetic is intrinsic (the emphasis engine's walking pointers). `containers`/`marks` depth is `ctx.nContainers()`/`ctx.nMarks()`. A cursor that a loop can step **past the front** of the array must be a signed index, never a pointer: `items.ptr - 1` is out-of-range pointer arithmetic (poison under `getelementptr`) even if it is only compared and never dereferenced. The permissive-autolink boundary scans (`md_scan_left_for_resolved_mark` / `md_scan_right_for_resolved_mark`) carry an `inlines.MarkCursor` (`isize`) for exactly this reason — the left walk's terminal is `-1`, the right walk's is `nMarks()`. Do **not** reintroduce `n_*`/`alloc_*` count/capacity fields for these. There is **no `[*c]T` + `n_*`/`alloc_*` grow idiom left in the parser**: `util.growArray` and its libc backers `c_malloc_array`/`c_realloc_array` are deleted, and with them the last raw-libc memory calls in `src/md4x.zig`, `src/abi.zig` and `src/parser/`. A new growable buffer is either an `ArrayListUnmanaged(T)` or one of the `ctx.alloc`-routed helpers below; do not hand-write `if (n >= alloc) { … realloc … }`, and do not reach for raw libc — the `FailingAllocator` sweep cannot see it there.
+- **Raw byte arenas:** the heterogeneous byte arenas the parser reinterprets as typed records — the `block_bytes` block/line arena (kept `?*anyopaque` + `n_block_bytes`/`alloc_block_bytes`), the ref-def hashtable array, and the `MD_REF_DEF_LIST` flexible-array buckets — allocate through `ctx.alloc` via the `malloc`/`realloc`/`free`-shaped helpers `util.arena_alloc` / `arena_realloc` / `arena_free` (16-byte aligned, mirroring libc's `max_align_t` guarantee). The caller tracks the **exact** allocated byte length (the existing `alloc_*`/`*_size` fields) and passes it back to `arena_realloc`/`arena_free` — the std allocators validate that length, so a wrong length is a Debug crash. On OOM `arena_realloc` returns null and leaves the old block intact (libc-`realloc` semantics). Do **not** route these back through raw libc — `std.c.malloc`/`std.c.realloc` no longer appear in the parser at all. The hashtable indexes into `ctx.ref_defs`, so tear it down (`md_free_ref_def_hashtable`) **before** freeing `ref_defs` (`md_free_ref_defs`). The **typed** scratch buffers (`md_build_attribute`'s `text`/`substr_*`, `process.zig`'s `pipe_offs`/`align_arr`/code-`meta`) use the parallel `util.alloc_array_a` / `realloc_array_a` / `free_array_a` (`[*c]T` in/out, element-count tracked — same exact-length rule). Record any new buffer's length alongside it (e.g. `MD_ATTRIBUTE_BUILD.text_alloc`) so the matching free passes the exact count. **One length field per buffer, published only after the block it describes exists**: a helper that grows two arrays in one step can fail between them, so a single shared capacity would describe a block that was never resized. `md_build_attr_append_substr` keeps `MD_ATTRIBUTE_BUILD.types_alloc` (for `substr_types`) separate from `substr_alloc` (`substr_offsets`, sized `+ 1`) and assigns each only after its own realloc returns, and `md_push_block_bytes` (`blocks.zig`) advances `n_block_bytes` only after the arena grew — do not "simplify" either into a single up-front capacity commit. `md_parse_highlights` (`det.code.highlights`) does this with a **shrink-to-fit** to `count` before returning, since `BlockCodeDetail` exposes `highlights` as a slice with no capacity — keep that shrink if you touch it. `ctx.buffer` (`md_temp_buffer`) is routed too (free length = `alloc_buffer`). `md_merge_lines_alloc` (`util.zig`) — which builds the ref-def label/title and the merged autolink/link-label strings — is routed too, and it **shrinks to fit** before returning: it allocates `end - beg` bytes but `md_merge_lines` usually writes fewer, and the call sites keep only the collapsed `*_size`, so the shrink is what makes `*_size` the exact allocated length every free can use. Keep that shrink, and keep its **zero-length guard** (`n == 0` → null string, size 0): `Allocator.alloc(0)` short-circuits the vtable and hands back a non-null `maxInt(usize)` sentinel, unlike C's `malloc(0)`. The `ptr_stack` entries (merged inline-link titles, stored in a dummy mark by `md_mark_store_ptr`) are freed by `inlines.md_mark_free_ptr`, which reads the length back out of the same mark's `prev` field — the size `md_resolve_links` already writes there for the emission path. **`std.c.malloc` / `std.c.realloc` / `std.c.free` now have ZERO occurrences in `src/md4x.zig`, `src/abi.zig` and `src/parser/`**: every parser allocation goes through `ctx.alloc`, so the `FailingAllocator` sweep can inject OOM into and leak-check all of them. Do not add a raw-libc allocation back.
+- **Allocation failure:** OOM-only internal helpers return `error{OutOfMemory}` (e.g. `md_build_attribute`, the `md_push_*` / `md_add_mark` pushers). Use `try` / `catch`; do not invent new `-1`-on-OOM `c_int` returns for new OOM-only helpers.
+- **Line arrays:** functions that scan a block's lines take a `[]const MD_LINE` slice (length via `.len`), not a `[*c]const MD_LINE` + separate `n_lines`. This bounds-checks the line access in Debug/ReleaseSafe builds.
+- **Ctx accessors:** use the `MD_CTX` methods `ctx.ch(off)`, `ctx.str(off)`, `ctx.log(msg)`, and the offset-based char-class predicates `ctx.isWhitespace(off)` / `ctx.isNewline(off)` / `ctx.isAlnum(off)` / `ctx.isAnyOf(off, "...")` / `ctx.isUnicodeWhitespace(off)` … (not free `CH`/`STR`/`md_log`/`ISxxx(ctx, off)`). The pure `IS*_(ch)` helpers that take a raw `CHAR` (e.g. `util.ISWHITESPACE_`) stay free functions — they mirror md4c and are kept for upstream cross-reference.
+- **Internal predicates** that are pure two-state return `bool` (e.g. the entity recognizers, the `md_is_*` line classifiers in `blocks.zig`, the raw-HTML and code-span recognizers in `inlines.zig`, and the link/autolink recognizers in `refdefs.zig`). There are **no `TRUE`/`FALSE` `c_int` constants** any more — do not reintroduce them; write `true`/`false`, or a plain `1`/`0` where the value really is an integer. Two-state locals, two-state parameters (`table_mode`, `enter`, `is_autolink`), and two-state out-params (`p_missing_mailto`, `p_reached_paragraph_end`) are `bool` too.
+  Three kinds of site **deliberately stay `c_int`** — check which one you have before flipping anything:
+  1. **Tri-state recognizers that also signal OOM** (`-1`/`0`/`N`): `md_is_link_reference_definition`, `md_is_link_reference`, `md_is_inline_link_spec`, and the `is_link` local in `md_resolve_links` that stores their result. `-1` is truthy under the C idiom, so a `bool` here silently swallows OOM.
+  2. **Recognizers whose return domain is `0..N`**, not two-state: `md_is_html_block_start_condition` and `md_is_html_block_end_condition` both return the raw-HTML block type `1..7` (or `0`). Callers compare the result against `ctx.html_block_type` and against `6`/`7`. A `TRUE` in such a function is the literal `1`, not a boolean.
+  3. **Multi-state `MD_CTX` / `MD_CONTAINER` fields** that merely look like flags: `frontmatter_state` and `comp_fm_state` (0/1/2), `html_block_type` (0..7), and `MD_CONTAINER.is_loose` — which is a `u8` holding the **masked `MD_BLOCK_LOOSE_LIST` bit (value 4)**, not 1. A Zig `bool` holding byte 4 is illegal behavior, and the shipping build is `ReleaseFast`, where that is UB rather than a panic.
+     The genuinely two-state `MD_CTX` / `MD_CONTAINER` / `MD_LINE_ANALYSIS` fields are `bool`: `doc_ends_with_newline`, `last_line_has_list_loosening_effect`, `last_list_item_starts_with_two_blank_lines`, `is_task`, `is_alert`, `enforce_new_block`. Note that `_test_run_analyze`'s debug dump prints several of these with `{d}` and must keep an explicit `@intFromBool(...)` at the print site so its output stays byte-identical.
+     **Never convert a `c_int` field of an `extern struct`** (see the next bullet) — that is a layout change, not a type change, and it silently desynchronizes the `block_bytes` arena, the `MD_MARK` pointer-store trick, and the `MD_REF_DEF_LIST` flexible-array buckets.
+     The **renderer** state structs (`MD_MARKDOWN`, `MD_ANSI`, `MD_TEXT`, `MD_HTML`, `META_CTX`, `JsonNode`) follow the same rule: their two-state members (`in_code_block`, `in_code_span`, `need_newline`, `need_indent`, `li_opened`, `in_frontmatter`, `in_table`, `in_thead`, `thead_done`, `in_alert`, `in_comp_frontmatter`, `in_heading`, `comp_fm_pending`, `comp_fm_capturing`, `head_emitted`, `tag_is_dynamic`) are `bool`. What stays `c_int` there are the **counters and multi-state** fields, which are not flags even when read like one: `image_nesting_level` / `image_nesting`, `quote_depth`, `list_depth`, `component_nesting`, `comp_depth`, `stack_depth`, `ol_counter`, `current_col`, `col_count`, `fence_len`, `n_code_blocks` / `code_blocks_cap`, `heading_count` / `heading_cap`, `td_align`, and every `err` field (which carries a callback abort code, not a flag).
+- **Internal-only structs** (e.g. `MD_CONTAINER`) are plain `struct` (compiler-chosen layout). Keep `extern struct` ONLY where layout must mirror C: the `block_bytes` arena types (`MD_BLOCK`/`MD_LINE`/`MD_VERBATIMLINE`), `MD_MARK` (pointer-store trick), and `MD_REF_DEF`/`MD_REF_DEF_LIST`.
+- **Mark flags are namespaced:** the `MD_MARK.flags` bits live in `types.MarkFlags` (`MarkFlags.potential_opener`, `.resolved`, `.emph_mod3_mask`, `.valid_permissive_autolink`, …) — one `const MarkFlags = types.MarkFlags;` alias per file, not fourteen per-flag aliases. Do **not** reintroduce loose `MD_MARK_*` consts, and do **not** "modernize" the namespace into a `packed struct(u8)`: the upper bits are deliberately overloaded per mark type (`0x20` is `emph_oc` / `autolink` / `valid_permissive_autolink` / `has_nested_brackets` depending on `mark.ch`; `0x40` is both `emph_mod3_0` and `autolink_missing_mailto`), which a packed struct cannot express. The values are frozen.
+- **SAX detail types** (`Attribute`, `Block*Detail`, `Span*Detail` in `src/abi.zig`) are plain `struct`s with **slices** (`text`, `meta`, `highlights`, `raw_attrs`, `raw_props`, `title`, `substr_types`, `substr_offsets`) and `bool` for the two-state flags (`is_tight`, `is_task`, `is_autolink`). Slice lengths are **exact**: `substr_types.len == substr_count`, `substr_offsets.len == substr_count + 1`, and `Attribute.size()` is `text.len`. An absent value is the **empty slice** — do not reintroduce a nullable pointer or a parallel `*_size`/`*_count` field, and do not treat empty as meaningfully different from absent. Walk an `Attribute` with a bounded loop (`i < attr.substr_types.len and attr.substr_offsets[i] < attr.size()`), never a bare terminator walk.
+- **Typed SAX callbacks:** the type codes are real Zig enums (`BlockType`, `SpanType`, `TextType`, `Align` — numeric values and declaration order frozen to the C enumerations they replaced), and the details reach callbacks only through the tagged unions `BlockDetail` / `SpanDetail`. A callback takes `(*const BlockDetail, ?*anyopaque)` — the type _is_ the active tag — and must resolve the payload with an exhaustive `switch (detail.*)` and a `|*d|` capture. Do **not** reintroduce a separate type parameter, a `?*anyopaque` detail, or an unchecked field access on the union. Detail-less types are `void` arms; `BlockDetail.default(ty)` materializes the arm for a runtime `BlockType` on the emission path. The em/strong/code/del/u spans always carry a `SpanAttrsDetail` whose **empty** `raw_attrs` means "no attributes" (the old "detail or null" split is gone — nothing distinguished the two).
+- **`Parser`, not `MD_PARSER`:** the callback table is a plain Zig `struct` with no `abi_version`, no `syntax`, and no `MD_RENDERER` alias. `text` takes a `[]const u8`; `debug_log` takes a `[]const u8` (print it with `%.*s`, not `%s` — it is not NUL-terminated). Callbacks return `abi.CallbackResult` (`i32`), **not** an error union: the abort contract has to carry an arbitrary caller-chosen code through, and OOM must stay unified with `-1` (PLAN.md's deferred §8.2, resolved this way).
+- **The five SAX callbacks are required; only `debug_log` is optional.** `enter_block` / `leave_block` / `enter_span` / `leave_span` / `text` are **non-optional and un-defaulted** — the emission path calls all five unconditionally, so a nullable field there was a null-function-pointer call (Debug panic, ReleaseFast UB). Do **not** re-add `?` or `= null` to them, and do not "helpfully" guard the call sites with `if (cb) |f|` instead: the whole point is that `Parser{}` / `md_parse(text, size, &.{}, null)` must fail to **compile**, so every constructor names all five. `debug_log` stays `?*const fn ... = null` — it is genuinely optional and is guarded at its single call site (`MD_CTX.log`). `types.noop_parser` is the all-no-op table that keeps `MD_CTX`'s all-default initializer working for unit tests that build a bare context and never emit; `md_parse` overwrites `ctx.parser` before any emission, so it is never observable in production.
+- **`MD_BLOCK.getType()` vs `typeIsRaw()`:** `getType()` decodes the stored byte with `@enumFromInt` and is only valid on a real block header. `md_analyze_line`'s two-blank-lines hack peeks at the tail of `block_bytes`, which may be an `MD_LINE` payload instead — use `typeIsRaw(.li)` there (a raw byte compare), never `getType()`, or an adversarial input turns into illegal behavior.
+- **`MD_BLOCK.bits.data` is 16 bits, and three container kinds put an array index in it:** `::component`, `#slot` and `> [!ALERT]` keep their name/props/title source offsets in `ctx.block_component_info` / `slot_info` / `block_alert_info` and route the record's **index** through `bits.data` (`md_push_container_bytes` truncates into it). The width is frozen — an `MD_BLOCK` is interleaved with `MD_LINE`/`MD_VERBATIMLINE` in the raw `block_bytes` arena, so widening the field is a layout change, not a type change. The three openers therefore refuse to match once `types.MAX_BLOCK_INFO_RECORDS` (65 536) records of their kind exist, and the line falls through line classification as literal text; without that guard the index wraps and an earlier record's name/props/title is emitted instead. **Refuse at the opener, never at emission** — no container pushed means no unbalanced enter/leave. Any new side array indexed through `bits.data` needs the same cap.
+- **`export` / `callconv(.c)` only at real boundaries:** the internal entry points (`md_parse`, `md_html`/`md_html_ex`, `md_ast`, `md_ansi`, `md_text`, `md_markdown`, `md_meta`, `md_heal`, `entity_lookup`), the SAX callbacks, and the `process_output` sink are **plain Zig** — no `export`, no `callconv(.c)`. Do not add either back. They survive in exactly three places, all genuine boundaries: the **wasm exports** (`md4x_to_html`, `md4x_alloc`, …), the **napi** module registration and its registered callbacks, and the **`qsort`/`bsearch` comparators** in `refdefs.zig` that are handed to libc (constraint: glibc tie-break parity).
+- **Abort-code contract (do not break):** `md_parse` propagates a NEGATIVE callback code verbatim but returns 0 for a POSITIVE one (md4c parity — see the abort-matrix native test in `md4x.zig`). OOM and a callback returning `-1` are intentionally unified as `-1` in the emission path; do not try to separate them.
 
-1. **Double-free** — `json_node_free` frees the same union pointer via both the static tag cleanup and the dynamic cleanup (heap corruption, OOB in WASM)
-2. **Wrong serialization** — `json_write_props` reads the union as the wrong type (e.g. interprets `raw_props` pointer as `alert.type_name`)
+Run the verification gate after any internal change: `bash scripts/diff-corpus.sh`
+must diff-clean against the baseline, plus `zig build test`, the spec suites, and
+the fuzzers (see Testing / Fuzzing).
+
+### AST Renderer: Dynamic-Component Dispatch (formerly "Union Safety")
+
+> **Zig-port note (current):** The Zig AST renderer (`src/renderers/md4x-ast.zig`) has **structurally retired** the two memory-safety failure modes below. `JsonNode.detail` is a **flat `Detail` struct** (one field per variant — see `md4x-ast.zig:107`), so union type-confusion is impossible. The node tree is **arena-allocated** (`JsonCtx.arena`; built during parse, serialized once, freed wholesale), so `jsonNodeFree` is a deliberate **no-op** (`md4x-ast.zig:226`) — there is no per-node free, hence no double-free. **The dispatch-order rule still applies for correctness:** `jsonWriteProps` / `jsonSerializeNode` check `tag_is_dynamic` (and switch on `tag_kind`) **before** any built-in-tag handling, so a dynamic component whose name collides with a built-in tag is still serialized via the component path (otherwise it reads the wrong flat-struct field). Do **not** "modernize" this into a `union(enum)`: that would reintroduce a discriminant to keep in sync, regressing the safety the flat struct already guarantees.
+
+**Why the rule exists (historical, from the deleted `md4x-ast.c`):** the C renderer used a real `union` for type-specific detail data. **Dynamic components** (`tag_is_dynamic = 1`) always use the component variant and have a heap-allocated tag name; since a user can create a component with any name (e.g. `::alert{...}`, `::pre{...}`, `::a{...}`), the tag name may collide with a built-in static tag. Dispatching on the tag name before checking `tag_is_dynamic` therefore caused:
+
+1. **Double-free** — the free path released the same union pointer via both the static-tag and the dynamic cleanup (heap corruption, OOB in WASM). _(N/A in the Zig port: arena alloc, no per-node free.)_
+2. **Wrong serialization** — props were read as the wrong union type (e.g. interpreting `raw_props` as `alert.type_name`). _(In the Zig port this surfaces as reading the wrong flat-struct field — still prevented by the `tag_is_dynamic`-first rule.)_
 
 ### Memory Safety Patterns (Common Bug Classes)
 
-Based on past bugs found via fuzzing. **Check these patterns when modifying C code or reviewing for vulnerabilities:**
+Based on past bugs found via fuzzing in the original C implementation. Zig's bounds checks, optionals, and allocator length validation kill several of these outright in Debug/ReleaseSafe — but the **shipping artifacts are `ReleaseFast`**, where those checks are off, so the patterns still deserve review. **Check them when touching the parser/renderer internals:**
 
 1. **Fixed-size stack buffers without overflow handling** — Every fixed-size array (e.g. `deferred_comp_closers[16]`, stack-allocated `MD_LINE` arrays) needs explicit bounds checking at every insertion point. Silent drops are as dangerous as overflows — they corrupt downstream state (e.g. `ctx->marks[-1]` OOB).
 
 2. **Stale pointers after realloc** — Never cache pointers into growable buffers (`buf->data`, `ctx->comp_info`, etc.) across calls that may reallocate. Assign results immediately after each `realloc` before doing the next one. A double-realloc sequence where the first succeeds and the second fails can cause double-free if intermediate results aren't stored.
 
-3. **Union type confusion with dynamic components** — See "AST Renderer: Union Safety" above. Always check `tag_is_dynamic` before `strcmp(node->tag, ...)`. This is the project's most recurring bug class.
+3. **Union type confusion with dynamic components** — See "AST Renderer: Dynamic-Component Dispatch" above. Historically the project's most recurring bug class in the C renderer. In the Zig port it is **structurally prevented** (flat `Detail` struct + arena alloc), but the `tag_is_dynamic`-first dispatch rule is still required for correct serialization — always resolve `tag_is_dynamic` / `tag_kind` before any built-in-tag handling.
 
-4. **Unbalanced SAX callbacks** — Renderers must be defensive against unbalanced `enter`/`leave` callbacks from the parser. Always guard state transitions (stack pops, counter decrements) with the correct type check. Handle NULL `ctx->current` / stack underflow gracefully. Example: `json_leave_span` must only decrement `image_nesting` for `MD_SPAN_IMG`, not all span types.
+4. **Unbalanced SAX callbacks** — Renderers must be defensive against unbalanced `enter`/`leave` callbacks from the parser. Always guard state transitions (stack pops, counter decrements) with the correct type check. Handle NULL `ctx->current` / stack underflow gracefully. Example: `jsonLeaveSpan` must only decrement `image_nesting` for `.img`, not all span types.
 
-5. **Unchecked `malloc`/`realloc`** — Every allocation must be checked for NULL. Use error flags on growable buffers and propagate failures up. Silent OOM produces corrupted output, dropped props, or incomplete nodes.
+5. **Unchecked allocation** — Every allocation must handle failure. Use `error{OutOfMemory}` (or the documented null-return arena helpers) and propagate failures up; never ignore them. Silent OOM produces corrupted output, dropped props, or incomplete nodes.
 
-6. **Assertions as `__builtin_unreachable()`** — With UBSan, `MD_ASSERT` compiles to `__builtin_unreachable()`, so a wrong assertion is a crash, not a debug message. Don't assert invariants that edge-case inputs can violate — prefer defensive guards.
+6. **`unreachable` on adversarial paths** — In `ReleaseFast` (what ships) `unreachable` is UB, not a panic, so a wrong assertion is a silent miscompile rather than a debug message. Don't assert invariants that edge-case inputs can violate — prefer defensive guards.
 
 7. **Uncapped user-controlled ranges** — Cap ranges from user input (e.g. highlight ranges `{1-99999}`) at reasonable limits to prevent excessive allocation.
 
-**Audit checklist when reviewing C changes:**
+8. **Upstream invariants md4x's extra container kinds broke** — md4c's `MD_CONTAINER` stack only ever holds `'>'` and the list marks `-+*.)`, so upstream freely writes `cont.ch != '>'` to mean _"is a list"_. md4x adds two more kinds — `':'` (block component, pushed in `md_analyze_line`) and `'#'` (template slot) — so that negative test is **wrong here**, and `MD_CONTAINER` fields only the list arms of `md_enter_child_containers()` initialize (notably `block_byte_off`, which defaults to `0`) silently read back as "block index 0" for them. That is a wild write into `block_bytes[0]`, the document's first block — the shape of item 9. **Always spell a list test positively: `ISANYOF_(cont.ch, "-+*.)")`.** The three remaining `ch != '>'` sites in `blocks.zig` (the `last_line_has_list_loosening_effect` assignment and both halves of the two-blank-lines hack) are deliberately left negative — see the third case in `test/regressions.txt` under "`::component` / `#slot` retroactively loosening an earlier list", which pins output that a positive test there would break.
+
+**Audit checklist when reviewing changes:**
 
 - Search for fixed-size arrays → verify bounds checks at every insertion
-- Search for pointer caching across realloc → verify no stale pointer use after buffer growth
-- Audit `strcmp(node->tag, ...)` dispatch → verify `tag_is_dynamic` checked first
+- Search for `cont.ch != '>'` / any "not a block quote means a list" test → verify it is not reading a field that only the list arms initialize
+- Search for pointer caching across a realloc/`append` → verify no stale pointer use after buffer growth
+- Audit tag-name dispatch in the AST renderer → verify `tag_is_dynamic` checked first
 - Audit `leave_block`/`leave_span` callbacks → verify correct type guard and underflow handling
-- Search for unchecked `malloc`/`realloc` → every allocation needs NULL check
-- Search for `MD_ASSERT` → verify condition cannot be violated by any input
+- Search for allocation sites → verify the failure path is handled, and that the freed length matches the allocated length exactly
+- Search for `unreachable` → verify the condition cannot be violated by any input
 
 ### WASM Binary
 
-The WASM binary (`packages/md4x/build/md4x.wasm`) is gitignored and must be rebuilt with `zig build wasm` after C source changes. The `zig build wasm` step installs directly to `packages/md4x/build/`. Run `bun vitest run packages/md4x/test/wasm.test.mjs` to verify.
+The WASM binary (`packages/md4x/build/md4x.wasm`) is gitignored and must be rebuilt with `zig build wasm` after source changes. The `zig build wasm` step installs directly to `packages/md4x/build/`. Run `bun vitest run packages/md4x/test/wasm.test.mjs` to verify.
 
 The `md4x/standalone` entry is a rolldown bundle (`packages/md4x/lib/standalone.mjs`, also generated + gitignored) with the **ReleaseSmall** binary (`zig build wasm-small`) embedded as gzip + Z85. The payload, the Z85 decoder, and the entry module are rolldown **virtual modules** defined in `scripts/build-standalone.ts` — they never exist on disk as source. It is also what `md4x` and `md4x/wasm` resolve to under the `browser` export condition, so bundlers get a self-contained module with no `.wasm` asset. `init()` inflates via `node:zlib` when `process.getBuiltinModule` exists (~4x faster cold start on Node than `DecompressionStream`) and falls back to `DecompressionStream` in browsers — both paths are covered by `test/standalone.test.mjs`. Rebuild it whenever the WASM is rebuilt:
 
@@ -297,15 +341,14 @@ bun vitest run packages/md4x/test/standalone.test.mjs
 
 When adding a new block or span type with its own detail struct:
 
-1. Add the detail struct to the `JSON_NODE` union in `md4x-ast.c`
-2. Handle it in `json_enter_block`/`json_enter_span` (build the node)
-3. Handle it in `json_write_props` (serialize props) — place **after** the `tag_is_dynamic` check
-4. Handle it in `json_node_free` (free heap strings) — place **after** the `tag_is_dynamic` check
-5. If needed, handle it in `json_serialize_node` (special child rendering)
-6. Update all three renderers (HTML, AST, ANSI) and the CLI
-7. Add a test suite in `test/spec-*.txt` and update `scripts/run-tests.ts`
-8. Add JS binding tests in `packages/md4x/test/_suite.mjs`
-9. Rebuild WASM with `zig build wasm` and run `bun vitest run packages/md4x/test/wasm.test.mjs`
+1. Add the enum member to `BlockType`/`SpanType` **at the end** (the ordinals are frozen), the detail struct to `src/abi.zig`, the matching arm to `BlockDetail`/`SpanDetail` (same name, same position), and a field for it to the flat `Detail` struct in `src/renderers/md4x-ast.zig`
+2. Handle it in `jsonEnterBlock`/`jsonEnterSpan` (build the node). Every renderer's `switch (detail.*)` is exhaustive, so the compiler will list the sites that need an arm
+3. Handle it in `jsonWriteProps` (serialize props) — place **after** the `tag_is_dynamic` check
+4. If needed, handle it in `jsonSerializeNode` (special child rendering)
+5. Update all six renderers (HTML, AST, ANSI, meta, text, markdown) and the CLI
+6. Add a test suite in `test/spec-*.txt` and update `scripts/run-tests.ts`
+7. Add JS binding tests in `packages/md4x/test/_suite.mjs`
+8. Rebuild WASM with `zig build wasm` and run `bun vitest run packages/md4x/test/wasm.test.mjs`
 
 ## Detailed Reference
 
