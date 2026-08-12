@@ -1,8 +1,8 @@
 # Renderers
 
 > Every renderer implements the five SAX callbacks of `abi.Parser`
-> (`enter_block` / `leave_block` / `enter_span` / `leave_span` / `text`). Since
-> Phase 4c those are plain Zig functions — no `callconv(.c)` — and the block or
+> (`enter_block` / `leave_block` / `enter_span` / `leave_span` / `text`). They are
+> plain Zig functions — no `callconv(.c)` — and the block or
 > span type arrives as the active tag of a `*const abi.BlockDetail` /
 > `*const abi.SpanDetail`, which each renderer resolves with an exhaustive
 > `switch (detail.*)`. `text` takes a `[]const u8` slice, and `debug_log` a

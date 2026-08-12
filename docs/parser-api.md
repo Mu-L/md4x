@@ -2,8 +2,7 @@
 
 > **There is no public C ABI.** MD4X is a Zig library; `src/abi.zig` is the single
 > source of truth for the shared parser types, enums, flags, and the `Parser`
-> callback table. These declarations started as a verbatim `zig translate-c`
-> transcription of the former `md4x.h`; Phase 4c of `PLAN.md` idiomatized them:
+> callback table.
 >
 > - **Detail types (`Attribute`, `Block*Detail`, `Span*Detail`) are ordinary Zig
 >   structs** with compiler-chosen layout — slices instead of pointer +
@@ -16,9 +15,8 @@
 >   `switch` rather than an unchecked `@ptrCast` of a `?*anyopaque`. The enums
 >   keep the numeric values and declaration order of the C enumerations they
 >   replace.
-> - **`MD_PARSER` is gone**, replaced by the plain Zig `Parser` struct: no
->   `extern`, no `callconv(.c)`, and no `abi_version` / `syntax` field or
->   `MD_RENDERER` alias (all three were dropped-C-ABI vestiges).
+> - **The callback table is the plain Zig `Parser` struct** — no `extern`, no
+>   `callconv(.c)`, and no `abi_version` / `syntax` field or `MD_RENDERER` alias.
 > - **The five SAX callbacks are required** — non-optional and un-defaulted, so
 >   an incomplete callback table is a compile error rather than a
 >   null-function-pointer call at parse time. Only `debug_log` is optional.
@@ -109,9 +107,8 @@ filling in the fields the type actually carries.
 Both halves are pinned by the abort-matrix native tests in `src/md4x.zig` (`zig build test`) — do not change them.
 
 That contract is why `CallbackResult` is a plain `i32` rather than a Zig error
-union (PLAN.md's deferred §8.2): the code has to carry an arbitrary
-caller-chosen integer through unchanged, and OOM must stay indistinguishable
-from a callback's `-1`.
+union: the code has to carry an arbitrary caller-chosen integer through
+unchanged, and OOM must stay indistinguishable from a callback's `-1`.
 
 **Linear time guarantee** — Protections against pathological inputs:
 

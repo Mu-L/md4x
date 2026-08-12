@@ -1,4 +1,5 @@
 packages/md4x/test/fixtures/
+test/fuzzers/
 website/dist/
 packages/md4x/build/
 packages/md4x/lib/standalone.mjs
