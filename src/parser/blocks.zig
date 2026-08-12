@@ -6,6 +6,7 @@
 // refactor — no logic change). See AGENTS.md.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const util = @import("util.zig");
 const refdefs = @import("refdefs.zig");
@@ -41,6 +42,24 @@ const md_ascii_case_eq = util.md_ascii_case_eq;
 const md_ascii_eq = util.md_ascii_eq;
 const memcmp = util.memcmp;
 const strcspn = util.strcspn;
+
+// Gate on the `strcspn()` line-end fast path in md_analyze_line. Upstream md4c
+// writes this as `#if defined __linux__`, meaning "glibc, which has a superbly
+// optimized (vectorized) strcspn()"; we spell the real condition, because Zig
+// also builds musl and wasi Linux/wasm targets that `__linux__` would sweep in.
+//
+// Off this path the manual unrolled loop wins — and everywhere Zig has to
+// supply `strcspn()` itself the libc call is actively catastrophic. Neither
+// wasi-libc nor Zig's bundled musl ships `strcspn.c`, so `lib/c/string.zig`'s
+// fallback is linked, and it `std.mem.span()`s its argument — i.e. `strlen()` —
+// before scanning for `\r`/`\n`. The Markdown buffer is NOT NUL-terminated, so
+// that walks to the end of the document and on into whatever follows it in
+// memory until it meets a zero byte, on EVERY line: the parse becomes
+// O(lines * bytes) with a constant set by unrelated heap contents.
+//
+// Do not widen this to `os.tag == .linux` (leaves the two -musl napi targets
+// pathological) or to `abi.isGnu()` (true for windows-gnu, which is mingw).
+const use_libc_strcspn = builtin.target.isGnuLibC();
 
 const md_is_link_reference_definition = refdefs.md_is_link_reference_definition;
 
@@ -1650,7 +1669,10 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
     }
 
     // Scan for end of the line.
-    if (ctx.doc_ends_with_newline and off < ctx.size) {
+    //
+    // Note this is quite a bottleneck of the parsing as we here iterate almost
+    // over the complete document.
+    if (use_libc_strcspn and ctx.doc_ends_with_newline and off < ctx.size) {
         while (true) {
             off += @intCast(strcspn(ctx.str(off), "\r\n"));
 
