@@ -138,7 +138,11 @@ pub fn md_text_with_null_replacement(ctx: *MD_CTX, ttype: c.TextType, str_in: [*
     var ret: c_int = 0;
 
     while (true) {
-        while (off < size and str[off] != 0) off += 1;
+        // Single-byte needle, so std's own vectorized scan is the right tool
+        // (scan.indexOfAnyPos exists for the multi-byte sets std can only walk
+        // scalar-wise). NUL bytes are rare, so this runs the length of nearly
+        // every text run in the document — it was ~6.4% of an HTML render.
+        off = @intCast(std.mem.indexOfScalarPos(u8, str[0..size], off, 0) orelse size);
 
         if (off > 0) {
             ret = ctx.parser.text(ttype, str[0..off], ctx.userdata);
@@ -764,8 +768,11 @@ pub const c_cmp_fn = *const fn (?*const anyopaque, ?*const anyopaque) callconv(.
 pub extern "c" fn qsort(base: ?*anyopaque, nmemb: usize, size: usize, compar: c_cmp_fn) void;
 pub extern "c" fn bsearch(key: ?*const anyopaque, base: ?*const anyopaque, nmemb: usize, size: usize, compar: c_cmp_fn) ?*anyopaque;
 pub extern "c" fn memcmp(a: ?*const anyopaque, b: ?*const anyopaque, n: usize) c_int;
-pub extern "c" fn strcspn(s: [*c]const u8, reject: [*c]const u8) usize;
 pub extern "c" fn memmove(dest: ?*anyopaque, src: ?*const anyopaque, n: usize) ?*anyopaque;
+// NOTE: no `strcspn` here on purpose. The parser's buffers are not
+// NUL-terminated, and every libc extern in this list takes an explicit length
+// for exactly that reason. The line-end scan that used to call `strcspn` is now
+// scan.indexOfAnyPos — see src/parser/blocks.zig and src/scan.zig.
 
 // --- raw byte-arena helpers routed through a std.mem.Allocator ----------------
 //

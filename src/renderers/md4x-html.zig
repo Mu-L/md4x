@@ -24,6 +24,7 @@
 // Zig port of src/renderers/md4x-html.c — byte-for-byte identical behavior.
 
 const std = @import("std");
+const scan = @import("../scan.zig");
 
 // MD_* types now come from the Zig-native
 // abi module (replacing md4x.h / entity.h / md4x-heal.h); only genuinely
@@ -49,20 +50,23 @@ const MD_HTML_FLAG_FULL_HTML: c_uint = 0x0008;
 const MD_HTML_FLAG_CODE_META: c_uint = 0x0010;
 const MD_HTML_FLAG_HEAL: c_uint = 0x0100;
 
-const NEED_HTML_ESC_FLAG: u8 = 0x1;
 const NEED_URL_ESC_FLAG: u8 = 0x2;
 
 // Map of characters which need escaping. Input-independent, so computed once at
 // comptime. Reproduces exactly the previous per-call runtime construction
 // (including strchr's C semantics where strchr(set, 0) matches the NUL byte).
+//
+// Only the URL-escape bit survives. The HTML-escape bit (0x1, over `" & < >`)
+// is gone because nothing reads it any more: `next_html_esc` recognizes those
+// four bytes directly so the scan can be vectorized, and a table lookup cannot
+// be. The bit value 0x2 is kept as-is rather than renumbered to 0x1, purely so
+// this stays a deletion and not a silent change to what the map holds.
 const ESCAPE_MAP: [256]u8 = blk: {
     @setEvalBranchQuota(10000);
     var map = [_]u8{0} ** 256;
     var i: usize = 0;
     while (i < 256) : (i += 1) {
         const ch: u8 = @intCast(i);
-        if (strchr("\"&<>", ch))
-            map[i] |= NEED_HTML_ESC_FLAG;
         if (!ISALNUM(ch) and !strchr("~-_.+!*(),%#@?=;:/,+$", ch))
             map[i] |= NEED_URL_ESC_FLAG;
     }
@@ -228,31 +232,16 @@ fn render_verbatim_lit(r: *MD_HTML, comptime lit: []const u8) void {
 }
 
 // Find the next offset >= `start` whose byte needs HTML-escaping (one of
-// `" & < >`), or `size` if none. Vectorized: the common case is long plain
-// runs, so we scan 16 bytes at a time. Byte-identical to the scalar predicate
-// `(ESCAPE_MAP[ch] & NEED_HTML_ESC_FLAG) != 0` — only the scan is widened.
+// `" & < >`), or `size` if none — the same four bytes `render_html_escaped`
+// switches on just below, which is the one place they are now spelled out.
+//
+// This was previously a hand-written `@Vector(16, u8)` loop with no fallback,
+// which was a pessimization on the WASM build: with no `simd128` feature LLVM
+// scalarizes such a loop into 16 unconditional compares and the early exit is
+// lost. `scan.indexOfAnyPos` gates the vector body on the target actually
+// having a vector unit. See src/scan.zig.
 fn next_html_esc(data: [*]const u8, start: c.MD_OFFSET, size: c.MD_SIZE) c.MD_OFFSET {
-    const V = 16;
-    const Vec = @Vector(V, u8);
-    const amp: Vec = @splat('&');
-    const lt: Vec = @splat('<');
-    const gt: Vec = @splat('>');
-    const quot: Vec = @splat('"');
-
-    var off = start;
-    while (off + V <= size) : (off += V) {
-        const chunk: Vec = @as(*const [V]u8, @ptrCast(data + off)).*;
-        const hit = (chunk == amp) | (chunk == lt) | (chunk == gt) | (chunk == quot);
-        if (@reduce(.Or, hit)) {
-            inline for (0..V) |j| {
-                if (hit[j]) return off + @as(c.MD_OFFSET, j);
-            }
-        }
-    }
-    // Scalar tail (< 16 bytes remaining).
-    while (off < size and (ESCAPE_MAP[data[off]] & NEED_HTML_ESC_FLAG) == 0)
-        off += 1;
-    return off;
+    return @intCast(scan.indexOfAnyPos("&<>\"", null, data, start, size));
 }
 
 fn render_html_escaped(r: *MD_HTML, data: [*]const u8, size: c.MD_SIZE) void {

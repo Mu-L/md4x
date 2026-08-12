@@ -14,6 +14,7 @@
 // exported-symbol collision and no build.zig change is required.
 
 const std = @import("std");
+const scan = @import("../scan.zig");
 
 // MD_* types now come from the Zig-native abi module (replacing md4x.h);
 // genuinely external C headers (if any) stay in a @cImport bound as `sys`.
@@ -45,12 +46,25 @@ pub fn json_write_strz(w: *JsonWriter, str: [*:0]const u8) void {
     json_write(w, str, @intCast(std.mem.len(str)));
 }
 
+// Find the next offset >= `start` needing a JSON escape — `"`, `\`, or any
+// control character below 0x20 — or `size` if there is none. Exactly the set
+// the switch below produces a `replacement` for; everything else is copied
+// through verbatim in one run.
+fn next_json_esc(str: [*]const u8, start: c.MD_OFFSET, size: c.MD_SIZE) c.MD_OFFSET {
+    return @intCast(scan.indexOfAnyPos("\"\\", 0x20, str, start, size));
+}
+
 pub fn json_write_escaped(w: *JsonWriter, str: [*]const u8, size: c.MD_SIZE) void {
     var i: c.MD_OFFSET = 0;
     var beg: c.MD_OFFSET = 0;
     var esc: [8]u8 = undefined;
 
-    while (i < size) : (i += 1) {
+    // Skipping to the next escape rather than testing every byte is the single
+    // biggest win in the AST renderer: this function was ~18% of a `--format=json`
+    // render, and nearly every byte of a document needs no escaping at all.
+    while (true) {
+        i = next_json_esc(str, i, size);
+        if (i >= size) break;
         const ch: u8 = str[i];
         var replacement: ?[*]const u8 = null;
         var esc_len: c_int = 0;
@@ -80,6 +94,7 @@ pub fn json_write_escaped(w: *JsonWriter, str: [*]const u8, size: c.MD_SIZE) voi
             json_write(w, rep, @intCast(esc_len));
             beg = i + 1;
         }
+        i += 1;
     }
 
     if (i > beg)

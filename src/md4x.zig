@@ -149,7 +149,6 @@ const c_cmp_fn = util.c_cmp_fn;
 const qsort = util.qsort;
 const bsearch = util.bsearch;
 const memcmp = util.memcmp;
-const strcspn = util.strcspn;
 const memmove = util.memmove;
 
 // ----------------------------------------------------------------------------

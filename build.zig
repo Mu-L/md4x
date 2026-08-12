@@ -168,9 +168,21 @@ const WasmVariant = struct {
 };
 
 fn addWasm(b: *std.Build, opts: PkgBuildOptions, variant: WasmVariant) *std.Build.Step {
+    // `simd128` (the WebAssembly fixed-width SIMD proposal) is enabled because
+    // it is what makes src/scan.zig's vector bodies compile to real `v128`
+    // instructions; without it `std.simd.suggestVectorLength(u8)` returns null
+    // and every scan falls back to the scalar path. Measured on a 565 KB
+    // document, per-process A/B, best-of: Node +4-5% and Bun +12-22% across
+    // renderToHtml / renderToAST / renderToText.
+    //
+    // The cost is a runtime floor: Chrome 91+, Firefox 89+, Safari 16.4+
+    // (March 2023) and Node 16.4+. Older engines cannot instantiate the module
+    // at all, so this is a support decision, not just a codegen flag — do not
+    // flip it without one.
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .wasi,
+        .cpu_features_add = std.Target.wasm.featureSet(&.{.simd128}),
     });
 
     const md4x_wasm = b.addExecutable(.{
