@@ -1274,7 +1274,14 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
         c.TextType.nullchar => render_utf8_codepoint(r, 0x0000, render_verbatim),
         c.TextType.br => render_verbatim_lit_runtime(r, if (r.image_nesting_level == 0) "<br>\n" else " "),
         c.TextType.softbr => render_verbatim_lit_runtime(r, if (r.image_nesting_level == 0) "\n" else " "),
-        c.TextType.html => render_verbatim(r, text, size),
+        // When inside a Markdown image label, the text falls into the alt="..."
+        // attribute opened by render_open_img_span(). Raw HTML must be escaped
+        // there, exactly like normal text, otherwise it breaks out of the
+        // attribute. Compare the image_nesting_level handling in enter_span_callback().
+        c.TextType.html => if (r.image_nesting_level == 0)
+            render_verbatim(r, text, size)
+        else
+            render_html_escaped(r, text, size),
         c.TextType.entity => render_entity(r, text, size, render_html_escaped),
         else => render_html_escaped(r, text, size),
     }
