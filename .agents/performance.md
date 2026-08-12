@@ -42,6 +42,27 @@ every target rather than only on glibc. Do not reintroduce it.
 The parser's remaining libc externs (`memcmp`, `memmove`, `qsort`, `bsearch`) all take an explicit
 length and are fine.
 
+## No helper may rescan the document per candidate
+
+`md4x-heal.zig` had three of these: `in_math_block` restarted at offset 0 on every call, and
+`in_link_url` / `in_html_tag` walked backward to the previous newline — which looks line-bounded
+until the input has no newlines, and then runs back to offset 0. Their callers
+(`count_single_asterisks`, `count_single_underscores`) ask once per candidate marker while sweeping
+forward, so each pair was O(n²): 240 KB of `'_a '` repeats took **14 s**, and a heal of the 565 KB
+bench fixture cost 10.9 **billion** instructions — ~400× an HTML render of the same file.
+
+The fix pattern, in both directions, is a **resumable cursor**: keep the original state machine
+verbatim, promote its loop index to a field, and let the caller drive it from its own forward index
+(`MathScanner`, `LineContextScanner`). That is exact rather than approximate **only while the
+queried positions never decrease** — say so in the doc comment of any such helper, and check the
+call sites really are forward-only.
+
+When touching heal, remember `md_heal()` does **not** use the parser, so none of the parser's
+linear-time limits (`docs/parser-api.md`) cover it, and `scripts/diff-corpus.sh`'s corpus is short
+enough that a quadratic path stays invisible there. Pin new ones in `test/pathological-tests.py`,
+which takes a third tuple element of extra CLI options (`["--format=heal"]`). Prefer **odd** repeat
+counts so the marker is genuinely unbalanced and heal exercises its append path.
+
 ## Benchmarking the WASM build
 
 The instance is a module-level singleton in `packages/md4x/lib/wasm/common.mjs` and `init()`

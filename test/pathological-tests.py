@@ -112,7 +112,28 @@ pathological = {
             re.compile("(<em>a</em>[{]){50000}")),
     "many unclosed span attributes":
             (("[t]{" * 50000),
-            re.compile(r"(\[t\]\{){50000}"))
+            re.compile(r"(\[t\]\{){50000}")),
+
+    # --format=heal cases. md_heal() does not use the parser, so none of the
+    # limits above cover it; its helpers used to rescan the document once per
+    # candidate marker, which made these inputs quadratic (50 000 asterisks took
+    # ~1 s, 160 000 took ~17 s, and the underscore form ~14 s). Both shapes are
+    # newline-free on purpose: the link/HTML-context helpers stopped at the
+    # previous newline, so a document with none made them walk to offset 0.
+    # Odd repeat counts, so the marker really is unbalanced and heal appends a
+    # closer -- an even count is already balanced and exercises less.
+    "many unclosed asterisks (heal)":
+            (("*a " * 49999),
+            re.compile(r"(\*a ){49998}\*a\*"),
+            ["--format=heal"]),
+    "many unclosed underscores (heal)":
+            (("_a " * 49999),
+            re.compile(r"(_a ){49998}_a_"),
+            ["--format=heal"]),
+    "many math spans and emphasis (heal)":
+            (("$x$ *a* _b_ " * 25000),
+            re.compile(r"(\$x\$ \*a\* _b_ ){24999}\$x\$ \*a\* _b_"),
+            ["--format=heal"]),
 }
 
 whitespace_re = re.compile('/s+/')

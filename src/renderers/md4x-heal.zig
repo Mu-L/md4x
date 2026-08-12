@@ -223,59 +223,129 @@ fn in_complete_inline_code(text: [*]const u8, size: u32, pos: u32) bool {
     return false;
 }
 
-fn in_math_block(text: [*]const u8, size: u32, pos: u32) bool {
-    var in_block: bool = false;
-    var in_inline: bool = false;
-    var i: u32 = 0;
-    while (i < size and i < pos) : (i +%= 1) {
-        if (text[i] == '\\') {
-            i +%= 1;
-            continue;
+// "Is `pos` inside a `$`/`$$` math span?" — as a **resumable** cursor rather
+// than a function that answers from scratch.
+//
+// This used to be `in_math_block(text, size, pos)`, which restarted its scan at
+// offset 0 on every call. Its callers ask once per candidate marker while
+// walking the document forward, so the pair was O(n^2): a heal of a 565 KB
+// document cost 10.9 billion instructions (~400x an HTML render of the same
+// file, 72% of it in `count_single_asterisks` alone), and a document of `'*a '`
+// repeats grew 4x per doubling — 240 KB took 4.2 s, with ~1 MB extrapolating
+// past a minute. Since `heal()` is exported to both JS bindings and `--heal`
+// applies to every renderer, that was reachable from untrusted input.
+//
+// The loop body below is the original verbatim, with `i` promoted to a field so
+// the scan resumes where it left off. That is exact, not approximate, **as long
+// as the queried positions never decrease** — which is why `at()` is documented
+// as requiring that, and why both call sites drive it from their own forward
+// loop index. Total cost across a whole pass is now O(n).
+const MathScanner = struct {
+    text: [*]const u8,
+    size: u32,
+    i: u32 = 0,
+    in_block: bool = false,
+    in_inline: bool = false,
+
+    fn init(text: [*]const u8, size: u32) MathScanner {
+        return .{ .text = text, .size = size };
+    }
+
+    /// Equivalent to the old `in_math_block(text, size, pos)`.
+    /// `pos` must be >= every `pos` previously passed to this instance.
+    fn at(self: *MathScanner, pos: u32) bool {
+        while (self.i < self.size and self.i < pos) : (self.i +%= 1) {
+            if (self.text[self.i] == '\\') {
+                self.i +%= 1;
+                continue;
+            }
+            if (self.text[self.i] == '$') {
+                if (self.i + 1 < self.size and self.text[self.i + 1] == '$') {
+                    self.in_block = !self.in_block;
+                    self.i +%= 1;
+                } else if (!self.in_block) {
+                    self.in_inline = !self.in_inline;
+                }
+            }
         }
-        if (text[i] == '$') {
-            if (i + 1 < size and text[i + 1] == '$') {
-                in_block = !in_block;
-                i +%= 1;
-            } else if (!in_block) {
-                in_inline = !in_inline;
+        return self.in_block or self.in_inline;
+    }
+};
+
+// "Is `pos` inside a `](url)` destination, or inside an HTML tag?" — the
+// forward-cursor form of the former `in_link_url` / `in_html_tag`.
+//
+// Those two walked **backward** from `pos` until they met a delimiter, which
+// reads as bounded by the line length — and is, right up until the input has no
+// newlines. Then each walk runs back to offset 0 and the caller
+// (`count_single_underscores`, which queries both once per `_`) is O(n^2) all
+// over again: 240 KB of `'_a '` repeats took 13 s. Fixing only the math scanner
+// left this one, which is why the underscore case barely improved at first.
+//
+// Both predicates depend on nothing but the **nearest preceding delimiter**, so
+// tracking that as we sweep forward answers each query in O(1) with no change
+// in meaning. Like MathScanner, this is exact only for non-decreasing `pos`.
+const LineContextScanner = struct {
+    text: [*]const u8,
+    i: u32 = 0,
+    // Nearest preceding member of {'\n', '(', ')'} and of {'\n', '>', '<'}.
+    // `ch == 0` means "none seen yet", which no branch below treats as a hit.
+    link_ch: u8 = 0,
+    link_idx: u32 = 0,
+    html_ch: u8 = 0,
+    html_idx: u32 = 0,
+
+    fn init(text: [*]const u8) LineContextScanner {
+        return .{ .text = text };
+    }
+
+    fn advance(self: *LineContextScanner, pos: u32) void {
+        while (self.i < pos) : (self.i +%= 1) {
+            switch (self.text[self.i]) {
+                '\n' => {
+                    self.link_ch = '\n';
+                    self.link_idx = self.i;
+                    self.html_ch = '\n';
+                    self.html_idx = self.i;
+                },
+                '(', ')' => {
+                    self.link_ch = self.text[self.i];
+                    self.link_idx = self.i;
+                },
+                '<', '>' => {
+                    self.html_ch = self.text[self.i];
+                    self.html_idx = self.i;
+                },
+                else => {},
             }
         }
     }
-    return in_block or in_inline;
-}
 
-fn in_link_url(text: [*]const u8, pos: u32) bool {
-    if (pos == 0) return false;
-    var i: u32 = pos;
-    while (i > 0) : (i -%= 1) {
-        if (text[i - 1] == '\n') return false;
-        if (text[i - 1] == ')') return false;
-        if (text[i - 1] == '(') {
-            if (i >= 2 and text[i - 2] == ']')
-                return true;
-            return false;
-        }
+    /// Equivalent to the old `in_link_url(text, pos)`.
+    fn inLinkUrl(self: *LineContextScanner, pos: u32) bool {
+        if (pos == 0) return false;
+        self.advance(pos);
+        // Nearest delimiter must be '(' — a '\n' or ')' terminates the scan
+        // with false, exactly as the backward walk did.
+        if (self.link_ch != '(') return false;
+        const j = self.link_idx;
+        return j >= 1 and self.text[j - 1] == ']';
     }
-    return false;
-}
 
-fn in_html_tag(text: [*]const u8, pos: u32) bool {
-    if (pos == 0) return false;
-    var i: u32 = pos;
-    while (i > 0) : (i -%= 1) {
-        if (text[i - 1] == '\n') return false;
-        if (text[i - 1] == '>') return false;
-        if (text[i - 1] == '<') {
-            if (i < pos) {
-                const next = text[i];
-                return (next >= 'a' and next <= 'z') or
-                    (next >= 'A' and next <= 'Z') or next == '/';
-            }
-            return false;
-        }
+    /// Equivalent to the old `in_html_tag(text, pos)`.
+    fn inHtmlTag(self: *LineContextScanner, pos: u32) bool {
+        if (pos == 0) return false;
+        self.advance(pos);
+        if (self.html_ch != '<') return false;
+        const j = self.html_idx;
+        // The original's `if (i < pos)`: a '<' sitting immediately before `pos`
+        // has no character after it to classify, so it is not a tag.
+        if (j + 1 >= pos) return false;
+        const next = self.text[j + 1];
+        return (next >= 'a' and next <= 'z') or
+            (next >= 'A' and next <= 'Z') or next == '/';
     }
-    return false;
-}
+};
 
 // ***************************
 // ***  Setext headings    ***
@@ -408,6 +478,7 @@ fn count_single_asterisks(text: [*]const u8, size: u32) u32 {
     var count: u32 = 0;
     var i: u32 = 0;
     var in_code: bool = false;
+    var math = MathScanner.init(text, size);
     while (i < size) : (i +%= 1) {
         if (text[i] == '`' and i + 2 < size and text[i + 1] == '`' and text[i + 2] == '`') {
             in_code = !in_code;
@@ -421,7 +492,7 @@ fn count_single_asterisks(text: [*]const u8, size: u32) u32 {
         const next: u8 = if (i + 1 < size) text[i + 1] else 0;
 
         if (prev == '\\') continue;
-        if (in_math_block(text, size, i)) continue;
+        if (math.at(i)) continue;
 
         if (prev != '*' and next == '*') {
             const next2: u8 = if (i + 2 < size) text[i + 2] else 0;
@@ -450,6 +521,8 @@ fn count_single_underscores(text: [*]const u8, size: u32) u32 {
     var count: u32 = 0;
     var i: u32 = 0;
     var in_code: bool = false;
+    var math = MathScanner.init(text, size);
+    var lctx = LineContextScanner.init(text);
     while (i < size) : (i +%= 1) {
         if (text[i] == '`' and i + 2 < size and text[i + 1] == '`' and text[i + 2] == '`') {
             in_code = !in_code;
@@ -463,9 +536,9 @@ fn count_single_underscores(text: [*]const u8, size: u32) u32 {
         const next: u8 = if (i + 1 < size) text[i + 1] else 0;
 
         if (prev == '\\') continue;
-        if (in_math_block(text, size, i)) continue;
-        if (in_link_url(text, i)) continue;
-        if (in_html_tag(text, i)) continue;
+        if (math.at(i)) continue;
+        if (lctx.inLinkUrl(i)) continue;
+        if (lctx.inHtmlTag(i)) continue;
         if (prev == '_' or next == '_') continue;
         if (is_word_char(prev) and is_word_char(next)) continue;
 
