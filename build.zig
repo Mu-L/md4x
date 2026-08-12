@@ -92,11 +92,30 @@ pub fn build(b: *std.Build) void {
         .libyaml_src = libyaml_src,
         .include_paths = include_paths,
     };
-    _ = addWasm(b, pkg_opts);
+    _ = addWasm(b, pkg_opts, .{
+        .step_name = "wasm",
+        .step_desc = "Build WASM library",
+        .out_name = "md4x.wasm",
+        .optimize = pkg_optimize,
+    });
+    // Size-optimized variant, inlined into the `md4x/compact` bundle.
+    _ = addWasm(b, pkg_opts, .{
+        .step_name = "wasm-small",
+        .step_desc = "Build WASM library (ReleaseSmall, for md4x/compact)",
+        .out_name = "md4x-small.wasm",
+        .optimize = .ReleaseSmall,
+    });
     _ = addNapi(b, pkg_opts);
 }
 
-fn addWasm(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
+const WasmVariant = struct {
+    step_name: []const u8,
+    step_desc: []const u8,
+    out_name: []const u8,
+    optimize: std.builtin.OptimizeMode,
+};
+
+fn addWasm(b: *std.Build, opts: PkgBuildOptions, variant: WasmVariant) *std.Build.Step {
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
         .os_tag = .wasi,
@@ -106,7 +125,7 @@ fn addWasm(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
         .name = "md4x",
         .root_module = b.createModule(.{
             .target = wasm_target,
-            .optimize = opts.optimize,
+            .optimize = variant.optimize,
             .link_libc = true,
             .strip = opts.strip,
         }),
@@ -133,8 +152,9 @@ fn addWasm(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
 
     const wasm_install = b.addInstallArtifact(md4x_wasm, .{
         .dest_dir = .{ .override = .{ .custom = "../packages/md4x/build" } },
+        .dest_sub_path = variant.out_name,
     });
-    const wasm_step = b.step("wasm", "Build WASM library");
+    const wasm_step = b.step(variant.step_name, variant.step_desc);
     wasm_step.dependOn(&wasm_install.step);
     return wasm_step;
 }

@@ -50,18 +50,25 @@ packages/md4x/           # npm package
   README.md              # Package README
   LICENSE.md             # MIT license
   build/
-    md4x.wasm            # Prebuilt WASM binary
+    md4x.wasm            # Prebuilt WASM binary (ReleaseFast)
+    md4x-small.wasm      # Prebuilt WASM binary (ReleaseSmall, inlined into lib/standalone.mjs)
     md4x.*.node          # Prebuilt NAPI binaries (per-platform)
   lib/
-    wasm.mjs             # JS entrypoint for WASM (async API, ESM)
-    wasm.d.mts           # TypeScript declarations for WASM API
+    wasm/
+      common.mjs         # Shared WASM render functions (instance singleton + imports)
+      default.mjs        # `md4x/wasm` entrypoint (loads build/md4x.wasm)
+      unwasm.mjs         # `md4x/wasm` entrypoint for the `unwasm` condition
+      index.d.mts        # TypeScript declarations for WASM API
+    standalone.mjs       # GENERATED (gitignored) — `md4x/standalone` rolldown bundle
+    standalone.d.mts     # TypeScript declarations for the standalone API
     napi.mjs             # JS entrypoint for NAPI (sync API, ESM)
     napi.d.mts           # TypeScript declarations for NAPI API
-    types.d.ts           # Shared TypeScript types (ComarkTree, ComarkNode, ComarkElement, etc.)
+    types.d.mts          # Shared TypeScript types (ComarkTree, ComarkNode, ComarkElement, etc.)
   test/
-    _suite.mjs           # Shared test suite (vitest, used by both NAPI and WASM tests)
+    _suite.mjs           # Shared test suite (vitest, used by NAPI/WASM/standalone tests)
     napi.test.mjs        # NAPI binding tests
     wasm.test.mjs        # WASM binding tests
+    standalone.test.mjs  # Inlined-WASM (`md4x/standalone`) binding tests
   bench/
     _fixtures.mjs        # Benchmark fixture strings (small, medium, large)
     index.mjs            # Benchmark runner (mitata, compares napi/wasm/md4w/markdown-it)
@@ -80,6 +87,7 @@ test/
 scripts/
   run-tests.ts            # Main test runner (runs all suites)
   build-entity-map.ts     # Generates entity.c from WHATWG spec
+  build-standalone.ts     # Bundles lib/standalone.mjs (rolldown, gzip+Z85 inlined wasm)
   build-folding-map.ts    # Unicode case folding map generator
   build-punct-map.ts      # Punctuation character map generator
   build-whitespace-map.ts # Whitespace classification generator
@@ -136,7 +144,8 @@ Produces four static libraries, one executable, and optional WASM/NAPI targets:
 - **libmd4x-markdown** — Markdown renderer (links against libmd4x)
 - **libmd4x-heal** — Markdown heal/completion utility (standalone, no parser dependency)
 - **md4x** — CLI utility (supports `--format=html|text|json|ansi|markdown|heal`)
-- **md4x.wasm** — WASM library (`zig build wasm`, output: `packages/md4x/build/md4x.wasm`)
+- **md4x.wasm** — WASM library (`zig build wasm`, ReleaseFast, output: `packages/md4x/build/md4x.wasm`)
+- **md4x-small.wasm** — Size-optimized WASM library (`zig build wasm-small`, ReleaseSmall, output: `packages/md4x/build/md4x-small.wasm`) — inlined into the `md4x/standalone` bundle, excluded from the npm tarball via `!build/md4x-small.wasm` in `files`
 - **md4x.{platform}-{arch}[-musl].node** — Cross-compiled NAPI addons (`zig build napi-all`, 9 targets)
 
 Compiler flags: `-Wall -Wextra -Wshadow -Wdeclaration-after-statement -O2`
@@ -276,6 +285,13 @@ Based on past bugs found via fuzzing. **Check these patterns when modifying C co
 ### WASM Binary
 
 The WASM binary (`packages/md4x/build/md4x.wasm`) is gitignored and must be rebuilt with `zig build wasm` after C source changes. The `zig build wasm` step installs directly to `packages/md4x/build/`. Run `bun vitest run packages/md4x/test/wasm.test.mjs` to verify.
+
+The `md4x/standalone` entry is a rolldown bundle (`packages/md4x/lib/standalone.mjs`, also generated + gitignored) with the **ReleaseSmall** binary (`zig build wasm-small`) embedded as gzip + Z85. The payload, the Z85 decoder, and the entry module are rolldown **virtual modules** defined in `scripts/build-standalone.ts` — they never exist on disk as source. It is also what `md4x` and `md4x/wasm` resolve to under the `browser` export condition, so bundlers get a self-contained module with no `.wasm` asset. `init()` inflates via `node:zlib` when `process.getBuiltinModule` exists (~4x faster cold start on Node than `DecompressionStream`) and falls back to `DecompressionStream` in browsers — both paths are covered by `test/standalone.test.mjs`. Rebuild it whenever the WASM is rebuilt:
+
+```sh
+bun run build:standalone        # zig build wasm-small && bun scripts/build-standalone.ts
+bun vitest run packages/md4x/test/standalone.test.mjs
+```
 
 ### Adding New Block/Span Types
 
