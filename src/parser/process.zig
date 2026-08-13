@@ -717,7 +717,8 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
 
 // md4x.c ~5814.
 pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
-    var byte_off: c_int = 0;
+    // Walks the block_bytes arena, so it tracks ctx.n_block_bytes's type.
+    var byte_off: usize = 0;
     var ret: c_int = 0;
     var comp_name_build: MD_ATTRIBUTE_BUILD = .{};
     var clean_component_detail: bool = false;
@@ -726,7 +727,7 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
     ctx.containers.clearRetainingCapacity();
 
     while (byte_off < ctx.n_block_bytes) {
-        const block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + @as(usize, @intCast(byte_off))));
+        const block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + byte_off));
         const btype = block.getType();
         // The detail is the union arm named by the runtime block type (see
         // md_process_leaf_block); the switch below fills in its fields.
@@ -848,9 +849,9 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
             }
 
             if (btype == c.BlockType.code or btype == c.BlockType.html or btype == c.BlockType.frontmatter)
-                byte_off += @intCast(block.n_lines * @sizeOf(MD_VERBATIMLINE))
+                byte_off += @as(usize, block.n_lines) * @sizeOf(MD_VERBATIMLINE)
             else
-                byte_off += @intCast(block.n_lines * @sizeOf(MD_LINE));
+                byte_off += @as(usize, block.n_lines) * @sizeOf(MD_LINE);
         }
 
         if (clean_component_detail) {

@@ -75,31 +75,49 @@ pub inline fn MIN_u(a: c_uint, b: c_uint) c_uint {
 
 // md_push_block_bytes (md4x.c ~5984). Returns a raw pointer into ctx.block_bytes,
 // or null on OOM (mirroring C's NULL). Fixes ctx.current_block after realloc.
-pub fn md_push_block_bytes(ctx: *MD_CTX, n_bytes: c_int) ?*anyopaque {
-    if (ctx.n_block_bytes + n_bytes > ctx.alloc_block_bytes) {
-        const old_alloc: usize = @intCast(ctx.alloc_block_bytes);
-        ctx.alloc_block_bytes = if (ctx.alloc_block_bytes > 0)
-            ctx.alloc_block_bytes + @divTrunc(ctx.alloc_block_bytes, 2)
-        else
-            512;
-        const new_block_bytes = util.arena_realloc(ctx.alloc, ctx.block_bytes, old_alloc, @intCast(ctx.alloc_block_bytes));
+//
+// All the bookkeeping is `usize`. md4c does it in `int`, so the growth step
+// signed-overflows once the arena passes 1 677 392 853 bytes — reachable from a
+// ~140 MB document, since a blank line inside a fenced code block costs 12
+// arena bytes per input byte. Past that point the counters no longer describe
+// the allocation and the returned slot pointer stops being inside it. `usize`
+// removes the overflow; `types.MAX_BLOCK_BYTES` keeps the arena inside what
+// `MD_CONTAINER.block_byte_off` (an OFF) can address, and both the demand test
+// and the growth step are written so they cannot wrap on a 32-bit usize either
+// (wasm32), where `MAX_BLOCK_BYTES == maxInt(usize)`.
+pub fn md_push_block_bytes(ctx: *MD_CTX, n_bytes: usize) ?*anyopaque {
+    // Refuse rather than wrap. Phrased as a subtraction so it holds when
+    // MAX_BLOCK_BYTES is maxInt(usize).
+    if (ctx.n_block_bytes > types.MAX_BLOCK_BYTES - n_bytes) {
+        ctx.log("block_bytes arena limit exceeded.");
+        return null;
+    }
+    const needed: usize = ctx.n_block_bytes + n_bytes;
+
+    if (needed > ctx.alloc_block_bytes) {
+        const old_alloc: usize = ctx.alloc_block_bytes;
+        // Saturating so the 1.5x step cannot wrap; @max covers the case where
+        // 1.5x is still short of the demand, @min honours the ceiling.
+        const grown: usize = if (old_alloc > 0) old_alloc +| old_alloc / 2 else 512;
+        ctx.alloc_block_bytes = @min(@max(grown, needed), types.MAX_BLOCK_BYTES);
+        const new_block_bytes = util.arena_realloc(ctx.alloc, ctx.block_bytes, old_alloc, ctx.alloc_block_bytes);
         if (new_block_bytes == null) {
             ctx.log("realloc() failed.");
-            ctx.alloc_block_bytes = @intCast(old_alloc);
+            ctx.alloc_block_bytes = old_alloc;
             return null;
         }
 
         // Fix the ->current_block after the reallocation.
         if (ctx.current_block != null) {
-            const off_current_block: OFF = @intCast(@intFromPtr(ctx.current_block) - @intFromPtr(ctx.block_bytes));
+            const off_current_block: usize = @intFromPtr(ctx.current_block) - @intFromPtr(ctx.block_bytes);
             ctx.current_block = @ptrCast(@alignCast(@as([*]u8, @ptrCast(new_block_bytes)) + off_current_block));
         }
 
         ctx.block_bytes = new_block_bytes;
     }
 
-    const ptr: *anyopaque = @ptrCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + @as(usize, @intCast(ctx.n_block_bytes)));
-    ctx.n_block_bytes += n_bytes;
+    const ptr: *anyopaque = @ptrCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + ctx.n_block_bytes);
+    ctx.n_block_bytes = needed;
     return ptr;
 }
 
@@ -149,7 +167,7 @@ pub fn md_consume_link_reference_definitions(ctx: *MD_CTX) c_int {
     if (n > 0) {
         if (n == n_lines) {
             // Remove complete block.
-            ctx.n_block_bytes -= @intCast(n * @sizeOf(MD_LINE));
+            ctx.n_block_bytes -= @as(usize, n) * @sizeOf(MD_LINE);
             ctx.n_block_bytes -= @sizeOf(MD_BLOCK);
             ctx.current_block = null;
         } else {
@@ -159,7 +177,7 @@ pub fn md_consume_link_reference_definitions(ctx: *MD_CTX) c_int {
             const count = (n_lines - n) * @sizeOf(MD_LINE);
             std.mem.copyForwards(u8, dst[0..count], src[0..count]);
             ctx.current_block.*.n_lines -= n;
-            ctx.n_block_bytes -= @intCast(n * @sizeOf(MD_LINE));
+            ctx.n_block_bytes -= @as(usize, n) * @sizeOf(MD_LINE);
         }
     }
 
@@ -1252,9 +1270,9 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                 // not on its first line forces list end on next non-blank line.
                 if (n_parents > 0 and ctx.containers.items[@intCast(n_parents - 1)].ch != '>' and
                     n_brothers + n_children == 0 and ctx.current_block == null and
-                    ctx.n_block_bytes > @as(c_int, @sizeOf(MD_BLOCK)))
+                    ctx.n_block_bytes > @sizeOf(MD_BLOCK))
                 {
-                    const top_block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + @as(usize, @intCast(ctx.n_block_bytes - @sizeOf(MD_BLOCK)))));
+                    const top_block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + (ctx.n_block_bytes - @sizeOf(MD_BLOCK))));
                     if (top_block.typeIsRaw(c.BlockType.li))
                         ctx.last_list_item_starts_with_two_blank_lines = true;
                 }
@@ -1266,9 +1284,9 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                 if (n_parents > 0 and n_parents == ctx.nContainers() and
                     ctx.containers.items[@intCast(n_parents - 1)].ch != '>' and
                     n_brothers + n_children == 0 and ctx.current_block == null and
-                    ctx.n_block_bytes > @as(c_int, @sizeOf(MD_BLOCK)))
+                    ctx.n_block_bytes > @sizeOf(MD_BLOCK))
                 {
-                    const top_block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + @as(usize, @intCast(ctx.n_block_bytes - @sizeOf(MD_BLOCK)))));
+                    const top_block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + (ctx.n_block_bytes - @sizeOf(MD_BLOCK))));
                     if (top_block.typeIsRaw(c.BlockType.li)) {
                         n_parents -= 1;
 

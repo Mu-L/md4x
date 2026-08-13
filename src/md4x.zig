@@ -273,7 +273,7 @@ fn md_parse_impl(alloc: std.mem.Allocator, text: [*c]const CHAR, size: SZ, parse
     md_free_ref_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
-    util.arena_free(ctx.alloc, ctx.block_bytes, @intCast(ctx.alloc_block_bytes));
+    util.arena_free(ctx.alloc, ctx.block_bytes, ctx.alloc_block_bytes);
     ctx.containers.deinit(ctx.alloc);
     ctx.block_component_info.deinit(ctx.alloc);
     ctx.slot_info.deinit(ctx.alloc);
@@ -607,7 +607,7 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
     }
 
     // Cleanup.
-    util.arena_free(ctx.alloc, ctx.block_bytes, @intCast(ctx.alloc_block_bytes));
+    util.arena_free(ctx.alloc, ctx.block_bytes, ctx.alloc_block_bytes);
     ctx.containers.deinit(ctx.alloc);
     ctx.block_component_info.deinit(ctx.alloc);
     ctx.slot_info.deinit(ctx.alloc);
@@ -1124,6 +1124,109 @@ test "16-bit info index: component/slot/alert openers stop at the cap (PLAN 10)"
         // Refusing at the opener must not unbalance emission (AGENTS.md #4).
         try std.testing.expectEqual(probe.n_enter, probe.n_leave);
     }
+}
+
+// The `block_bytes` arena is the one growable buffer md4x still sizes by hand,
+// and md4c sizes it with `int`. At 1 677 392 853 bytes the 1.5x growth step
+// signed-overflows; every counter past that point describes an allocation that
+// does not exist, and the slot pointer derived from `n_block_bytes` leaves the
+// arena. It is reachable — a blank line inside a fenced code block is one input
+// byte and twelve arena bytes, so ~140 MB of Markdown gets there, well under
+// the 4 GiB an `MD_SIZE` input allows — but reproducing it needs a >1.6 GB
+// allocation, which no unit test should make.
+//
+// So the boundary is driven directly: seed the counters at the values a huge
+// document would reach and check `md_push_block_bytes` computes in `usize` and
+// refuses at `MAX_BLOCK_BYTES` instead of wrapping. The stub allocator below
+// fails every request, so nothing is actually allocated; it records the size it
+// was asked for, which is the growth arithmetic's only observable output.
+test "block_bytes arena: growth arithmetic is usize and the cap refuses cleanly" {
+    const Refuser = struct {
+        last_len: usize = 0,
+        n_calls: usize = 0,
+
+        fn allocFn(p: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            _ = alignment;
+            _ = ret_addr;
+            const self: *@This() = @ptrCast(@alignCast(p));
+            self.last_len = len;
+            self.n_calls += 1;
+            return null;
+        }
+        fn resizeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+            return false;
+        }
+        fn remapFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+            return null;
+        }
+        fn freeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {}
+
+        fn allocator(self: *@This()) std.mem.Allocator {
+            return .{ .ptr = self, .vtable = &.{
+                .alloc = allocFn,
+                .resize = resizeFn,
+                .remap = remapFn,
+                .free = freeFn,
+            } };
+        }
+    };
+
+    var refuser: Refuser = .{};
+    var ctx: types.MD_CTX = .{ .alloc = refuser.allocator() };
+    const MAX = types.MAX_BLOCK_BYTES;
+
+    // 1. THE regression case: the last capacity the 1.5x sequence reaches
+    //    before `int` overflows. `512 * 1.5^n` lands on exactly this value, and
+    //    a fenced code block of 139 782 738 blank lines — a 140 MB file — is
+    //    what walks it here. Pre-fix, computing the next capacity was
+    //    `1677392853 + 838696426`: a panic under ReleaseSafe (this test build)
+    //    and illegal behavior under the shipping ReleaseFast. It must now be a
+    //    plain 2 516 089 279-byte request that the allocator is free to refuse.
+    ctx.n_block_bytes = 1_677_392_853;
+    ctx.alloc_block_bytes = 1_677_392_853;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_VERBATIMLINE)) == null);
+    try std.testing.expectEqual(@as(usize, 1), refuser.n_calls);
+    try std.testing.expectEqual(@as(usize, 2_516_089_279), refuser.last_len);
+    // A refused grow leaves the counters describing the block that still exists.
+    try std.testing.expectEqual(@as(usize, 1_677_392_853), ctx.alloc_block_bytes);
+    try std.testing.expectEqual(@as(usize, 1_677_392_853), ctx.n_block_bytes);
+
+    // 2. Growth from a capacity `int` cannot even hold. 1.5x saturates over the
+    //    ceiling, so the request is clamped to MAX rather than wrapping.
+    ctx.n_block_bytes = 3_000_000_000;
+    ctx.alloc_block_bytes = 3_000_000_000;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_VERBATIMLINE)) == null);
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+    try std.testing.expectEqual(MAX, refuser.last_len);
+    try std.testing.expectEqual(@as(usize, 3_000_000_000), ctx.alloc_block_bytes);
+    try std.testing.expectEqual(@as(usize, 3_000_000_000), ctx.n_block_bytes);
+
+    // 3. One byte short of the ceiling: the demand itself overflows it, so the
+    //    push is refused before any capacity is computed — no realloc at all.
+    ctx.n_block_bytes = MAX - 1;
+    ctx.alloc_block_bytes = MAX;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_LINE)) == null);
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+    try std.testing.expectEqual(MAX - 1, ctx.n_block_bytes);
+    try std.testing.expectEqual(MAX, ctx.alloc_block_bytes);
+
+    // 4. Landing exactly on the ceiling is still allowed (the test is `>`), and
+    //    it is the growth path that then refuses — not the cap.
+    ctx.n_block_bytes = MAX - @sizeOf(types.MD_LINE);
+    ctx.alloc_block_bytes = MAX - @sizeOf(types.MD_LINE);
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_LINE)) == null);
+    try std.testing.expectEqual(@as(usize, 3), refuser.n_calls);
+    try std.testing.expectEqual(MAX, refuser.last_len);
+
+    // 5. The ordinary first push still asks for the 512-byte seed capacity.
+    ctx.n_block_bytes = 0;
+    ctx.alloc_block_bytes = 0;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_BLOCK)) == null);
+    try std.testing.expectEqual(@as(usize, 512), refuser.last_len);
+    try std.testing.expectEqual(@as(usize, 0), ctx.n_block_bytes);
+
+    // Nothing was ever allocated, so there is nothing to free.
+    try std.testing.expect(ctx.block_bytes == null);
 }
 
 test "link label hash + cmp: whitespace & case-fold equivalence" {
