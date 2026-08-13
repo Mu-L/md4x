@@ -283,9 +283,9 @@ compose, so anchors are never resolved.
 ### YAML nesting depth
 
 The `json_write_yaml_*` functions walk libyaml's event stream **recursively**, so
-a document's nesting depth is the native recursion depth — and libyaml imposes no
-nesting limit of its own (its parser is a state machine over heap-grown stacks),
-while the Markdown parser hands frontmatter over as opaque bytes. `YAML_MAX_DEPTH`
+a document's nesting depth is the native recursion depth — and libyaml's own limit
+is far too high to protect the native stack (1000 levels, see below), while the
+Markdown parser hands frontmatter over as opaque bytes. `YAML_MAX_DEPTH`
 = **256 levels** therefore caps the descent, on all three paths that reach the
 writer (`md_ast`, `md_meta`, `md_yaml`). At the cap the writer **ends the parse**:
 the position that overflowed gets `null`, and the walk unwinds without reading
@@ -303,6 +303,18 @@ through `--format=json` measured 1.2 s at n = 25 000, 4.6 s at 50 000, 19.1 s at
 100 000 and 96.3 s at 200 000, on builds with and without the cap alike. Anything
 that keeps reading events past the cap pays that in full; stopping there makes the
 cost independent of the depth (~3 ms at every n above, including 1 000 000).
+
+The quadratic is not fundamental to libyaml — `yaml_parser_stale_simple_keys` and
+the head-position check in `yaml_parser_fetch_more_tokens` each sweep the whole
+`simple_keys` stack (one entry per open `[`/`{`) on every token fetch; making them
+examine only the top-most entry turns the curve linear (17.7 s → 10.7 ms at 80 000
+levels, measured on a patched build). Upstream instead **bounds the depth**:
+`build.zig.zon` pins a libyaml master commit whose scanner errors past
+`MAX_NESTING_LEVEL` = 1000, so the worst case that still parses is 999 levels at
+~2.3 ms. One consequence for this renderer: **past ~1000 levels the truncated
+position is an empty container rather than `null`**, because libyaml's scanner
+reads far enough ahead to hit its own limit before `YAML_MAX_DEPTH` sees those
+events. Between 256 and ~1000 levels the `null` above is what you get.
 
 The cap's number differs from the AST renderer's 1024 because the frame is ~3.5×
 heavier — three frames per level, each holding libyaml's ~104-byte `yaml_event_t`

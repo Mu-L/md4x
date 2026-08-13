@@ -264,14 +264,16 @@ fn json_write_yaml_scalar(w: *JsonWriter, event: *const sys.yaml_event_t) void {
 //
 // The functions below walk libyaml's event stream RECURSIVELY (event -> mapping
 // / sequence -> value -> event), so the document's nesting depth is the native
-// recursion depth. libyaml itself imposes no limit -- its parser is a state
-// machine over heap-grown stacks -- and neither does the markdown parser, which
-// hands frontmatter over as opaque bytes. So `a: [[[[...` in frontmatter (or in
-// a plain `.yml` through md_yaml) used to run until the native stack was gone:
-// a SIGSEGV, which also skipped the AST renderer's `ctx.arena.deinit()` and
-// `yaml_parser_delete` (through the wasm binding it trapped instead, leaking
-// ~4 MB of linear memory per attempt, unreclaimable). Past the cap the writer
-// emits `null` and ENDS the parse; see json_write_yaml_truncate().
+// recursion depth. libyaml's own MAX_NESTING_LEVEL is 1000 -- far past what the
+// native stack survives here, and it exists only in the master commit pinned in
+// build.zig.zon, not in the 0.2.5 release -- and the markdown parser imposes
+// nothing at all, handing frontmatter over as opaque bytes. So `a: [[[[...` in
+// frontmatter (or in a plain `.yml` through md_yaml) used to run until the
+// native stack was gone: a SIGSEGV, which also skipped the AST renderer's
+// `ctx.arena.deinit()` and `yaml_parser_delete` (through the wasm binding it
+// trapped instead, leaking ~4 MB of linear memory per attempt, unreclaimable).
+// Past the cap the writer emits `null` and ENDS the parse; see
+// json_write_yaml_truncate().
 //
 // Ending it, rather than skipping to the end of the offending subtree, is also
 // what bounds the CPU. libyaml's flow-collection handling is O(depth^2) --

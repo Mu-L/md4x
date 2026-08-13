@@ -2,9 +2,23 @@
     .name = .md4x,
     .version = "0.0.26",
     .dependencies = .{
+        // Pinned to an UNTAGGED master commit, not the 0.2.5 release tag (2020,
+        // still the latest). It adds `MAX_NESTING_LEVEL = 1000` to the scanner,
+        // which is what bounds libyaml's O(depth^2) flow-collection handling:
+        // the sweeps over `parser->simple_keys` in `yaml_parser_stale_simple_keys`
+        // and `yaml_parser_fetch_more_tokens` run once per token and walk one
+        // entry per open `[`/`{`, so cost grows with the square of the nesting
+        // depth (measured on 0.2.5: 1.2 s at 25 000 levels, 96.3 s at 200 000).
+        // Capping the depth leaves 999 levels / ~2.3 ms as the worst case.
+        // It also carries an upstream flow-sequence parser fix. Verified
+        // byte-identical on the whole diff-corpus against 0.2.5.
+        //
+        // `MAX_NESTING_LEVEL` is a process-global mutable int and its setter
+        // (`yaml_set_max_nest_level`) is not thread-safe; md4x never calls it,
+        // so it stays read-only in every artifact.
         .libyaml = .{
-            .url = "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz",
-            .hash = "N-V-__8AAFisCAAMQCHLFuzfjTcHCY_2lOFAyfksvXa7HzDL",
+            .url = "https://github.com/yaml/libyaml/archive/893682bb98d5ed663a3e314c46dceaf9b1c8802f.tar.gz",
+            .hash = "N-V-__8AAGzPCAAGFPs7xJsG7yEFGaafTjL8aDMXQGObSLD0",
         },
     },
     .fingerprint = 0x422299c733688929,
