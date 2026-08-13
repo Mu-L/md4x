@@ -578,22 +578,22 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
         if (ret < 0) break;
 
         emit(&fbuf, "L type={d} data={d} enf={d} beg={d} end={d} indent={d} | nc={d} bcn={d} fm={d} llhle={d} llistwo={d} nblk={d} ncomp={d} nslot={d} nalert={d}\n", .{
-            @intFromEnum(line.type),                        line.data,
-            @intFromBool(line.enforce_new_block),           line.beg,
-            line.end,                                       line.indent,
-            ctx.nContainers(),                               ctx.block_component_nesting,
-            ctx.frontmatter_state,                          @intFromBool(ctx.last_line_has_list_loosening_effect),
+            @intFromEnum(line.type),                                      line.data,
+            @intFromBool(line.enforce_new_block),                         line.beg,
+            line.end,                                                     line.indent,
+            ctx.nContainers(),                                            ctx.block_component_nesting,
+            ctx.frontmatter_state,                                        @intFromBool(ctx.last_line_has_list_loosening_effect),
             @intFromBool(ctx.last_list_item_starts_with_two_blank_lines), ctx.n_block_bytes,
-            @as(c_int, @intCast(ctx.block_component_info.items.len)), @as(c_int, @intCast(ctx.slot_info.items.len)),
+            @as(c_int, @intCast(ctx.block_component_info.items.len)),     @as(c_int, @intCast(ctx.slot_info.items.len)),
             @as(c_int, @intCast(ctx.block_alert_info.items.len)),
         }, out_fn, out_ud);
         var i: c_int = 0;
         while (i < ctx.nContainers()) : (i += 1) {
             const co = &ctx.containers.items[@intCast(i)];
             emit(&fbuf, "  C[{d}] ch={d} loose={d} task={d} alert={d} start={d} mi={d} ci={d} bbo={d} tmo={d} cc={d} cfm={d}\n", .{
-                i,                 uval(co.ch),      co.is_loose,    @intFromBool(co.is_task),
-                @intFromBool(co.is_alert), co.start,   co.mark_indent, co.contents_indent,
-                co.block_byte_off, co.task_mark_off, co.colon_count, co.comp_fm_state,
+                i,                         uval(co.ch),      co.is_loose,    @intFromBool(co.is_task),
+                @intFromBool(co.is_alert), co.start,         co.mark_indent, co.contents_indent,
+                co.block_byte_off,         co.task_mark_off, co.colon_count, co.comp_fm_state,
             }, out_fn, out_ud);
         }
 
@@ -1227,6 +1227,135 @@ test "block_bytes arena: growth arithmetic is usize and the cap refuses cleanly"
 
     // Nothing was ever allocated, so there is nothing to free.
     try std.testing.expect(ctx.block_bytes == null);
+}
+
+// Same instrument the block_bytes test above builds inline: an allocator that
+// refuses every request and records the size it was asked for. Growth arithmetic
+// is only observable through that size, and refusing means a boundary seeded at
+// hundreds of millions of elements costs no memory.
+const RecordingRefuser = struct {
+    last_len: usize = 0,
+    n_calls: usize = 0,
+
+    fn allocFn(p: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        _ = alignment;
+        _ = ret_addr;
+        const self: *@This() = @ptrCast(@alignCast(p));
+        self.last_len = len;
+        self.n_calls += 1;
+        return null;
+    }
+    fn resizeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+        return false;
+    }
+    fn remapFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+        return null;
+    }
+    fn freeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {}
+
+    fn allocator(self: *@This()) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = allocFn,
+            .resize = resizeFn,
+            .remap = remapFn,
+            .free = freeFn,
+        } };
+    }
+};
+
+// md4c sizes the ref-def hashtable with `(int)n_ref_defs * 5 / 4`. The `* 5`
+// signed-overflows above 429 496 729 ref-defs, and a ~2.6 GB document of nothing
+// but `[a]:b` lines gets there while still under the 4 GiB an MD_SIZE input
+// allows — so it is inside the documented input range, not outside it. Upstream
+// widened the arithmetic in 19dd06f; md4x computes it in `usize`.
+//
+// Reproducing it for real would need ~34 GB of MD_REF_DEF records, so the
+// boundary is driven directly instead: seed the ref-def count and observe the
+// bucket-array size through a recording allocator that refuses to serve it.
+test "ref-def hashtable: bucket count is computed in usize" {
+    // `n + n/4` is what md4x writes instead of `n * 5 / 4`, and the two agree on
+    // every non-negative n (n = 4k + r ⇒ both are 5k + r) while the first never
+    // forms the 5x intermediate. Spot-check the identity, remainders included.
+    var n: usize = 0;
+    while (n < 4096) : (n += 1) {
+        try std.testing.expectEqual((n * 5) / 4, n + n / 4);
+    }
+
+    var refuser: RecordingRefuser = .{};
+    var ctx: MD_CTX = .{ .alloc = refuser.allocator() };
+
+    // The smallest ref-def count whose `* 5` leaves `int` range: 429 496 730 * 5
+    // is 2 147 483 650, one past maxInt(i32). Pre-fix this was a panic under
+    // ReleaseSafe (this test build) and illegal behavior under the shipping
+    // ReleaseFast. It must now be a plain 536 870 912-bucket request.
+    const n_defs: usize = 429_496_730;
+    ctx.ref_defs.items.len = n_defs;
+    defer ctx.ref_defs.items.len = 0;
+
+    try std.testing.expectEqual(@as(c_int, -1), refdefs.md_build_ref_def_hashtable(&ctx));
+    try std.testing.expectEqual(@as(usize, 1), refuser.n_calls);
+    try std.testing.expectEqual(@as(usize, 536_870_912), n_defs + n_defs / 4);
+    try std.testing.expectEqual(536_870_912 * @sizeOf(?*anyopaque), refuser.last_len);
+    // A refused build resets the size, so md_lookup_ref_def short-circuits and
+    // md_free_ref_def_hashtable has nothing to walk.
+    try std.testing.expectEqual(@as(usize, 0), ctx.ref_def_hashtable_size);
+}
+
+// md4c counts an attribute's substrings in `int`, so the 1.5x growth step in
+// md_build_attr_append_substr signed-overflows above 1 431 655 765 substrings and
+// the `@intCast` of the negative result is illegal behavior in ReleaseFast
+// (upstream 174fe05 widened them). The cheapest input generating one substring
+// per byte is a link title full of NUL bytes, so the attribute would have to be
+// ~1.4 GB — constructible under the 4 GiB MD_SIZE ceiling, but the two reallocs
+// it implies are ~11 GB, which no unit test should attempt.
+//
+// So the counters are seeded at the boundary and the requested element counts
+// are read back through the refusing allocator.
+test "attribute substrings: growth arithmetic is usize and the cap refuses cleanly" {
+    var refuser: RecordingRefuser = .{};
+    var ctx: MD_CTX = .{ .alloc = refuser.allocator() };
+    var build: util.MD_ATTRIBUTE_BUILD = .{};
+    const MAX = util.MAX_ATTR_SUBSTRS;
+
+    // 1. THE regression case. 1 431 655 766 + 715 827 883 = 2 147 483 649, one
+    //    past maxInt(i32). Both tables are still null here, so `types_alloc`
+    //    stays 0 and the first realloc is really an alloc.
+    build.substr_count = 1_431_655_766;
+    build.substr_alloc = 1_431_655_766;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 1), refuser.n_calls);
+    try std.testing.expectEqual(2_147_483_649 * @sizeOf(c.TextType), refuser.last_len);
+    // A refused grow publishes nothing: both capacities still describe the
+    // (absent) blocks, so md_free_attribute frees each at its own real length.
+    try std.testing.expectEqual(@as(usize, 0), build.types_alloc);
+    try std.testing.expectEqual(@as(usize, 1_431_655_766), build.substr_alloc);
+    try std.testing.expectEqual(@as(usize, 1_431_655_766), build.substr_count);
+
+    // 2. A capacity `int` cannot hold at all: 1.5x overshoots the ceiling, so the
+    //    request is clamped to MAX_ATTR_SUBSTRS rather than wrapping.
+    build.substr_count = 3_000_000_000;
+    build.substr_alloc = 3_000_000_000;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+    try std.testing.expectEqual(MAX * @sizeOf(c.TextType), refuser.last_len);
+
+    // 3. At the ceiling the append is refused before any capacity is computed —
+    //    no allocation is even attempted. This is the "refuse at the opener" arm.
+    build.substr_count = MAX;
+    build.substr_alloc = MAX;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+
+    // 4. The ordinary first append still asks for the 8-element seed capacity.
+    build.substr_count = 0;
+    build.substr_alloc = 0;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 3), refuser.n_calls);
+    try std.testing.expectEqual(8 * @sizeOf(c.TextType), refuser.last_len);
+
+    // Nothing was ever allocated, so there is nothing to free.
+    try std.testing.expect(build.substr_types == null);
+    try std.testing.expect(build.substr_offsets == null);
 }
 
 test "link label hash + cmp: whitespace & case-fold equivalence" {

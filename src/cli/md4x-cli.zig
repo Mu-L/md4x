@@ -152,6 +152,13 @@ fn process_file(in: *libc.FILE, out: *libc.FILE) c_int {
         r_flags |= MD_HTML_FLAG_HEAL;
 
     const input_ptr: [*c]const MD_CHAR = input.ptr;
+    // read_stream imposes no size limit, so refuse here rather than let the
+    // narrowing to MD_SIZE (u32) silently parse the low 32 bits of the file --
+    // a panic in a safe build and illegal behavior in the shipping ReleaseFast.
+    if (in_size > std.math.maxInt(MD_SIZE)) {
+        eprint("Input too large ({d} bytes; the maximum is {d}).\n", .{ in_size, std.math.maxInt(MD_SIZE) });
+        return -1;
+    }
     const in_sz: MD_SIZE = @intCast(in_size);
     var ret: c_int = -1;
 

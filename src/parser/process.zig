@@ -88,7 +88,14 @@ pub fn md_analyze_table_alignment(ctx: *MD_CTX, beg: OFF, end: OFF, align_arr: [
     while (n_align > 0) {
         var index: usize = 0; // index into align_map[]
 
-        while (ctx.ch(off) != '-') off += 1;
+        // Bounded by the row end, like the three sibling loops (upstream ecbb091).
+        // `n_align` is the dash-group count `md_is_table_underline` measured on
+        // this very row, so today it cannot outrun the groups present — but
+        // `ctx.ch()` indexes a `[*c]` pointer, which Zig does not bounds-check in
+        // ANY build mode, so an unbounded scan here would walk past the input
+        // buffer entirely rather than panic. Running out of row now yields the
+        // default alignment instead of an over-read.
+        while (off < end and ctx.ch(off) != '-') off += 1;
         if (off > beg and ctx.ch(off - 1) == ':') index |= 1;
         while (off < end and ctx.ch(off) == '-') off += 1;
         if (off < end and ctx.ch(off) == ':') index |= 2;
@@ -815,7 +822,14 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
                     return ret;
                 }
 
-                if (btype == c.BlockType.ul or btype == c.BlockType.ol or btype == c.BlockType.quote or btype == c.BlockType.component or btype == c.BlockType.template or btype == c.BlockType.alert)
+                // The `> 0` is hardening, not a known repro: the block layer is
+                // believed to keep openers and closers balanced. But `items.len`
+                // is a `usize`, so a lone closer would wrap it to ~0 and
+                // `md_process_leaf_block`'s `containers.items[nContainers() - 1]`
+                // would then read out of a slice whose length is nonsense —
+                // unchecked in the shipping ReleaseFast build.
+                if ((btype == c.BlockType.ul or btype == c.BlockType.ol or btype == c.BlockType.quote or btype == c.BlockType.component or btype == c.BlockType.template or btype == c.BlockType.alert) and
+                    ctx.containers.items.len > 0)
                     ctx.containers.items.len -= 1;
             }
 

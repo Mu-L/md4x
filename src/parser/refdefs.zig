@@ -218,14 +218,19 @@ pub fn md_build_ref_def_hashtable(ctx: *MD_CTX) c_int {
     if (ctx.ref_defs.items.len == 0)
         return 0;
 
-    ctx.ref_def_hashtable_size = @divTrunc(@as(c_int, @intCast(ctx.ref_defs.items.len)) * 5, 4);
-    ctx.ref_def_hashtable = @ptrCast(@alignCast(util.arena_alloc(ctx.alloc, @as(usize, @intCast(ctx.ref_def_hashtable_size)) * @sizeOf(?*anyopaque))));
+    // Computed in `usize`: `items.len * 5` overflows a `c_int` above ~429M
+    // ref-defs, which a ~2.6 GB document of nothing but `[a]:b` lines reaches
+    // while still under the 4 GiB an MD_SIZE input allows.
+    // `n + n/4` is exactly `n * 5 / 4` for every non-negative n, without ever
+    // forming the 5x intermediate — so it cannot wrap on a 32-bit usize either.
+    ctx.ref_def_hashtable_size = ctx.ref_defs.items.len + ctx.ref_defs.items.len / 4;
+    ctx.ref_def_hashtable = @ptrCast(@alignCast(util.arena_alloc(ctx.alloc, ctx.ref_def_hashtable_size * @sizeOf(?*anyopaque))));
     if (ctx.ref_def_hashtable == null) {
         ctx.log("malloc() failed.");
         ctx.ref_def_hashtable_size = 0;
         return -1;
     }
-    @memset(ctx.ref_def_hashtable[0..@intCast(ctx.ref_def_hashtable_size)], null);
+    @memset(ctx.ref_def_hashtable[0..ctx.ref_def_hashtable_size], null);
 
     const ref_defs_base = @intFromPtr(ctx.ref_defs.items.ptr);
     const ref_defs_end = @intFromPtr(ctx.ref_defs.items.ptr + ctx.ref_defs.items.len);
@@ -236,7 +241,7 @@ pub fn md_build_ref_def_hashtable(ctx: *MD_CTX) c_int {
         const def: *MD_REF_DEF = @ptrCast(&ctx.ref_defs.items[@intCast(i)]);
 
         def.hash = md_link_label_hash(def.label, def.label_size);
-        const slot: usize = @intCast(@mod(def.hash, @as(c_uint, @intCast(ctx.ref_def_hashtable_size))));
+        const slot: usize = @as(usize, def.hash) % ctx.ref_def_hashtable_size;
         const bucket = ctx.ref_def_hashtable[slot];
 
         if (bucket == null) {
@@ -275,7 +280,18 @@ pub fn md_build_ref_def_hashtable(ctx: *MD_CTX) c_int {
         // buckets are resolved after sorting, below — matching C.)
         var list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
         if (list.n_ref_defs >= list.alloc_ref_defs) {
-            const new_alloc = list.alloc_ref_defs + @divTrunc(list.alloc_ref_defs, 2);
+            // Same class as the hashtable sizing above, one level down: the 1.5x
+            // step signed-overflows a `c_int` bucket capacity. `alloc_ref_defs`
+            // lives in an extern struct whose layout is frozen (the flexible
+            // array follows it), so it cannot be widened — compute in `usize`
+            // and refuse instead. -1 is what every caller already treats as OOM.
+            const old_alloc: usize = @intCast(list.alloc_ref_defs);
+            const grown: usize = old_alloc +| old_alloc / 2;
+            if (grown > std.math.maxInt(c_int)) {
+                ctx.log("ref-def bucket capacity limit exceeded.");
+                return -1;
+            }
+            const new_alloc: c_int = @intCast(grown);
             const list_tmp: ?*MD_REF_DEF_LIST = @ptrCast(@alignCast(util.arena_realloc(ctx.alloc, list, md_ref_def_list_bytes(list.alloc_ref_defs), md_ref_def_list_bytes(new_alloc))));
             if (list_tmp == null) {
                 ctx.log("realloc() failed.");
@@ -292,9 +308,9 @@ pub fn md_build_ref_def_hashtable(ctx: *MD_CTX) c_int {
     }
 
     // Sort the complex buckets so we can bsearch() them.
-    i = 0;
-    while (i < ctx.ref_def_hashtable_size) : (i += 1) {
-        const bucket = ctx.ref_def_hashtable[@intCast(i)];
+    var bi: usize = 0;
+    while (bi < ctx.ref_def_hashtable_size) : (bi += 1) {
+        const bucket = ctx.ref_def_hashtable[bi];
         if (bucket == null)
             continue;
         const bucket_addr = @intFromPtr(bucket);
@@ -323,9 +339,9 @@ pub fn md_free_ref_def_hashtable(ctx: *MD_CTX) void {
         const ref_defs_base = @intFromPtr(ctx.ref_defs.items.ptr);
         const ref_defs_end = @intFromPtr(ctx.ref_defs.items.ptr + ctx.ref_defs.items.len);
 
-        var i: c_int = 0;
+        var i: usize = 0;
         while (i < ctx.ref_def_hashtable_size) : (i += 1) {
-            const bucket = ctx.ref_def_hashtable[@intCast(i)];
+            const bucket = ctx.ref_def_hashtable[i];
             if (bucket == null)
                 continue;
             const bucket_addr = @intFromPtr(bucket);
@@ -335,7 +351,7 @@ pub fn md_free_ref_def_hashtable(ctx: *MD_CTX) void {
             util.arena_free(ctx.alloc, bucket, md_ref_def_list_bytes(list.alloc_ref_defs));
         }
 
-        util.arena_free(ctx.alloc, @ptrCast(ctx.ref_def_hashtable), @as(usize, @intCast(ctx.ref_def_hashtable_size)) * @sizeOf(?*anyopaque));
+        util.arena_free(ctx.alloc, @ptrCast(ctx.ref_def_hashtable), ctx.ref_def_hashtable_size * @sizeOf(?*anyopaque));
     }
 }
 
@@ -346,7 +362,7 @@ pub fn md_lookup_ref_def(ctx: *MD_CTX, label: [*c]const CHAR, label_size: SZ) ?*
         return null;
 
     const hash = md_link_label_hash(label, label_size);
-    const slot: usize = @intCast(@mod(hash, @as(c_uint, @intCast(ctx.ref_def_hashtable_size))));
+    const slot: usize = @as(usize, hash) % ctx.ref_def_hashtable_size;
     const bucket = ctx.ref_def_hashtable[slot];
 
     if (bucket == null) {

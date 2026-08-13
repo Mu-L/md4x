@@ -61,6 +61,16 @@ fn napi_buf_append(text: [*c]const abi.MD_CHAR, size: abi.MD_SIZE, userdata: ?*a
     buf.size += size;
 }
 
+// The renderers take an MD_SIZE (u32) length. V8 caps strings well below that,
+// so this never fires today, but the alternative to checking is an out-of-range
+// `@intCast(input_size)` -- a panic in a safe build and illegal behavior in the
+// shipping ReleaseFast addon. Throws and returns true when the input is refused.
+fn napi_reject_oversized_input(env: c.napi_env, input_size: usize) bool {
+    if (input_size <= std.math.maxInt(abi.MD_SIZE)) return false;
+    _ = c.napi_throw_error(env, null, "Input too large");
+    return true;
+}
+
 // Generic renderer wrapper
 const md4x_render_fn = *const fn (
     [*c]const abi.MD_CHAR,
@@ -85,6 +95,7 @@ fn render_impl(env: c.napi_env, info: c.napi_callback_info, fn_ptr: md4x_render_
     // Get input string length, then read
     var input_size: usize = undefined;
     _ = c.napi_get_value_string_utf8(env, argv[0], null, 0, &input_size);
+    if (napi_reject_oversized_input(env, input_size)) return null;
     const input: ?[*]u8 = @ptrCast(std.c.malloc(input_size + 1));
     if (input == null) {
         _ = c.napi_throw_error(env, null, "Allocation failed");
@@ -132,6 +143,7 @@ fn md4x_napi_to_html(env: c.napi_env, info: c.napi_callback_info) callconv(.c) c
     // Get input string
     var input_size: usize = undefined;
     _ = c.napi_get_value_string_utf8(env, argv[0], null, 0, &input_size);
+    if (napi_reject_oversized_input(env, input_size)) return null;
     const input: ?[*]u8 = @ptrCast(std.c.malloc(input_size + 1));
     if (input == null) {
         _ = c.napi_throw_error(env, null, "Allocation failed");
@@ -177,6 +189,7 @@ fn md4x_napi_to_html_meta(env: c.napi_env, info: c.napi_callback_info) callconv(
 
     var input_size: usize = undefined;
     _ = c.napi_get_value_string_utf8(env, argv[0], null, 0, &input_size);
+    if (napi_reject_oversized_input(env, input_size)) return null;
     const input: ?[*]u8 = @ptrCast(std.c.malloc(input_size + 1));
     if (input == null) {
         _ = c.napi_throw_error(env, null, "Allocation failed");
@@ -221,6 +234,7 @@ fn md4x_napi_to_ansi_meta(env: c.napi_env, info: c.napi_callback_info) callconv(
 
     var input_size: usize = undefined;
     _ = c.napi_get_value_string_utf8(env, argv[0], null, 0, &input_size);
+    if (napi_reject_oversized_input(env, input_size)) return null;
     const input: ?[*]u8 = @ptrCast(std.c.malloc(input_size + 1));
     if (input == null) {
         _ = c.napi_throw_error(env, null, "Allocation failed");
@@ -269,6 +283,7 @@ fn md4x_napi_heal(env: c.napi_env, info: c.napi_callback_info) callconv(.c) c.na
 
     var input_size: usize = undefined;
     _ = c.napi_get_value_string_utf8(env, argv[0], null, 0, &input_size);
+    if (napi_reject_oversized_input(env, input_size)) return null;
     const input: ?[*]u8 = @ptrCast(std.c.malloc(input_size + 1));
     if (input == null) {
         _ = c.napi_throw_error(env, null, "Allocation failed");

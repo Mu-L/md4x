@@ -353,7 +353,10 @@ pub const MD_CTX = struct {
     // built only after collection completes — no append moves the buffer after.)
     ref_defs: std.ArrayListUnmanaged(MD_REF_DEF) = .empty,
     ref_def_hashtable: [*c]?*anyopaque = null,
-    ref_def_hashtable_size: c_int = 0,
+    // A bucket count, so `usize` — the type the allocation and every index into
+    // the table already want. md4c keeps it `int` and computes `n * 5 / 4` in
+    // `int`, which overflows above ~429M ref-defs; upstream 19dd06f widened it.
+    ref_def_hashtable_size: usize = 0,
     max_ref_def_output: SZ = 0,
 
     // Stack of inline/span markers. (PLAN 8.1: ArrayListUnmanaged. The emphasis
