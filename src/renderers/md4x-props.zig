@@ -37,10 +37,15 @@ pub const MD_PROP = struct {
     value_size: c.MD_SIZE = 0,
 };
 
+// Parse result. Only the four scalars carry a meaningful default: the two
+// arrays are valid exactly over `props[0..n_props]` and `class_buf[0..class_len]`,
+// and md_parse_props() writes every byte in those ranges before a consumer can
+// read it (see the reset comment there). They are therefore `undefined` rather
+// than zeroed — a `.{}` here must stay as cheap as the reset the parser does.
 pub const MD_PARSED_PROPS = struct {
-    props: [MD_MAX_PROPS]MD_PROP = [_]MD_PROP{.{}} ** MD_MAX_PROPS,
+    props: [MD_MAX_PROPS]MD_PROP = undefined,
     n_props: c_int = 0,
-    class_buf: [MD_CLASS_BUF_SIZE]u8 = [_]u8{0} ** MD_CLASS_BUF_SIZE,
+    class_buf: [MD_CLASS_BUF_SIZE]u8 = undefined,
     class_len: c.MD_SIZE = 0,
     id: ?[*]const u8 = null,
     id_size: c.MD_SIZE = 0,
@@ -50,7 +55,34 @@ pub const MD_PARSED_PROPS = struct {
 // into the structured MD_PARSED_PROPS form. All key/value pointers are zero-copy
 // references into `raw` (not NUL-terminated — use the *_size fields).
 pub fn md_parse_props(raw: ?[*]const u8, size: c.MD_SIZE, out: *MD_PARSED_PROPS) void {
-    out.* = .{};
+    // Reset only the four scalars. This used to be `out.* = .{}`, which LLVM
+    // lowers to a `memset(out, 0, 1560)` even in ReleaseFast — a 1 KB `props`
+    // array plus a 512-byte `class_buf` cleared once per attributed span, link,
+    // image and component in the document.
+    //
+    // Leaving the two arrays undefined is sound because every byte a consumer
+    // may read is written by this parse before it becomes readable:
+    //
+    //   * `props[0..n_props]` — each of the three push sites (quoted value,
+    //     unquoted value, bare boolean) assigns all five MD_PROP fields in
+    //     straight-line code immediately after bumping `n_props`, with no
+    //     branch or early exit in between, so an entry is never half-populated.
+    //     Every consumer stops at `n_props`: `render_html_component_props`
+    //     (html), `jsonWriteParsedProps` (ast) and the `::alert{type=…}` scan
+    //     (ansi). `MD_PROP.key` already defaulted to `undefined`, so no caller
+    //     could have been reading a zeroed entry anyway.
+    //   * `class_buf[0..class_len]` — `class_len` only ever advances over bytes
+    //     this function just wrote: the separator space is stored *before* the
+    //     `+= 1`, and the `@memcpy` fills exactly the range the following
+    //     `+= len` claims (if either bound check fails, `class_len` does not
+    //     move). Both consumers pass `class_len` as an explicit length.
+    //
+    // The reset must stay ahead of the `size == 0` return: the ANSI caller
+    // passes a possibly-empty `raw_props` and then reads `n_props`.
+    out.n_props = 0;
+    out.class_len = 0;
+    out.id = null;
+    out.id_size = 0;
 
     if (raw == null or size == 0)
         return;

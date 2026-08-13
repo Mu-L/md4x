@@ -115,6 +115,28 @@ enough that a quadratic path stays invisible there. Pin new ones in `test/pathol
 which takes a third tuple element of extra CLI options (`["--format=heal"]`). Prefer **odd** repeat
 counts so the marker is genuinely unbalanced and heal exercises its append path.
 
+## Nor may a per-element helper clear a scratch struct it only partly fills
+
+`md_parse_props` (`src/renderers/md4x-props.zig`) opened with `out.* = .{}`, which LLVM lowers to
+`memset(out, 0, 1560)` **in ReleaseFast too** — a 1 KB `props` array plus a 512-byte `class_buf`
+zeroed once per attributed span, link, image and component. It now resets only the four scalars
+(`n_props`, `class_len`, `id`, `id_size`); the two arrays stay `undefined`, which is sound because
+`props[0..n_props]` and `class_buf[0..class_len]` are **written before they become readable** — each
+push site assigns all five `MD_PROP` fields in straight-line code right after bumping `n_props`, and
+`class_len` only advances over bytes just written. All three consumers stop at `n_props` /
+`class_len`. Measured ReleaseFast, best-of-25 separate processes, `--stat` (CPU clock around the
+render only), 20k paragraphs × 2 attributed nodes: `--format=html` 35.5 → 21.3 ms (**-40%**),
+`--format=json` 57.6 → 44.5 ms (**-23%**); the seed-corpus + samples document (1 MB, realistic
+attribute density) -6.6% html / -4.6% json; an identical no-attribute control moved 0.5% (noise).
+
+The general shape: **a scratch struct whose valid extent is a length field must not be cleared past
+that length.** Two things make this class easy to miss. `.{}` reads like a cheap declaration but is a
+whole-struct store, and the win is invisible in Debug/ReleaseSafe — the call sites declare
+`var parsed: ParsedProps = undefined`, whose 0xaa fill is the same 1560-byte memset, so ReleaseSafe
+measured 0.03% (i.e. unchanged) for a change worth 40% in the shipping build. Benchmark the mode that
+ships. For the same reason each `ParsedProps` is declared **inside the branch that uses it**, never
+hoisted — hoisting would pay the 0xaa fill on every element node in Debug/ReleaseSafe.
+
 ## Benchmarking the WASM build
 
 The instance is a module-level singleton in `packages/md4x/lib/wasm/common.mjs` and `init()`
