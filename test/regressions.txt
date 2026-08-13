@@ -1874,3 +1874,91 @@ See [click](<http://a.b/]0;pwnedx>) now
 .
 -t html
 ````````````````````````````````
+
+
+## [Issue 251](https://github.com/mity/md4c/issues/251) / [Issue 306](https://github.com/mity/md4c/issues/306) / [Issue 331](https://github.com/mity/md4c/issues/331)
+
+The permissive-autolink recognizer used to require every non-alphanumeric
+character inside a URL to be *flanked* by alphanumerics, so a `+`, `-` or `_`
+that started or ended a path/query component killed the whole match -- not just
+the tail. `~` and `%` were not accepted in a path at all. Each segment (host,
+path, query, fragment) is now scanned with its own set of characters allowed
+anywhere inside a word, so these all link.
+
+```````````````````````````````` example
+https://example.com/~username
+
+https://example.com/a%20b
+
+https://android.googlesource.com/platform/qtwayland/+/545836
+
+https://codereview.qt-project.org/c/qt/qtwayland/+/545836
+
+https://www.youtube.com/watch?v=_tEL8bJ7yqU
+.
+<p><a href="https://example.com/~username">https://example.com/~username</a></p>
+<p><a href="https://example.com/a%20b">https://example.com/a%20b</a></p>
+<p><a href="https://android.googlesource.com/platform/qtwayland/+/545836">https://android.googlesource.com/platform/qtwayland/+/545836</a></p>
+<p><a href="https://codereview.qt-project.org/c/qt/qtwayland/+/545836">https://codereview.qt-project.org/c/qt/qtwayland/+/545836</a></p>
+<p><a href="https://www.youtube.com/watch?v=_tEL8bJ7yqU">https://www.youtube.com/watch?v=_tEL8bJ7yqU</a></p>
+````````````````````````````````
+
+The same rule at the edges of a component, and the query segment with no name
+before its `=`.
+
+```````````````````````````````` example
+http://example.com/_foo
+
+http://example.com/foo_
+
+http://example.com/a/-b
+
+http://example.com/foo--bar
+
+http://example.com/?=x
+.
+<p><a href="http://example.com/_foo">http://example.com/_foo</a></p>
+<p><a href="http://example.com/foo_">http://example.com/foo_</a></p>
+<p><a href="http://example.com/a/-b">http://example.com/a/-b</a></p>
+<p><a href="http://example.com/foo--bar">http://example.com/foo--bar</a></p>
+<p><a href="http://example.com/?=x">http://example.com/?=x</a></p>
+````````````````````````````````
+
+Bracket balancing is now checked for every forward segment before the character
+class is consulted, rather than being folded into the allowed-character test.
+The two cases that pinned the old behaviour must not move: `(` is not a path
+character, so the Wikipedia URL still stops at the host and then fails the
+right boundary; `(` *is* a query character, so the Google one links -- brackets
+and all -- whether or not the whole URL is itself wrapped in brackets.
+
+```````````````````````````````` example
+https://en.wikipedia.org/wiki/Markup_(business)
+
+https://encrypted.google.com/search?q=Markup+(business)
+
+(https://encrypted.google.com/search?q=Markup+(business))
+.
+<p>https://en.wikipedia.org/wiki/Markup_(business)</p>
+<p><a href="https://encrypted.google.com/search?q=Markup+(business)">https://encrypted.google.com/search?q=Markup+(business)</a></p>
+<p>(<a href="https://encrypted.google.com/search?q=Markup+(business)">https://encrypted.google.com/search?q=Markup+(business)</a>)</p>
+````````````````````````````````
+
+A word delimiter that ends a segment is rolled back by one character so it stays
+outside the link. When the segment consumed nothing at all, that rollback lands
+`end` *before* where the segment started, on a character that then fails the
+right-boundary test -- which kills the match outright rather than shortening it.
+These three inputs used to produce a (partial) link and now produce none. This
+is md4c parity, pinned here because it is the one direction in which this change
+is *less* permissive.
+
+```````````````````````````````` example
+http://example.com//
+
+http://ex.coma._
+
+a@ex.com.-
+.
+<p>http://example.com//</p>
+<p>http://ex.coma._</p>
+<p>a@ex.com.-</p>
+````````````````````````````````

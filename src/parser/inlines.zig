@@ -1601,22 +1601,103 @@ pub fn md_scan_right_for_resolved_mark(ctx: *MD_CTX, mark_from: MarkCursor, off:
     return null;
 }
 
-// md4x.c ~4204.
-pub fn md_analyze_permissive_autolink(ctx: *MD_CTX, mark_index: c_int) void {
-    const UrlMapEntry = struct {
-        start_char: CHAR,
-        delim_char: CHAR,
-        allowed_nonalnum_chars: [*:0]const u8,
-        min_components: c_int,
-        optional_end_char: CHAR,
-    };
-    const URL_MAP = [_]UrlMapEntry{
-        .{ .start_char = 0, .delim_char = '.', .allowed_nonalnum_chars = ".-_", .min_components = 2, .optional_end_char = 0 },
-        .{ .start_char = '/', .delim_char = '/', .allowed_nonalnum_chars = "/.-_", .min_components = 0, .optional_end_char = '/' },
-        .{ .start_char = '?', .delim_char = '&', .allowed_nonalnum_chars = "&.-+_=()", .min_components = 1, .optional_end_char = 0 },
-        .{ .start_char = '#', .delim_char = 0, .allowed_nonalnum_chars = ".-+_", .min_components = 1, .optional_end_char = 0 },
-    };
+// md4x.c ~4381.
+//
+// Scans one segment of a suspected permissive autolink (e-mail user name,
+// hostname, path, query or fragment), each parameterized by its component
+// delimiter, the extra non-alnum characters allowed inside a word
+// (`word_extra`) and the delimiters allowed *between* two words
+// (`word_delims`). A word delimiter that ends the run is rolled back, so it
+// stays outside the link.
+//
+// `off_in` is the start offset; the scan runs towards `end` (backwards when
+// `scan_backwards`, i.e. `off_in > end`). Writes the resulting offset through
+// `p_end` and returns the number of components, or -1 on unbalanced brackets.
+//
+// NOTE: `off -= 1` / `off - 1` cannot underflow: backwards scans only step
+// while `off != end` with `off > end >= 0`, and every forward call site passes
+// `off_in >= 1` (the opener mark of a permissive autolink always ends at least
+// one byte into the line).
+fn md_analyze_permissive_autolink_segment(
+    ctx: *MD_CTX,
+    off_in: OFF,
+    end: OFF,
+    p_end: *OFF,
+    scan_backwards: bool,
+    component_delim: CHAR,
+    word_extra: [*:0]const u8,
+    word_delims: [*:0]const u8,
+    p_cursor: *MarkCursor,
+) c_int {
+    var off: OFF = off_in;
+    var n_components: c_int = 0;
+    var n_open_brackets: c_int = 0;
+    var seen_word_delim: bool = true;
+    var seen_component_delim: bool = true;
+    var component_beg: OFF = off;
 
+    while (off != end) {
+        if (scan_backwards) off -= 1;
+
+        // Only accept extra and delimiter characters if they're not part of a
+        // resolved mark.
+        if (!ctx.isAlnum(off) and !ctx.isWhitespace(off)) {
+            if ((!scan_backwards and md_scan_right_for_resolved_mark(ctx, p_cursor.*, off, p_cursor) != null) or
+                (scan_backwards and md_scan_left_for_resolved_mark(ctx, p_cursor.*, off, p_cursor) != null))
+            {
+                if (scan_backwards) off += 1;
+                break;
+            }
+        }
+
+        // The autolink can be _inside_ brackets so we disallow unbalanced
+        // bracket pairs in the URL. (Note the brackets are not allowed in
+        // e-mail username, so we happily skip this in that case.)
+        if (!scan_backwards) {
+            if (ctx.ch(off) == '(') {
+                n_open_brackets += 1;
+            } else if (ctx.ch(off) == ')') {
+                if (n_open_brackets <= 0) break;
+                n_open_brackets -= 1;
+            }
+        }
+
+        if (ctx.isAlnum(off) or ctx.isAnyOf(off, word_extra)) {
+            seen_word_delim = false;
+            seen_component_delim = false;
+        } else {
+            if (seen_word_delim) break;
+
+            if (ctx.isAnyOf(off, word_delims)) {
+                seen_word_delim = true;
+            } else if (component_delim != 0 and ctx.ch(off) == component_delim) {
+                if (seen_component_delim) break;
+                seen_component_delim = true;
+                component_beg = off;
+                n_components += 1;
+            } else {
+                if (scan_backwards) off += 1;
+                break;
+            }
+        }
+
+        if (!scan_backwards) off += 1;
+    }
+
+    // Rollback falsely consumed delimiter.
+    if (seen_word_delim or seen_component_delim)
+        off = if (scan_backwards) off + 1 else off - 1;
+
+    if (off != component_beg) n_components += 1;
+
+    if (n_open_brackets != 0) return -1;
+
+    p_end.* = off;
+    return n_components;
+}
+
+// md4x.c ~4459.
+pub fn md_analyze_permissive_autolink(ctx: *MD_CTX, mark_index: c_int) void {
     const opener = &ctx.marks.items[@intCast(mark_index)];
     const closer = &ctx.marks.items[@intCast(mark_index + 1)]; // The dummy.
     const line_beg: OFF = closer.beg;
@@ -1624,86 +1705,57 @@ pub fn md_analyze_permissive_autolink(ctx: *MD_CTX, mark_index: c_int) void {
     var beg: OFF = opener.beg;
     var end: OFF = opener.end;
     var left_cursor: MarkCursor = mark_index;
-    var left_boundary_ok: bool = false;
     var right_cursor: MarkCursor = mark_index;
-    var right_boundary_ok: bool = false;
 
+    // E-mail requires the user name (before '@', i.e. scanning backwards).
     if (opener.ch == '@') {
-        while (beg > line_beg) {
-            if (ctx.isAlnum(beg - 1)) {
-                beg -= 1;
-            } else if (beg >= line_beg + 2 and ctx.isAlnum(beg - 2) and
-                ctx.isAnyOf(beg - 1, ".-_+") and
-                md_scan_left_for_resolved_mark(ctx, left_cursor, beg - 1, &left_cursor) == null and
-                ctx.isAlnum(beg))
-            {
-                beg -= 1;
-            } else {
-                break;
-            }
-        }
-        if (beg == opener.beg) return; // empty user name
+        if (md_analyze_permissive_autolink_segment(ctx, beg, line_beg, &beg, true, 0, "", ".-_+", &left_cursor) < 1)
+            return;
     }
 
-    if (beg == line_beg or ctx.isUnicodeWhitespaceBefore(beg) or ctx.isAnyOf(beg - 1, "({[")) {
-        left_boundary_ok = true;
-    } else if (ctx.isAnyOf(beg - 1, "*_~")) {
+    // Verify there's line boundary, whitespace, allowed punctuation or resolved
+    // opener mark just before the suspected autolink.
+    if (beg > line_beg and !ctx.isUnicodeWhitespaceBefore(beg) and !ctx.isAnyOf(beg - 1, "({[")) {
         const left_mark = md_scan_left_for_resolved_mark(ctx, left_cursor, beg - 1, &left_cursor);
-        if (left_mark != null and (left_mark.?.flags & MarkFlags.opener != 0)) left_boundary_ok = true;
-    }
-    if (!left_boundary_ok) return;
-
-    var i: usize = 0;
-    while (i < URL_MAP.len) : (i += 1) {
-        var n_components: c_int = 0;
-        var n_open_brackets: c_int = 0;
-
-        if (URL_MAP[i].start_char != 0) {
-            if (end >= line_end or ctx.ch(end) != URL_MAP[i].start_char) continue;
-            if (URL_MAP[i].min_components > 0 and (end + 1 >= line_end or !ctx.isAlnum(end + 1))) continue;
-            end += 1;
-        }
-
-        while (end < line_end) {
-            if (ctx.isAlnum(end)) {
-                if (n_components == 0) n_components += 1;
-                end += 1;
-            } else if (end < line_end and
-                ctx.isAnyOf(end, URL_MAP[i].allowed_nonalnum_chars) and
-                md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor) == null and
-                ((end > line_beg and (ctx.isAlnum(end - 1) or ctx.ch(end - 1) == ')')) or ctx.ch(end) == '(') and
-                ((end + 1 < line_end and (ctx.isAlnum(end + 1) or ctx.ch(end + 1) == '(')) or ctx.ch(end) == ')'))
-            {
-                if (ctx.ch(end) == URL_MAP[i].delim_char) n_components += 1;
-
-                if (ctx.ch(end) == '(') {
-                    n_open_brackets += 1;
-                } else if (ctx.ch(end) == ')') {
-                    if (n_open_brackets <= 0) break;
-                    n_open_brackets -= 1;
-                }
-                end += 1;
-            } else {
-                break;
-            }
-        }
-
-        if (end < line_end and URL_MAP[i].optional_end_char != 0 and ctx.ch(end) == URL_MAP[i].optional_end_char)
-            end += 1;
-
-        if (n_components < URL_MAP[i].min_components or n_open_brackets != 0) return;
-
-        if (opener.ch == '@') break; // e-mail wants only the host
+        if (left_mark == null or (left_mark.?.flags & MarkFlags.opener == 0)) return;
     }
 
-    if (end == line_end or ctx.isUnicodeWhitespace(end) or ctx.isAnyOf(end, ")}].!?,;")) {
-        right_boundary_ok = true;
-    } else {
+    // Scan for hostname segment. Hostname is mandatory and requires at least
+    // two components delimited with a dot.
+    if (md_analyze_permissive_autolink_segment(ctx, end, line_end, &end, false, '.', "", "-_", &right_cursor) < 2)
+        return;
+
+    if (opener.ch != '@') {
+        // Scan for path segment.
+        if (end < line_end and ctx.ch(end) == '/') {
+            if (md_analyze_permissive_autolink_segment(ctx, end + 1, line_end, &end, false, '/', ".+-_~%", "", &right_cursor) < 0)
+                return;
+
+            // Path can also end with additional '/' if its a directory.
+            if (end < line_end and ctx.ch(end) == '/') end += 1;
+        }
+
+        // Scan for query segment.
+        if (end < line_end and ctx.ch(end) == '?') {
+            if (md_analyze_permissive_autolink_segment(ctx, end + 1, line_end, &end, false, '&', "._=()", "+-", &right_cursor) < 0)
+                return;
+        }
+
+        // Scan for fragment segment.
+        if (end < line_end and ctx.ch(end) == '#') {
+            if (md_analyze_permissive_autolink_segment(ctx, end + 1, line_end, &end, false, 0, "", ".-+_", &right_cursor) < 0)
+                return;
+        }
+    }
+
+    // Verify there's line boundary, whitespace, allowed punctuation or resolved
+    // closer mark just after the suspected autolink.
+    if (end < line_end and !ctx.isUnicodeWhitespace(end) and !ctx.isAnyOf(end, ")}].!?,;")) {
         const right_mark = md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor);
-        if (right_mark != null and (right_mark.?.flags & MarkFlags.closer != 0)) right_boundary_ok = true;
+        if (right_mark == null or (right_mark.?.flags & MarkFlags.closer == 0)) return;
     }
-    if (!right_boundary_ok) return;
 
+    // Success, we are an autolink.
     opener.beg = beg;
     opener.end = beg;
     closer.beg = end;
