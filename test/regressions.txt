@@ -1538,3 +1538,91 @@ and `.` remain legal from the second character on.
 .
 <p><a href="http://example.com">http://example.com</a> <a href="mailto:x@y.z">mailto:x@y.z</a> <a href="ftp://h/p">ftp://h/p</a> <a href="a1+b-c.d:x">a1+b-c.d:x</a> <a href="1a:b">1a:b</a></p>
 ````````````````````````````````
+
+
+## [Issue 292](https://github.com/mity/md4c/issues/292)
+
+A closing code fence "may be followed only by spaces or tabs, which are ignored"
+(CommonMark 0.31.2, section *Fenced code blocks*). The closing-fence recognizer
+used to skip only U+0020, so a single trailing tab -- trivially produced by an
+editor or by pasted terminal output -- made the fence fail to close and swallowed
+the whole rest of the document into the code block.
+
+```````````````````````````````` example
+```
+foo
+```→
+bar
+.
+<pre><code>foo
+</code></pre>
+<p>bar</p>
+````````````````````````````````
+
+Spaces and tabs mix freely, and the rule holds for tilde fences and for fences
+nested inside a block quote or a list item.
+
+```````````````````````````````` example
+~~~
+foo
+~~~ → →
+bar
+.
+<pre><code>foo
+</code></pre>
+<p>bar</p>
+````````````````````````````````
+
+```````````````````````````````` example
+> ```
+> foo
+> ```→
+> bar
+.
+<blockquote>
+<pre><code>foo
+</code></pre>
+<p>bar</p>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+- ```
+  foo
+  ```→
+  bar
+.
+<ul>
+<li><pre><code>foo
+</code></pre>
+bar</li>
+</ul>
+````````````````````````````````
+
+Only blanks are permitted: any other trailing character still keeps the block
+open, and a closer shorter than the opener is not a closer no matter what
+follows it.
+
+```````````````````````````````` example
+```
+foo
+```→x
+bar
+.
+<pre><code>foo
+```→x
+bar
+</code></pre>
+````````````````````````````````
+
+```````````````````````````````` example
+````
+foo
+```→
+bar
+.
+<pre><code>foo
+```→
+bar
+</code></pre>
+````````````````````````````````

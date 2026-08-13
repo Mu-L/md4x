@@ -452,8 +452,8 @@ pub fn md_is_closing_code_fence(ctx: *MD_CTX, ch: CHAR, beg: OFF, p_end: *OFF) b
         return ret;
     }
 
-    // Optionally, space(s) can follow
-    while (off < ctx.size and ctx.ch(off) == ' ')
+    // Optionally, space(s) or tab(s) can follow.
+    while (off < ctx.size and ctx.isBlank(off))
         off += 1;
 
     // But nothing more is allowed on the line.
