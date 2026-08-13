@@ -1490,3 +1490,51 @@ their own copy of the encoder and must agree with the HTML one.
 .
 -t markdown
 ````````````````````````````````
+
+
+## [Issue 368](https://github.com/mity/md4c/issues/368)
+
+A CommonMark `<scheme:...>` autolink's scheme must *begin* with an alphanumeric
+character. The recognizer used to accept any ASCII byte in that first position,
+so every C0 control, space, and most ASCII punctuation turned non-link text into
+a link -- and the stray byte landed verbatim in the `href`, because autolink
+destinations are built with `MD_BUILD_ATTR_NO_ESCAPES`. The scheme *body* was
+always checked correctly, so exactly one bogus byte could leak in.
+
+```````````````````````````````` example
+<
+http://example.com>
+.
+<p>&lt;
+http://example.com&gt;</p>
+````````````````````````````````
+
+The same class of opener, on one line: a space, an underscore, and the three
+characters that are legal later in a scheme but not first.
+
+```````````````````````````````` example
+< http://example.com>
+
+<_http://example.com>
+
+<+foo:bar>
+
+<-foo:bar>
+
+<.foo:bar>
+.
+<p>&lt; http://example.com&gt;</p>
+<p>&lt;_http://example.com&gt;</p>
+<p>&lt;+foo:bar&gt;</p>
+<p>&lt;-foo:bar&gt;</p>
+<p>&lt;.foo:bar&gt;</p>
+````````````````````````````````
+
+Only the first character is restricted. A digit may open a scheme, and `+`, `-`
+and `.` remain legal from the second character on.
+
+```````````````````````````````` example
+<http://example.com> <mailto:x@y.z> <ftp://h/p> <a1+b-c.d:x> <1a:b>
+.
+<p><a href="http://example.com">http://example.com</a> <a href="mailto:x@y.z">mailto:x@y.z</a> <a href="ftp://h/p">ftp://h/p</a> <a href="a1+b-c.d:x">a1+b-c.d:x</a> <a href="1a:b">1a:b</a></p>
+````````````````````````````````

@@ -897,7 +897,7 @@ pub fn md_is_autolink_uri(ctx: *MD_CTX, beg: OFF, max_end: OFF, p_end: *OFF) boo
     // MD_ASSERT(CH(beg) == '<');
 
     // Scheme.
-    if (off >= max_end or !ctx.isAscii(off))
+    if (off >= max_end or !ctx.isAlnum(off))
         return false;
     off += 1;
     while (true) {
