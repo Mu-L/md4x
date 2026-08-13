@@ -1626,3 +1626,83 @@ bar
 bar
 </code></pre>
 ````````````````````````````````
+
+
+## [Issue 271](https://github.com/mity/md4c/issues/271)
+
+Inline processing walks the line list and the byte offset in lockstep, but a
+span closer may sit on a *later* line than the line cursor: the code span below
+opens on line 1, holds line 2, and closes on line 3.  Advancing to the next line
+used to rewind the offset to that line's start unconditionally, so the bytes the
+closer had already consumed -- here the closing backtick -- were re-emitted as
+literal text.
+
+```````````````````````````````` example
+`
+foo
+` bar
+.
+<p><code>foo</code>
+bar</p>
+````````````````````````````````
+
+Upstream's own case for the issue, the same shape inside a list item:
+
+```````````````````````````````` example
+* `
+  foo
+  ` bar
+.
+<ul>
+<li><code>foo</code>
+bar</li>
+</ul>
+````````````````````````````````
+
+The rewind was independent of how far the closer reached, so it also affected a
+span held open across three or more lines, a multi-character closer, and a
+closer sitting alone on its line.
+
+```````````````````````````````` example
+`
+foo
+bar
+`   baz
+.
+<p><code>foo bar</code>
+baz</p>
+````````````````````````````````
+
+```````````````````````````````` example
+``
+foo
+`` bar
+.
+<p><code>foo</code>
+bar</p>
+````````````````````````````````
+
+```````````````````````````````` example
+a `
+b
+`
+c
+.
+<p>a <code>b</code>
+
+c</p>
+````````````````````````````````
+
+Container blocks strip their prefix before inline processing, so the same
+shapes were broken inside a blockquote.
+
+```````````````````````````````` example
+> `
+> foo
+> ` bar
+.
+<blockquote>
+<p><code>foo</code>
+bar</p>
+</blockquote>
+````````````````````````````````

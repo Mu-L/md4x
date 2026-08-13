@@ -2325,7 +2325,9 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
             }
 
             line += 1;
-            off = line.*.beg;
+            // Do not skip back: a span closer may already have advanced `off`
+            // past the beginning of this line, and those bytes are consumed.
+            off = @max(off, line.*.beg);
             enforce_hardbreak = 0;
         }
     }
