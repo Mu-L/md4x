@@ -38,8 +38,12 @@ export function parseHtmlWithHighlighting(bytes, highlighter) {
       out += html.slice(pos, block.end);
     } else {
       // Calculate <pre><code...> prefix length to replace the full wrapper
+      // The renderer omits the `language-` prefix when the info string has it.
       const preLen = block.lang
-        ? '<pre><code class="language-'.length + block.lang.length + '">'.length
+        ? '<pre><code class="'.length +
+          (block.lang.startsWith("language-") ? 0 : "language-".length) +
+          block.lang.length +
+          '">'.length
         : "<pre><code>".length;
       out += html.slice(pos, block.start - preLen);
       out += highlighted;

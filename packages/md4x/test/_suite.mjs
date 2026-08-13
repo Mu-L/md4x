@@ -1297,6 +1297,13 @@ export function defineSuite({
       expect(html).not.toContain('<code class="language-js">');
     });
 
+    it("replaces the whole wrapper when the info string is already prefixed", async () => {
+      const html = await renderToHtml("```language-r\nfoo\n```", {
+        highlighter: () => '<pre class="custom">highlighted</pre>',
+      });
+      expect(html).toBe('<pre class="custom">highlighted</pre>');
+    });
+
     it("highlight ranges metadata is preserved", async () => {
       const { blocks } = await collectBlocks(
         "```js {1-3,5,7-9}\na\nb\nc\nd\ne\nf\ng\nh\ni\n```",

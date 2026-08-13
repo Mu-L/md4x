@@ -1706,3 +1706,67 @@ shapes were broken inside a blockquote.
 bar</p>
 </blockquote>
 ````````````````````````````````
+
+
+## [Issue 295](https://github.com/mity/md4c/issues/295)
+
+An info string that already begins with `language-` used to get the prefix a
+second time, yielding `class="language-language-r"`. The prefix is now emitted
+only when the info string does not already carry it.
+
+```````````````````````````````` example
+```language-r
+x <- 1
+```
+
+```r
+x <- 1
+```
+.
+<pre><code class="language-r">x &lt;- 1
+</code></pre>
+<pre><code class="language-r">x &lt;- 1
+</code></pre>
+````````````````````````````````
+
+The match is an exact, case-sensitive byte prefix, so an info string that *is*
+`language-` renders an empty language name, a differently-cased prefix is not
+recognized, and a partial prefix is left alone.
+
+```````````````````````````````` example
+```language-
+x
+```
+
+```Language-R
+x
+```
+
+```lang
+x
+```
+.
+<pre><code class="language-">x
+</code></pre>
+<pre><code class="language-Language-R">x
+</code></pre>
+<pre><code class="language-lang">x
+</code></pre>
+````````````````````````````````
+
+The AST renderer hardcoded the same prefix. Its `language` property keeps the
+raw info string; only the `class` on the `code` node is de-duplicated.
+
+```````````````````````````````` example [no-normalize]
+```language-r
+x <- 1
+```
+
+```r
+x <- 1
+```
+.
+{"nodes":[["pre",{"language":"language-r"},["code",{"class":"language-r"},"x <- 1\n"]],["pre",{"language":"r"},["code",{"class":"language-r"},"x <- 1\n"]]],"frontmatter":{},"meta":{}}
+.
+-t json
+````````````````````````````````

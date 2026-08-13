@@ -1182,8 +1182,13 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
             if (!node.tag_is_dynamic and node.tag_kind == .pre) {
                 jsonWriteStr(w, ",[\"code\",{");
                 if (node.detail.code_lang != null and node.detail.code_lang.?[0] != 0) {
-                    jsonWriteStr(w, "\"class\":\"language-");
-                    jsonWriteEscaped(w, @ptrCast(node.detail.code_lang.?), strlenZ(node.detail.code_lang.?));
+                    const lang = node.detail.code_lang.?;
+                    const lang_size = strlenZ(lang);
+                    jsonWriteStr(w, "\"class\":\"");
+                    // Do not repeat the prefix if the info string already carries it.
+                    if (!std.mem.startsWith(u8, lang[0..lang_size], "language-"))
+                        jsonWriteStr(w, "language-");
+                    jsonWriteEscaped(w, @ptrCast(lang), lang_size);
                     jsonWrite(w, "\"", 1);
                 }
                 jsonWriteStr(w, "},");

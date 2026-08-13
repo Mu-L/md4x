@@ -440,7 +440,10 @@ fn render_open_code_block(r: *MD_HTML, det: *const c.BlockCodeDetail) void {
 
     // If known, output the HTML 5 attribute class="language-LANGNAME".
     if (det.lang.text.len > 0) {
-        render_verbatim_lit(r, " class=\"language-");
+        render_verbatim_lit(r, " class=\"");
+        // Do not repeat the prefix if the info string already carries it.
+        if (!std.mem.startsWith(u8, det.lang.text, "language-"))
+            render_verbatim_lit(r, "language-");
         render_attribute(r, &det.lang, render_html_escaped);
         render_verbatim_lit(r, "\"");
     }
