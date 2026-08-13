@@ -1504,6 +1504,99 @@ export function defineSuite({
       // Filename with backslash and quote should survive JSON parsing
       expect(typeof blocks[0].filename).toBe("string");
     });
+
+    // Regression: the HTML renderer buffers a block component's opening tag
+    // ("<", the tag name, and ` title="` + `"` when a title is present) straight
+    // into its deferred-tag buffer, bypassing render_verbatim -- which used to
+    // be the only place advancing `output_offset`. Every MD_HTML_CODE_META
+    // start/end recorded after a block component was therefore short by those
+    // bytes (cumulatively, across components), so the highlighter received a
+    // misaligned slice and parseHtmlWithHighlighting spliced over surrounding
+    // markup. Both md4x_to_html (wasm) and renderToHtml (napi) always set
+    // MD_HTML_FLAG_CODE_META, so this is the default JS path.
+    describe("code block offsets inside block components", () => {
+      const CODE = "```js\nconst x=1;\n```\n";
+      const PRE = '<pre><code class="language-js">const x=1;\n</code></pre>\n';
+
+      async function highlighted(md) {
+        const codes = [];
+        const html = await renderToHtml(md, {
+          highlighter: (code) => {
+            codes.push(code);
+            return "<HL>";
+          },
+        });
+        return { html, codes };
+      }
+
+      it("control: no component", async () => {
+        const { html, codes } = await highlighted(CODE);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe("<HL>");
+      });
+
+      it("::card", async () => {
+        const md = `::card\ncontent\n\n${CODE}::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe("<card>\n<p>content</p>\n<HL></card>\n");
+        expect(await renderToHtml(md)).toBe(
+          `<card>\n<p>content</p>\n${PRE}</card>\n`,
+        );
+      });
+
+      it("long component name (offset skew scales with the name)", async () => {
+        const md = `::a-very-long-component-name\ncontent\n\n${CODE}::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe(
+          "<a-very-long-component-name>\n<p>content</p>\n<HL></a-very-long-component-name>\n",
+        );
+      });
+
+      it(":::card My Title (title adds 9 more direct bytes)", async () => {
+        const md = `:::card My Title\ncontent\n\n${CODE}:::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe(
+          '<card title="My Title">\n<p>content</p>\n<HL></card>\n',
+        );
+      });
+
+      it("multiple components accumulate no skew", async () => {
+        const md = `::card\na\n::\n\n::note\nb\n\n${CODE}::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe(
+          "<card>\n<p>a</p>\n</card>\n<note>\n<p>b</p>\n<HL></note>\n",
+        );
+      });
+
+      it("nested components", async () => {
+        const md = `:::outer\n::inner\nx\n::\n\n${CODE}:::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe(
+          "<outer>\n<inner>\n<p>x</p>\n</inner>\n<HL></outer>\n",
+        );
+      });
+
+      it("component with YAML frontmatter props", async () => {
+        const md = `::card\n\n---\ntitle: Azure\n---\n\n${CODE}::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe('<card title="Azure">\n<HL></card>\n');
+        expect(await renderToHtml(md)).toBe(
+          `<card title="Azure">\n${PRE}</card>\n`,
+        );
+      });
+
+      it("two code blocks in one component stay aligned", async () => {
+        const md = `::card\n\n${CODE}\n${"```py\nprint(2)\n```\n"}::\n`;
+        const { codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n", "print(2)\n"]);
+      });
+    });
   });
 
   describe("renderToAnsi", () => {

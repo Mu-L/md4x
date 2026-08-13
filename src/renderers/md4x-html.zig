@@ -145,10 +145,35 @@ const MD_HTML = struct {
 // Flush threshold: when the internal buffer reaches this size, emit it.
 const OUT_BUF_THRESHOLD: c.MD_SIZE = 8 * 1024;
 
+// ***  `output_offset` invariant  ***
+//
+// `output_offset` is the number of BODY bytes committed to the caller's output
+// stream so far; MD_HTML_CODE_META.start/.end are snapshots of it. Every byte
+// must be counted EXACTLY ONCE, at the moment it is committed to the
+// caller-bound stream — that is, in `out_buf_append` (buffered or the direct
+// OOM fallback) and in `emit` (direct). Consequently:
+//
+//   * `flush_output` does NOT count: it only drains bytes `out_buf_append`
+//     already counted.
+//   * `render_verbatim` does NOT count: when it is not diverted it delegates to
+//     `out_buf_append`, and when `process_output` HAS been swapped to a capture
+//     callback the bytes are going into `comp_fm_tag`, not to the caller — they
+//     are counted when that buffer is later handed to `emit`. Counting there
+//     too would count them twice.
+//   * `render_code_meta_json` deliberately bypasses both helpers. It is the
+//     trailer emitted after the body, once every recorded offset is final.
+//
+// Counting used to live in `render_verbatim` alone, which missed the bytes
+// `render_open_block_component` appends straight into `comp_fm_tag` ("<", the
+// tag name, ` title="` and `"`) — so every code block after a block component
+// reported offsets short by those bytes, cumulatively.
+
 // Append bytes to the internal output buffer, flushing to real_process_output
 // when the threshold is exceeded. Falls back to a direct call on OOM so output
 // is never silently dropped.
 fn out_buf_append(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
+    if (r.flags & MD_HTML_FLAG_CODE_META != 0)
+        r.output_offset += size;
     if (r.out_size + size > r.out_cap) {
         const new_cap: c.MD_SIZE = r.out_cap + r.out_cap / 2 + size + OUT_BUF_THRESHOLD;
         const p = buf_realloc(r.out_buf, r.out_cap, new_cap);
@@ -176,10 +201,13 @@ fn flush_output(r: *MD_HTML) void {
 }
 
 // Flush the internal buffer, then emit bytes directly via the real callback.
-// Used by direct-output paths (comp_fm_flush_tag, render_code_meta_json) so
-// their output lands in the correct position relative to buffered body content.
+// Used by direct-output paths (comp_fm_flush_tag) so their output lands in the
+// correct position relative to buffered body content. Counts towards
+// `output_offset` — see the invariant above.
 fn emit(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     flush_output(r);
+    if (r.flags & MD_HTML_FLAG_CODE_META != 0)
+        r.output_offset += size;
     r.real_process_output.?(@ptrCast(text), size, r.userdata);
 }
 
@@ -218,13 +246,15 @@ fn render_verbatim(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     // original callback (e.g. component-frontmatter capture), bypass the
     // internal buffer and call the swapped callback directly. Otherwise batch
     // into out_buf.
+    //
+    // Note this function does NOT touch `output_offset`: the buffered branch is
+    // counted by out_buf_append, and the swapped branch is not reaching the
+    // caller at all (it is counted when the capture buffer is emit()-ed).
     if (r.process_output == r.real_process_output) {
         out_buf_append(r, text, size);
     } else {
         r.process_output.?(@ptrCast(text), size, r.userdata);
     }
-    if (r.flags & MD_HTML_FLAG_CODE_META != 0)
-        r.output_offset += size;
 }
 
 fn render_verbatim_lit(r: *MD_HTML, comptime lit: []const u8) void {
@@ -638,19 +668,35 @@ fn comp_fm_tag_capture(text: [*c]const c.MD_CHAR, size: c.MD_SIZE, userdata: ?*a
 // Flush the buffered component open tag. If YAML text was captured,
 // parse it and emit as HTML attributes before closing ">".
 fn comp_fm_flush_tag(r: *MD_HTML) void {
-    if (r.comp_fm_tag == null or r.comp_fm_tag_size == 0)
+    // Reset the deferred-tag state BEFORE the "nothing buffered" early return.
+    // comp_fm_tag_append's -1 (OOM) return is discarded at every call site in
+    // render_open_block_component, so a failure on the very first append leaves
+    // comp_fm_tag_size at 0. With the resets at the end of this function that
+    // early return would latch comp_fm_pending / comp_fm_capturing true for the
+    // rest of the document: the component's ">" would never be emitted while
+    // render_close_block_component still emits "</name>", and every subsequent
+    // frontmatter block would keep accumulating into comp_fm_text.
+    const tag = r.comp_fm_tag;
+    const tag_size = r.comp_fm_tag_size;
+    const text_size = r.comp_fm_text_size;
+    r.comp_fm_tag_size = 0;
+    r.comp_fm_text_size = 0;
+    r.comp_fm_pending = false;
+    r.comp_fm_capturing = false;
+
+    if (tag == null or tag_size == 0)
         return;
 
     // Emit the buffered tag prefix (e.g. "<card ...props").
-    emit(r, r.comp_fm_tag.?, r.comp_fm_tag_size);
+    emit(r, tag.?, tag_size);
 
     // If we captured YAML, parse and emit as attributes.
-    if (r.comp_fm_text != null and r.comp_fm_text_size > 0) {
+    if (r.comp_fm_text != null and text_size > 0) {
         var yp: sys.yaml_parser_t = undefined;
         var event: sys.yaml_event_t = undefined;
 
         if (sys.yaml_parser_initialize(&yp) != 0) {
-            sys.yaml_parser_set_input_string(&yp, @ptrCast(r.comp_fm_text.?), r.comp_fm_text_size);
+            sys.yaml_parser_set_input_string(&yp, @ptrCast(r.comp_fm_text.?), text_size);
 
             // STREAM_START
             if (sys.yaml_parser_parse(&yp, &event) != 0 and event.type == sys.YAML_STREAM_START_EVENT) {
@@ -715,12 +761,6 @@ fn comp_fm_flush_tag(r: *MD_HTML) void {
     }
 
     render_verbatim_lit(r, ">\n");
-
-    // Reset buffers.
-    r.comp_fm_tag_size = 0;
-    r.comp_fm_text_size = 0;
-    r.comp_fm_pending = false;
-    r.comp_fm_capturing = false;
 }
 
 fn render_open_block_component(r: *MD_HTML, det: *const c.BlockComponentDetail) void {
