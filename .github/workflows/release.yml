@@ -35,11 +35,10 @@ jobs:
       - name: Build
         run: zig build --verbose && zig build wasm && zig build wasm-small && zig build napi-all && bun scripts/build-standalone.ts
 
+      # Runs vitest too, against artifacts it verifies are current (see
+      # scripts/js-artifacts.ts) — the tarball published below ships them.
       - name: Tests
         run: bun ./scripts/run-tests.ts
-
-      - name: Test (vitest)
-        run: bun vitest
 
       - name: Publish to npm
         run: npm publish --provenance --access public

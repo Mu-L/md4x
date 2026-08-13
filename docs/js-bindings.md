@@ -253,20 +253,32 @@ The JSON renderer produces a **Comark AST** — a lightweight, array-based forma
 
 ## JS Package Testing
 
-Tests use vitest with a shared test suite (`packages/md4x/test/_suite.mjs`) that validates both NAPI and WASM bindings:
+Tests use vitest with a shared test suite (`packages/md4x/test/_suite.mjs`) that validates the NAPI, WASM and standalone bindings against the same assertions:
 
 ```sh
-pnpm vitest run packages/md4x/test/napi.test.mjs   # NAPI tests
-pnpm vitest run packages/md4x/test/wasm.test.mjs   # WASM tests
+bunx vitest run                                     # all three bindings
+bunx vitest run packages/md4x/test/napi.test.mjs    # NAPI tests
+bunx vitest run packages/md4x/test/wasm.test.mjs    # WASM tests
 ```
+
+**The suites refuse to run against artifacts that do not match `src/`.** `packages/md4x/build/*` and `lib/standalone.mjs` are gitignored build outputs, so `md4x/napi` / `md4x/wasm` / `md4x/standalone` would otherwise happily load a binary built from older sources — or, for a script outside `packages/md4x/`, a **published** `md4x` from `node_modules`. `scripts/js-artifacts.ts` runs as the vitest `globalSetup` and fails the run with the exact rebuild command; `packages/md4x/test/provenance.test.mjs` additionally pins that each bare specifier resolves back into this checkout. Rebuild with:
+
+```sh
+bun run build:js     # wasm + wasm-small + host NAPI + standalone
+bun run check:js     # report only
+```
+
+`bun scripts/run-tests.ts` runs `build:js` and vitest itself, so the full gate needs no separate step. See [.agents/testing.md](../.agents/testing.md#the-js-suites-cannot-run-against-a-stale-or-foreign-artifact).
 
 ## JS Package Benchmarks
 
 Benchmarks use `mitata` and compare against `md4w` and `markdown-it`:
 
 ```sh
-bun packages/md4x/bench/index.mjs
+bun run build:js && bun packages/md4x/bench/index.mjs
 ```
+
+The bench loads the same gitignored artifacts the suites do, but has no `globalSetup` to guard it — build first, or you may be benchmarking a binary from before your change.
 
 ## Workspace Setup
 

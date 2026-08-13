@@ -22,7 +22,8 @@
 
 ```sh
 zig build                       # all artifacts (ReleaseFast); CLI at zig-out/bin/md4x
-bun scripts/run-tests.ts        # full test suite
+bun run build:js                # wasm + host NAPI + standalone (what the JS suites load)
+bun scripts/run-tests.ts        # full test suite (does build:js itself, then runs vitest)
 bash scripts/diff-corpus.sh     # output-parity gate — must diff-clean after any internal change
 bun fmt
 ```
@@ -65,7 +66,9 @@ test/
   pathological-tests.py, prog.py, normalize.py
   fuzzers/            # seed-corpus/ + corpus/
 scripts/
-  run-tests.ts        # Main test runner
+  run-tests.ts        # Main test runner (builds JS artifacts, then every suite incl. vitest)
+  js-artifacts.ts     # Build/freshness/provenance guard for the gitignored JS artifacts
+                      #   (vitest globalSetup — see vitest.config.mjs)
   diff-corpus.sh      # Output-parity harness (sha256 of all 6 formats over the corpus)
   build-standalone.ts # Bundles lib/standalone.mjs (rolldown, gzip+Z85 inlined wasm)
   upstream-sync.ts    # Lists md4c commits newer than .agents/upstream-sync.json
@@ -74,6 +77,7 @@ scripts/
   unicode/            # Unicode data files
 website/              # Docs + playground (Vite + Vue) — pages/, components/, samples/
 build.zig, build.zig.zon
+vitest.config.mjs     # globalSetup: the JS artifact freshness/provenance guard
 .github/workflows/    # ci.yml: build + test (ubuntu-latest, ReleaseSafe + Debug) + Pages deploy
                       # release.yml: build + test + npm publish on tags
 ```

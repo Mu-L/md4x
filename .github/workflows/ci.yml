@@ -45,11 +45,12 @@ jobs:
       - name: Fuzz harness smoke run
         run: zig build fuzz-zig
 
+      # Also rebuilds the JS artifacts the vitest suites load (host NAPI, wasm,
+      # standalone) and runs vitest itself — a no-op here after the Build step
+      # above, but it is what makes the JS suites impossible to run against a
+      # stale binary locally. See scripts/js-artifacts.ts.
       - name: Tests
         run: bun ./scripts/run-tests.ts
-
-      - name: Test (vitest)
-        run: bun vitest
 
       - name: Build Playground
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'

@@ -9,12 +9,14 @@
   ],
   "scripts": {
     "build": "zig build --verbose",
+    "build:js": "bun scripts/js-artifacts.ts build",
     "build:standalone": "zig build wasm-small && bun scripts/build-standalone.ts",
+    "check:js": "bun scripts/js-artifacts.ts check",
     "dev": "cd website && bun run dev",
     "fmt": "prettier --write .",
     "vitest": "vitest",
     "md4x": "zig build && bun packages/md4x/lib/cli.mjs",
-    "test": "bun ./scripts/run-tests.ts && bun vitest",
+    "test": "bun ./scripts/run-tests.ts",
     "bench": "bun packages/md4x/bench/index.mjs",
     "release": "bun scripts/release.ts"
   },

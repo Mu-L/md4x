@@ -54,9 +54,19 @@ import stubs that Zig's `wasm32-wasi` startup references.
 
 ## Regenerating JS artifacts
 
-Both are gitignored and must be rebuilt after source changes:
+`packages/md4x/build/*` and `packages/md4x/lib/standalone.mjs` are gitignored and must be rebuilt
+after source changes. One command covers everything the JS suites load — wasm, ReleaseSmall wasm, the
+**host** NAPI target, and the standalone bundle:
 
 ```sh
-zig build wasm && bun vitest run packages/md4x/test/wasm.test.mjs
-bun run build:standalone && bun vitest run packages/md4x/test/standalone.test.mjs
+bun run build:js
+```
+
+You are not expected to remember: vitest refuses to start when any of them is older than `src/`, and
+names the file plus the command. See
+[testing.md](testing.md#the-js-suites-cannot-run-against-a-stale-or-foreign-artifact). Individually:
+
+```sh
+zig build wasm && bunx vitest run packages/md4x/test/wasm.test.mjs
+bun run build:standalone && bunx vitest run packages/md4x/test/standalone.test.mjs
 ```
