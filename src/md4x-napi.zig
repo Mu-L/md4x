@@ -75,7 +75,7 @@ fn napi_reject_oversized_input(env: c.napi_env, input_size: usize) bool {
 const md4x_render_fn = *const fn (
     [*c]const abi.MD_CHAR,
     abi.MD_SIZE,
-    ?*const fn ([*c]const abi.MD_CHAR, abi.MD_SIZE, ?*anyopaque) void,
+    *const fn ([*c]const abi.MD_CHAR, abi.MD_SIZE, ?*anyopaque) void,
     ?*anyopaque,
     c_uint,
     c_uint,

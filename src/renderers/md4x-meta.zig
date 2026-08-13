@@ -45,7 +45,8 @@ const MD_META_FLAG_DEBUG: c_uint = 0x0001;
 const MD_META_FLAG_SKIP_UTF8_BOM: c_uint = 0x0002;
 const MD_META_FLAG_HEAL: c_uint = 0x0100;
 
-const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
+// Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn.
+const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 // *****************************
 // ***  Internal data types  ***

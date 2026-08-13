@@ -108,7 +108,8 @@ const QUOTE_BAR = "\xe2\x94\x82";
 // Alert bar (UTF-8: left half block U+258C ▌)
 const ALERT_BAR = "\xe2\x96\x8c";
 
-const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
+// Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn.
+const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 // Code block metadata entry (heap-allocated when MD_ANSI_FLAG_CODE_META is set)
 const MD_ANSI_CODE_META = struct {
@@ -156,7 +157,7 @@ const AppendFn = *const fn (*MD_ANSI, [*]const u8, c.MD_SIZE) void;
 // *********************************************
 
 fn render_verbatim(r: *MD_ANSI, text: [*]const u8, size: c.MD_SIZE) void {
-    r.process_output.?(@ptrCast(text), size, r.userdata);
+    r.process_output(@ptrCast(text), size, r.userdata);
     if (r.flags & MD_ANSI_FLAG_CODE_META != 0)
         r.output_offset += size;
 }
@@ -473,34 +474,34 @@ fn ansi_capture_append(text: [*c]const c.MD_CHAR, size: c.MD_SIZE, userdata: ?*a
 fn ansi_emit_json_str(out: ProcessOutputFn, ud: ?*anyopaque, str: [*]const u8, size: c.MD_SIZE) void {
     var i: c.MD_SIZE = 0;
     var beg: c.MD_SIZE = 0;
-    out.?("\"", 1, ud);
+    out("\"", 1, ud);
     while (i < size) : (i += 1) {
         const ch: u8 = str[i];
         if (ch == '"' or ch == '\\' or ch < 0x20) {
             if (i > beg)
-                out.?(@ptrCast(str + beg), i - beg, ud);
+                out(@ptrCast(str + beg), i - beg, ud);
             if (ch == '"' or ch == '\\') {
-                out.?("\\", 1, ud);
-                out.?(@ptrCast(str + i), 1, ud);
+                out("\\", 1, ud);
+                out(@ptrCast(str + i), 1, ud);
             } else if (ch == '\n') {
-                out.?("\\n", 2, ud);
+                out("\\n", 2, ud);
             } else if (ch == '\r') {
-                out.?("\\r", 2, ud);
+                out("\\r", 2, ud);
             } else if (ch == '\t') {
-                out.?("\\t", 2, ud);
+                out("\\t", 2, ud);
             } else if (ch == 0x1b) {
-                out.?("\\u001b", 6, ud);
+                out("\\u001b", 6, ud);
             } else {
                 const hex = "0123456789abcdef";
                 const esc = [_]u8{ '\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0xf] };
-                out.?(&esc, 6, ud);
+                out(&esc, 6, ud);
             }
             beg = i + 1;
         }
     }
     if (i > beg)
-        out.?(@ptrCast(str + beg), i - beg, ud);
-    out.?("\"", 1, ud);
+        out(@ptrCast(str + beg), i - beg, ud);
+    out("\"", 1, ud);
 }
 
 fn render_ansi_code_meta_json(r: *MD_ANSI) void {
@@ -508,41 +509,41 @@ fn render_ansi_code_meta_json(r: *MD_ANSI) void {
     const ud = r.userdata;
     var buf: [64]u8 = undefined;
 
-    out.?(&[_]u8{0}, 1, ud);
-    out.?("[", 1, ud);
+    out(&[_]u8{0}, 1, ud);
+    out("[", 1, ud);
     var i: c_int = 0;
     while (i < r.n_code_blocks) : (i += 1) {
         const m = &r.code_blocks.?[@intCast(i)];
-        if (i > 0) out.?(",", 1, ud);
+        if (i > 0) out(",", 1, ud);
 
         var s = std.fmt.bufPrint(&buf, "{{\"s\":{d},\"e\":{d}", .{ @as(c_uint, @intCast(m.start)), @as(c_uint, @intCast(m.end)) }) catch unreachable;
-        out.?(s.ptr, @intCast(s.len), ud);
+        out(s.ptr, @intCast(s.len), ud);
 
         if (m.lang_size > 0) {
-            out.?(",\"l\":", 5, ud);
+            out(",\"l\":", 5, ud);
             ansi_emit_json_str(out, ud, &m.lang, m.lang_size);
         }
         if (m.filename_size > 0) {
-            out.?(",\"f\":", 5, ud);
+            out(",\"f\":", 5, ud);
             ansi_emit_json_str(out, ud, &m.filename, m.filename_size);
         }
         if (m.highlight_count > 0) {
-            out.?(",\"h\":[", 6, ud);
+            out(",\"h\":[", 6, ud);
             var j: c_uint = 0;
             while (j < m.highlight_count) : (j += 1) {
-                if (j > 0) out.?(",", 1, ud);
+                if (j > 0) out(",", 1, ud);
                 s = std.fmt.bufPrint(&buf, "{d}", .{m.highlights.?[j]}) catch unreachable;
-                out.?(s.ptr, @intCast(s.len), ud);
+                out(s.ptr, @intCast(s.len), ud);
             }
-            out.?("]", 1, ud);
+            out("]", 1, ud);
         }
         if (m.prefix_size > 0) {
-            out.?(",\"i\":", 5, ud);
+            out(",\"i\":", 5, ud);
             ansi_emit_json_str(out, ud, &m.prefix, m.prefix_size);
         }
-        out.?("}", 1, ud);
+        out("}", 1, ud);
     }
-    out.?("]", 1, ud);
+    out("]", 1, ud);
 }
 
 // **************************************
@@ -1197,8 +1198,9 @@ pub fn md_ansi(
         .debug_log = debug_log_callback,
     };
 
-    var render: MD_ANSI = std.mem.zeroes(MD_ANSI);
-    render.process_output = process_output;
+    // zeroInit rather than zeroes: `process_output` is a non-optional function
+    // pointer, which has no zero value.
+    var render: MD_ANSI = std.mem.zeroInit(MD_ANSI, .{ .process_output = process_output });
     render.userdata = userdata;
     render.flags = renderer_flags;
 

@@ -149,6 +149,13 @@ break:
   `= null`, and do not guard the call sites with `if (cb) |f|` instead. `debug_log` stays
   `?*const fn ... = null`, guarded at its single call site (`MD_CTX.log`). `types.noop_parser` is the
   all-no-op table keeping `MD_CTX`'s all-default initializer working for unit tests that never emit.
+- **The renderer sinks follow the same rule.** Every renderer's `process_output` (and the
+  `JsonWriter` / `MD_HTML` fields holding it) is a **non-optional** `*const fn`, because every sink
+  call is unconditional — a null one was a null-function-pointer call, not a way to discard output.
+  `md_heal` was already spelled this way. Do not re-add `?`, and do not guard the call sites.
+  `MD_HTML`'s two sink fields also carry **no default**, so `MD_HTML{}` fails to compile; `MD_ANSI` /
+  `MD_TEXT` / `MD_MARKDOWN` are built with `std.mem.zeroInit(..., .{ .process_output = … })` rather
+  than `std.mem.zeroes`, which has no zero value for a non-optional pointer.
 - Callbacks return `abi.CallbackResult` (`i32`), **not** an error union: the abort contract must carry
   an arbitrary caller-chosen code through, and OOM must stay unified with `-1`.
 - **Abort-code contract:** `md_parse` propagates a NEGATIVE callback code verbatim but returns 0 for a

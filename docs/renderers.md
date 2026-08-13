@@ -7,6 +7,13 @@
 > `*const abi.SpanDetail`, which each renderer resolves with an exhaustive
 > `switch (detail.*)`. `text` takes a `[]const u8` slice, and `debug_log` a
 > `[]const u8` message. See `docs/parser-api.md` for the callback table.
+>
+> **`process_output` is non-optional**, for the same reason the five SAX
+> callbacks are: every renderer's sink is called unconditionally, so a `null`
+> one was a null-function-pointer call (a panic in Debug/ReleaseSafe, undefined
+> behavior in the shipping ReleaseFast build) rather than a way to discard
+> output. A missing sink is now a compile error at the call site. Do not re-add
+> `?`, and do not guard the sink call sites with `if (out) |f|` instead.
 
 ## HTML Renderer API (`src/renderers/md4x-html.zig`)
 
@@ -16,7 +23,7 @@ Convenience library that wraps `md_parse()` and produces HTML output:
 pub fn md_html(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,
@@ -36,7 +43,7 @@ pub const MD_HTML_OPTS = extern struct {
 pub fn md_html_ex(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,
@@ -126,7 +133,7 @@ Renders Markdown into a Comark AST (array-based JSON format):
 pub fn md_ast(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,
@@ -159,7 +166,7 @@ Renders Markdown into ANSI terminal output with escape codes for styling:
 pub fn md_ansi(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,
@@ -248,7 +255,7 @@ Lightweight metadata extractor that parses frontmatter and headings from Markdow
 pub fn md_meta(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,
@@ -295,7 +302,7 @@ Strips markdown formatting and produces plain text output:
 pub fn md_text(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,
@@ -340,7 +347,7 @@ Re-renders the parsed document back to Markdown (normalizing the source syntax):
 pub fn md_markdown(
     input: [*c]const MD_CHAR,
     input_size: MD_SIZE,
-    process_output: ?*const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
     parser_flags: c_uint,
     renderer_flags: c_uint,

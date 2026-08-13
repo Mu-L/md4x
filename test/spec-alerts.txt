@@ -549,3 +549,18 @@ divergence from md4c #320.
 </table>
 </blockquote>
 ````````````````````````````````
+
+## Alert type longer than the renderer's lowercase chunk buffer
+
+The HTML renderer lowercases `[!TYPE]` into a fixed-size stack buffer and emits
+it in chunks. The parser puts no length cap on the type name, so a name longer
+than one chunk must come out whole rather than truncated at the buffer size.
+
+```````````````````````````````` example
+> [!AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]
+> foo
+.
+<blockquote class="alert alert-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
+<p>foo</p>
+</blockquote>
+````````````````````````````````

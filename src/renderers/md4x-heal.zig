@@ -933,9 +933,15 @@ fn heal_katex(buf: *HEAL_BUF) void {
 // ***  Link/image heal    ***
 // ***************************
 
-fn find_matching_open_bracket(text: [*]const u8, close_idx: u32) c_int {
-    var depth: c_int = 0;
-    var i: c_int = @intCast(close_idx);
+// The index type is i64, not c_int: `size` is a u32, so a c_int cursor cannot
+// represent an offset at or past 2 GiB. `@as(c_int, @intCast(size)) - 1` panicked
+// there in Debug/ReleaseSafe and truncated negative under the shipping
+// ReleaseFast, silently turning these healers into no-ops on a >= 2 GiB
+// document. The walks still need a signed cursor (they terminate by stepping
+// past index 0), so widen rather than unsign — see .agents/conventions.md.
+fn find_matching_open_bracket(text: [*]const u8, close_idx: u32) i64 {
+    var depth: i64 = 0;
+    var i: i64 = @intCast(close_idx);
     while (i >= 0) : (i -= 1) {
         const u: u32 = @intCast(i);
         if (text[u] == ']') {
@@ -956,7 +962,7 @@ fn heal_links_and_images(buf: *HEAL_BUF) void {
 
     // Case 1: Incomplete URL — [text](url  (no closing paren)
     {
-        var i: c_int = @as(c_int, @intCast(size)) - 1;
+        var i: i64 = @as(i64, size) - 1;
         while (i >= 1) : (i -= 1) {
             const u: u32 = @intCast(i);
             if (text[u] == '(' and text[u - 1] == ']') {
@@ -993,7 +999,7 @@ fn heal_links_and_images(buf: *HEAL_BUF) void {
 
     // Case 2: Incomplete text — [text  (no closing ])
     {
-        var i: c_int = @as(c_int, @intCast(size)) - 1;
+        var i: i64 = @as(i64, size) - 1;
         while (i >= 0) : (i -= 1) {
             const u: u32 = @intCast(i);
             if (text[u] == '[' and !is_escaped(text, u)) {
@@ -1040,7 +1046,7 @@ fn heal_html_tag(buf: *HEAL_BUF) void {
     const text = buf.data.?;
     const size = buf.size;
 
-    var i: c_int = @as(c_int, @intCast(size)) - 1;
+    var i: i64 = @as(i64, size) - 1;
     while (i >= 0) : (i -= 1) {
         const u: u32 = @intCast(i);
         if (text[u] == '>') return;

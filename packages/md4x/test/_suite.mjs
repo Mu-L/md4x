@@ -1289,6 +1289,27 @@ export function defineSuite({
       expect(comment[2]).toBe("\nMulti-line\ncomment\n");
     });
 
+    // An empty comment used to come out shaped differently depending on where
+    // it appeared: the block path emitted [null,{},""], the inline path
+    // [null,{}]. A consumer reading node[2] saw "" from one and undefined from
+    // the other. Both now carry the (empty) body, so the body slot is always
+    // present -- which is what docs/js-bindings.md documents.
+    it("gives an empty comment a body in both block and inline position", async () => {
+      const block = (await parseAST("<!---->")).nodes[0];
+      expect(block[0]).toBeNull();
+      expect(block[1]).toEqual({});
+      expect(block).toHaveLength(3);
+      expect(block[2]).toBe("");
+
+      const p = (await parseAST("a <!----> b")).nodes[0];
+      expect(p[0]).toBe("p");
+      const inline = p[3];
+      expect(inline[0]).toBeNull();
+      expect(inline[1]).toEqual({});
+      expect(inline).toHaveLength(3);
+      expect(inline[2]).toBe("");
+    });
+
     it("keeps non-comment HTML blocks as html_block", async () => {
       const ast = await parseAST("<div>hello</div>");
       const block = ast.nodes[0];

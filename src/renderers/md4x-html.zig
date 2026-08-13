@@ -79,7 +79,11 @@ pub const MD_HTML_OPTS = extern struct {
     css_url: ?[*:0]const u8 = null,
 };
 
-const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
+// Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn. Every sink
+// call below is unconditional, so a null callback was a null-function-pointer
+// call rather than a no-op; `MD_HTML` therefore carries no default for the two
+// sink fields, making an unset one a compile error at the construction site.
+const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 // AppendFn mirrors `void (*fn_append)(MD_HTML*, const MD_CHAR*, MD_SIZE)`.
 const AppendFn = *const fn (*MD_HTML, [*]const u8, c.MD_SIZE) void;
@@ -97,7 +101,7 @@ const MD_HTML_CODE_META = struct {
 };
 
 const MD_HTML = struct {
-    process_output: ProcessOutputFn = null,
+    process_output: ProcessOutputFn,
     userdata: ?*anyopaque = null,
     flags: c_uint = 0,
     image_nesting_level: c_int = 0,
@@ -136,7 +140,7 @@ const MD_HTML = struct {
     // process_output callback to reduce per-call overhead. `real_process_output`
     // holds the caller's original callback; `process_output` may be temporarily
     // swapped (e.g. to comp_fm_tag_capture) — buffering is bypassed while swapped.
-    real_process_output: ProcessOutputFn = null,
+    real_process_output: ProcessOutputFn,
     out_buf: ?[*]u8 = null,
     out_size: c.MD_SIZE = 0,
     out_cap: c.MD_SIZE = 0,
@@ -180,7 +184,7 @@ fn out_buf_append(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
         if (p == null) {
             // OOM: flush what we have, then emit directly (no buffering).
             flush_output(r);
-            r.real_process_output.?(@ptrCast(text), size, r.userdata);
+            r.real_process_output(@ptrCast(text), size, r.userdata);
             return;
         }
         r.out_buf = p;
@@ -195,7 +199,7 @@ fn out_buf_append(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
 // Emit any buffered bytes via the real callback and reset the buffer.
 fn flush_output(r: *MD_HTML) void {
     if (r.out_size > 0) {
-        r.real_process_output.?(@ptrCast(r.out_buf.?), r.out_size, r.userdata);
+        r.real_process_output(@ptrCast(r.out_buf.?), r.out_size, r.userdata);
         r.out_size = 0;
     }
 }
@@ -208,7 +212,7 @@ fn emit(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     flush_output(r);
     if (r.flags & MD_HTML_FLAG_CODE_META != 0)
         r.output_offset += size;
-    r.real_process_output.?(@ptrCast(text), size, r.userdata);
+    r.real_process_output(@ptrCast(text), size, r.userdata);
 }
 
 // *****************************************
@@ -253,7 +257,7 @@ fn render_verbatim(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     if (r.process_output == r.real_process_output) {
         out_buf_append(r, text, size);
     } else {
-        r.process_output.?(@ptrCast(text), size, r.userdata);
+        r.process_output(@ptrCast(text), size, r.userdata);
     }
 }
 
@@ -919,38 +923,36 @@ fn code_meta_cleanup(r: *MD_HTML) void {
     }
 }
 
-const RawOutFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
-
-fn emit_json_str(out: RawOutFn, ud: ?*anyopaque, str: [*]const u8, size: c.MD_SIZE) void {
+fn emit_json_str(out: ProcessOutputFn, ud: ?*anyopaque, str: [*]const u8, size: c.MD_SIZE) void {
     var i: c.MD_SIZE = 0;
     var beg: c.MD_SIZE = 0;
-    out.?("\"", 1, ud);
+    out("\"", 1, ud);
     while (i < size) : (i += 1) {
         const ch: u8 = str[i];
         if (ch == '"' or ch == '\\' or ch < 0x20) {
             if (i > beg)
-                out.?(@ptrCast(str + beg), i - beg, ud);
+                out(@ptrCast(str + beg), i - beg, ud);
             if (ch == '"' or ch == '\\') {
-                out.?("\\", 1, ud);
-                out.?(@ptrCast(str + i), 1, ud);
+                out("\\", 1, ud);
+                out(@ptrCast(str + i), 1, ud);
             } else if (ch == '\n') {
-                out.?("\\n", 2, ud);
+                out("\\n", 2, ud);
             } else if (ch == '\r') {
-                out.?("\\r", 2, ud);
+                out("\\r", 2, ud);
             } else if (ch == '\t') {
-                out.?("\\t", 2, ud);
+                out("\\t", 2, ud);
             } else {
                 // Other control chars: \u00XX
                 const hex = "0123456789abcdef";
                 const esc = [_]u8{ '\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0xf] };
-                out.?(&esc, 6, ud);
+                out(&esc, 6, ud);
             }
             beg = i + 1;
         }
     }
     if (i > beg)
-        out.?(@ptrCast(str + beg), i - beg, ud);
-    out.?("\"", 1, ud);
+        out(@ptrCast(str + beg), i - beg, ud);
+    out("\"", 1, ud);
 }
 
 fn render_code_meta_json(r: *MD_HTML) void {
@@ -961,50 +963,63 @@ fn render_code_meta_json(r: *MD_HTML) void {
     const ud = r.userdata;
     var buf: [64]u8 = undefined;
 
-    out.?("\x00", 1, ud);
-    out.?("[", 1, ud);
+    out("\x00", 1, ud);
+    out("[", 1, ud);
     var i: usize = 0;
     while (i < @as(usize, @intCast(r.n_code_blocks))) : (i += 1) {
         const m = &r.code_blocks.?[i];
-        if (i > 0) out.?(",", 1, ud);
+        if (i > 0) out(",", 1, ud);
 
         var s = std.fmt.bufPrint(&buf, "{{\"s\":{d},\"e\":{d}", .{ m.start, m.end }) catch unreachable;
-        out.?(s.ptr, @intCast(s.len), ud);
+        out(s.ptr, @intCast(s.len), ud);
 
         if (m.lang_size > 0) {
-            out.?(",\"l\":", 5, ud);
+            out(",\"l\":", 5, ud);
             emit_json_str(out, ud, &m.lang, m.lang_size);
         }
         if (m.filename_size > 0) {
-            out.?(",\"f\":", 5, ud);
+            out(",\"f\":", 5, ud);
             emit_json_str(out, ud, &m.filename, m.filename_size);
         }
         if (m.highlight_count > 0) {
-            out.?(",\"h\":[", 6, ud);
+            out(",\"h\":[", 6, ud);
             var j: c_uint = 0;
             while (j < m.highlight_count) : (j += 1) {
-                if (j > 0) out.?(",", 1, ud);
+                if (j > 0) out(",", 1, ud);
                 s = std.fmt.bufPrint(&buf, "{d}", .{m.highlights.?[j]}) catch unreachable;
-                out.?(s.ptr, @intCast(s.len), ud);
+                out(s.ptr, @intCast(s.len), ud);
             }
-            out.?("]", 1, ud);
+            out("]", 1, ud);
         }
-        out.?("}", 1, ud);
+        out("}", 1, ud);
     }
-    out.?("]", 1, ud);
+    out("]", 1, ud);
 }
 
 fn render_open_alert_block(r: *MD_HTML, det: *const c.BlockAlertDetail) void {
     render_verbatim_lit(r, "<blockquote class=\"alert alert-");
     // Lowercase the type name for the CSS class.
-    if (det.type_name.text.len > 0) {
-        var i: c.MD_SIZE = 0;
-        while (i < det.type_name.size()) : (i += 1) {
-            var ch: u8 = @bitCast(det.type_name.text[i]);
-            if (ch >= 'A' and ch <= 'Z')
-                ch += 32;
-            render_verbatim(r, @ptrCast(&ch), 1);
+    //
+    // Emitted in chunks, not byte by byte: every single-byte render_verbatim
+    // ran a full out_buf_append (capacity check, 1-byte @memcpy, flush-threshold
+    // check) for one character. The parser puts NO length cap on the `[!TYPE]`
+    // name (blocks.zig accepts `[a-zA-Z0-9_-]*` up to the `]`), so this loops
+    // over the buffer rather than assuming the name fits in it — a longer name
+    // takes several chunks and is never truncated.
+    //
+    // The total byte count is unchanged, which is what `output_offset` (see the
+    // invariant above) counts: N one-byte appends and ceil(N/64) chunked ones
+    // both commit exactly N bytes.
+    const name = det.type_name.text;
+    var i: usize = 0;
+    while (i < name.len) {
+        var chunk: [64]u8 = undefined;
+        const n = @min(chunk.len, name.len - i);
+        for (name[i..][0..n], chunk[0..n]) |src, *dst| {
+            dst.* = if (src >= 'A' and src <= 'Z') src + 32 else src;
         }
+        render_verbatim(r, &chunk, @intCast(n));
+        i += n;
     }
     render_verbatim_lit(r, "\">\n");
 }
@@ -1521,9 +1536,10 @@ pub fn md_html_ex(
         return ret;
     }
 
-    var render: MD_HTML = .{};
-    render.process_output = process_output;
-    render.real_process_output = process_output;
+    var render: MD_HTML = .{
+        .process_output = process_output,
+        .real_process_output = process_output,
+    };
     render.userdata = userdata;
     render.flags = renderer_flags;
     render.opts = opts;

@@ -249,7 +249,7 @@ The JSON renderer produces a **Comark AST** — a lightweight, array-based forma
 - Components: `["component-name", {props}, ...children]`
 - Slots: `["template", {"name": "slot-name"}, ...children]`
 - Images: `["img", {"src": "url", "alt": "text"}]` (void, no children)
-- HTML comments: `[null, {}, " comment text "]`
+- HTML comments: `[null, {}, " comment text "]` — the body slot is always present, so an empty comment (`<!---->`) is `[null, {}, ""]` whether it appeared as a block or inline
 
 ## JS Package Testing
 

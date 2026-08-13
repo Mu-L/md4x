@@ -46,7 +46,8 @@ const MD_TEXT_FLAG_DEBUG: c_uint = 0x0001;
 const MD_TEXT_FLAG_SKIP_UTF8_BOM: c_uint = 0x0002;
 const MD_TEXT_FLAG_HEAL: c_uint = 0x0100;
 
-const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
+// Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn.
+const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 const MD_TEXT = struct {
     process_output: ProcessOutputFn,
@@ -71,7 +72,7 @@ const AppendFn = *const fn (*MD_TEXT, [*]const u8, c.MD_SIZE) void;
 // *********************************************
 
 fn render_verbatim(r: *MD_TEXT, text: [*]const u8, size: c.MD_SIZE) void {
-    r.process_output.?(@ptrCast(text), size, r.userdata);
+    r.process_output(@ptrCast(text), size, r.userdata);
 }
 
 fn render_verbatim_lit(r: *MD_TEXT, comptime lit: []const u8) void {
@@ -662,8 +663,9 @@ pub fn md_text(
         .debug_log = debug_log_callback,
     };
 
-    var render: MD_TEXT = std.mem.zeroes(MD_TEXT);
-    render.process_output = process_output;
+    // zeroInit rather than zeroes: `process_output` is a non-optional function
+    // pointer, which has no zero value.
+    var render: MD_TEXT = std.mem.zeroInit(MD_TEXT, .{ .process_output = process_output });
     render.userdata = userdata;
     render.flags = renderer_flags;
 

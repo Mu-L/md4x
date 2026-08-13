@@ -72,7 +72,8 @@ const MD_AST_FLAG_HEAL: c_uint = 0x0100;
 // jsonAtMaxDepth().
 const JSON_MAX_DEPTH: usize = 1024;
 
-const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
+// Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn.
+const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 // ============================================================================
 // Shared JSON writer + YAML-to-JSON helpers (md4x-json.zig) and component
@@ -924,15 +925,22 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
                     return -1;
                 }
                 cnode.?.tag_kind = .comment;
-                if (cbody.len > 0) {
-                    const dup = dupNts(cbody);
-                    if (dup == null) {
-                        jsonNodeFree(cnode);
-                        ctx.err = 1;
-                        return -1;
-                    }
-                    cnode.?.text_value = dup;
+                // Unconditionally, even for an empty body: a comment node is
+                // `[null,{},"body"]` in every other case, and the block-level
+                // path (jsonLeaveBlock) already emits `[null,{},""]` for
+                // `<!---->`. Guarding on `cbody.len > 0` here made the inline
+                // spelling of the same comment `[null,{}]` instead, so a
+                // consumer reading `node[2]` got `""` from one and `undefined`
+                // from the other. The three-element shape is the documented one
+                // (docs/js-bindings.md) and the one that keeps the body slot
+                // present for every comment.
+                const dup = dupNts(cbody);
+                if (dup == null) {
+                    jsonNodeFree(cnode);
+                    ctx.err = 1;
+                    return -1;
                 }
+                cnode.?.text_value = dup;
                 jsonAppendChild(ctx, cnode.?);
                 return 0;
             }

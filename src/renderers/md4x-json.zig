@@ -24,7 +24,12 @@ const sys = @cImport({
     @cInclude("yaml.h");
 });
 
-pub const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
+// Non-optional, like the five required SAX callbacks: every sink here is called
+// unconditionally, so a null one was a null-function-pointer call (a panic in
+// Debug/ReleaseSafe, UB in the shipping ReleaseFast). Making it non-optional
+// turns "forgot the sink" into a compile error instead. `md_heal` already took
+// a non-optional `*const fn`; this is the rest of the subsystem catching up.
+pub const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 // Streaming JSON writer (mirrors the C JSON_WRITER struct).
 pub const JsonWriter = struct {
@@ -33,7 +38,7 @@ pub const JsonWriter = struct {
 };
 
 pub fn json_write(w: *JsonWriter, data: [*]const u8, size: c.MD_SIZE) void {
-    w.process_output.?(@ptrCast(data), size, w.userdata);
+    w.process_output(@ptrCast(data), size, w.userdata);
 }
 
 // Write a sentinel-terminated string slice (length known at the type level).

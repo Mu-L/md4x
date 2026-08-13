@@ -66,7 +66,7 @@ fn accept(input: []const u8) bool {
 /// Shared driver for the renderer harnesses. `render` is one of the `md_*`
 /// entry points; all share the same signature.
 fn fuzzRenderer(
-    comptime render: fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void, ?*anyopaque, c_uint, c_uint) c_int,
+    comptime render: fn ([*c]const c.MD_CHAR, c.MD_SIZE, *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void, ?*anyopaque, c_uint, c_uint) c_int,
     smith: *std.testing.Smith,
 ) !void {
     @disableInstrumentation();

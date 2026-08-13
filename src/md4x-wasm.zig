@@ -97,7 +97,7 @@ export fn md4x_result_size() callconv(.c) c_uint {
 const md4x_render_fn = *const fn (
     [*c]const c.MD_CHAR,
     c.MD_SIZE,
-    ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void,
+    *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void,
     ?*anyopaque,
     c_uint,
     c_uint,
