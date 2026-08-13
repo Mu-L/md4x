@@ -32,6 +32,7 @@
   "files": [
     "build",
     "!build/md4x-small.wasm",
+    "!build/md4x-safe.wasm",
     "lib",
     "README.md"
   ],

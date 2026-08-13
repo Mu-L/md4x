@@ -140,6 +140,18 @@ pub fn build(b: *std.Build) void {
         .out_name = "md4x-small.wasm",
         .optimize = .ReleaseSmall,
     });
+    // Safety-checked variant of the shipped binary. Nothing loads it by
+    // default: it is the one to point a JS reproducer at when a WASM run
+    // produces wrong output, because ReleaseFast turns an out-of-bounds index
+    // or a bad @intCast into silent corruption of the linear memory, while
+    // ReleaseSafe traps at the offending instruction instead.
+    _ = addWasm(b, pkg_opts, .{
+        .step_name = "wasm-safe",
+        .step_desc = "Build WASM library (ReleaseSafe, for debugging)",
+        .out_name = "md4x-safe.wasm",
+        .optimize = .ReleaseSafe,
+        .strip = false,
+    });
     _ = addNapi(b, pkg_opts);
 }
 
@@ -165,6 +177,9 @@ const WasmVariant = struct {
     step_desc: []const u8,
     out_name: []const u8,
     optimize: std.builtin.OptimizeMode,
+    /// Overrides `PkgBuildOptions.strip` when set (the debugging variant keeps
+    /// its symbols, so a trap's wasm stack trace carries Zig function names).
+    strip: ?bool = null,
 };
 
 fn addWasm(b: *std.Build, opts: PkgBuildOptions, variant: WasmVariant) *std.Build.Step {
@@ -192,7 +207,7 @@ fn addWasm(b: *std.Build, opts: PkgBuildOptions, variant: WasmVariant) *std.Buil
             .target = wasm_target,
             .optimize = variant.optimize,
             .link_libc = true,
-            .strip = opts.strip,
+            .strip = variant.strip orelse opts.strip,
             .single_threaded = true,
         }),
     });

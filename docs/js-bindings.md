@@ -3,13 +3,50 @@
 ## WASM Target
 
 ```sh
-zig build wasm                     # packages/md4x/build/md4x.wasm       (ReleaseFast, ~310K)
-zig build wasm-small               # packages/md4x/build/md4x-small.wasm (ReleaseSmall, ~252K)
+zig build wasm                     # packages/md4x/build/md4x.wasm       (ReleaseFast, ~378K)
+zig build wasm-small               # packages/md4x/build/md4x-small.wasm (ReleaseSmall, ~285K)
+zig build wasm-safe                # packages/md4x/build/md4x-safe.wasm  (ReleaseSafe, unstripped, ~2.2M)
 ```
 
 Builds a `wasm32-wasi` WASM binary with exported functions. `wasm` is the binary shipped as an asset and loaded by `md4x/wasm` (`ReleaseFast`, `pkg_optimize` in `build.zig`, shared with the NAPI targets); `wasm-small` is the `ReleaseSmall` variant inlined into the `md4x/standalone` bundle (it is excluded from the npm tarball, since it ships inside that module). The WASM module requires minimal WASI imports (`fd_close`, `fd_seek`, `fd_write`, `proc_exit`) which can be stubbed for browser use.
 
-> **Runtime requirement:** both binaries are built with the **`simd128`** feature (WebAssembly fixed-width SIMD), which `src/scan.zig` uses for its byte scans. That sets a floor of **Chrome 91+, Firefox 89+, Safari 16.4+ (March 2023), Node 16.4+**, and Bun/Deno of any version. Older engines cannot instantiate the module at all — `WebAssembly.instantiate` rejects rather than degrading. It buys +4-5% on Node and +12-22% on Bun across `renderToHtml` / `renderToAST` / `renderToText`; see `build.zig`'s `addWasm` to turn it off if you need to support an older engine.
+### The safety-checked variant
+
+`md4x-safe.wasm` exists for debugging and is loaded by nothing: `bun run build:js` does not build it, no export maps to it, and it is excluded from the npm tarball. Under `ReleaseFast` an out-of-bounds index, a bad `@intCast` or an integer overflow silently corrupts the linear memory and surfaces (if at all) as wrong output much later; under `ReleaseSafe` each one traps at the offending instruction. So when a WASM run misbehaves, re-run the reproducer against this binary:
+
+```js
+import { readFile } from "node:fs/promises";
+import { init, renderToHtml } from "md4x/wasm";
+
+await init({ wasm: await readFile("packages/md4x/build/md4x-safe.wasm") });
+```
+
+It is byte-for-byte identical in output to `md4x.wasm` and roughly a quarter slower (see the table below) — fine for a reproducer, which is why the shipped binary stays `ReleaseFast`.
+
+Two properties make it usable from the same loader:
+
+- **Same WASI import surface.** `src/md4x-wasm.zig` installs a `std.debug.FullPanic` handler that reports through the renderers' libc-stdio stderr and then `@trap()`s. Std's default handler would instead report through `std.debug`'s stderr writer and stack-trace machinery, pulling ~25 further WASI imports (`clock_res_get`, `path_open`, `fd_prestat_get`, …) into the module; `lib/wasm/common.mjs` stubs only the handful the ReleaseFast build needs, so the binary would fail to instantiate with a `LinkError`. A panic therefore prints `MD4X: <message>` to stderr and surfaces in JS as `RuntimeError: unreachable`.
+- **Unstripped** (`.strip = false` on this variant only), so the trap's wasm stack frames carry Zig function names, and the DWARF sections let a source-level wasm debugger step through `src/`. That is where the ~2.2 MB comes from; the code itself is ~427 KB.
+
+### Profile tradeoffs
+
+All three binaries are the same `wasm32-wasi` + `simd128` module built at a different optimize level, and all three produce **identical output** (verified on the bench fixture across `renderToHtml` / `renderToAST`). They differ only in speed and size:
+
+| Profile                   | Step                   |    Raw | gzip -9 |  `renderToHtml` |   `renderToAST` | Instantiate |
+| ------------------------- | ---------------------- | -----: | ------: | --------------: | --------------: | ----------: |
+| `ReleaseFast` (shipped)   | `zig build wasm`       | 378 KB |  126 KB | 10.3 µs (1.00×) | 14.2 µs (1.00×) |      1.2 ms |
+| `ReleaseSmall` (compact)  | `zig build wasm-small` | 285 KB |  106 KB | 11.8 µs (1.15×) | 20.2 µs (1.42×) |      1.0 ms |
+| `ReleaseSafe` (debug aid) | `zig build wasm-safe`  | 2.2 MB |  749 KB | 13.6 µs (1.32×) | 20.2 µs (1.42×) |      1.9 ms |
+
+Medium bench fixture (`packages/md4x/bench/_fixtures.mjs`), Bun 1.3 on an i7-10700K, best-of-10 rounds after warm-up; times are per call, so the JS↔WASM copy is included in every number.
+
+Reading it:
+
+- **`ReleaseSmall` buys 93 KB raw / 20 KB gzipped** for 15% on HTML and 42% on AST. That is the right trade only for `md4x/standalone`, where the binary ships inside the JS bundle as a Z85 string and every byte is download weight; `md4x/wasm` fetches a `.wasm` asset once and keeps the speed.
+- **`ReleaseSafe` costs ~32% on HTML** and the same 42% on AST. The size column is misleading: 1.8 MB of it is DWARF. Stripped, the safety checks themselves cost only ~50 KB over `ReleaseFast` (427 KB raw / 143 KB gzipped) — the binary is big because it is meant to be debugged, not shipped.
+- Instantiate time tracks code size, not optimize level, and stays ~1–2 ms in all three — it is not a reason to pick a profile.
+
+> **Runtime requirement:** all three binaries are built with the **`simd128`** feature (WebAssembly fixed-width SIMD), which `src/scan.zig` uses for its byte scans. That sets a floor of **Chrome 91+, Firefox 89+, Safari 16.4+ (March 2023), Node 16.4+**, and Bun/Deno of any version. Older engines cannot instantiate the module at all — `WebAssembly.instantiate` rejects rather than degrading. It buys +4-5% on Node and +12-22% on Bun across `renderToHtml` / `renderToAST` / `renderToText`; see `build.zig`'s `addWasm` to turn it off if you need to support an older engine.
 
 > **Note on WASM performance:** The WASM target is built `ReleaseFast` (same as NAPI), but it is consistently slower than the native NAPI binding (roughly 3x on `renderToHtml`, 2x on `parseAST` for the medium fixture) due to the WebAssembly runtime plus the cost of copying input/output across the JS↔WASM memory boundary on every call. Renderer-side allocation optimizations (e.g. the AST arena, HTML output buffering) help the native path more than WASM, since wasm's linear-memory allocator has a different cost profile than the system `malloc`. Prefer NAPI where raw throughput matters; WASM is the portable fallback for non-Node environments.
 

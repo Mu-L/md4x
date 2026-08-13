@@ -30,6 +30,27 @@ const std = @import("std");
 const c = @import("abi");
 // Parser + renderers live in this artifact's module graph (Phase 4a).
 const lib = @import("lib.zig");
+const diag = @import("renderers/md4x-diag.zig");
+
+// Panic handler for the safety-checked wasm builds (`zig build wasm-safe`,
+// `-Doptimize=Debug`). ReleaseFast has no live panic path, but as soon as the
+// safety checks are on, std's default handler is reachable, and it reports
+// through `std.debug`'s stderr writer + stack-trace machinery, which pulls ~25
+// extra WASI imports (`clock_res_get`, `path_open`, `fd_prestat_get`, …) into
+// the module. `packages/md4x/lib/wasm/common.mjs` stubs only the six the
+// ReleaseFast build needs, so the safe binary would fail to instantiate with a
+// `LinkError` instead of being the debugging aid it exists to be — the same
+// hazard documented in `renderers/md4x-diag.zig`.
+//
+// So: report the message through the renderers' libc-stdio stderr (fd 2, i.e.
+// `fd_write`, which the loader already provides) and `@trap()`. In JS the trap
+// surfaces as a `RuntimeError: unreachable`; `wasm-safe` is built unstripped,
+// so its stack frames carry Zig function names.
+fn wasmPanic(msg: []const u8, _: ?usize) noreturn {
+    diag.logMessage(msg);
+    @trap();
+}
+pub const panic = std.debug.FullPanic(wasmPanic);
 
 // We manage the result/output buffer memory with libc malloc/realloc/free so
 // that the JS-side md4x_free(md4x_result_ptr()) (which frees the result buffer)

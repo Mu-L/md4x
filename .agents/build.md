@@ -24,11 +24,18 @@ The project can also be consumed as a Zig package dependency via `build.zig.zon`
 | CLI                | `zig build`                           | `zig-out/bin/md4x`                    |
 | WASM               | `zig build wasm` (ReleaseFast)        | `packages/md4x/build/md4x.wasm`       |
 | WASM (small)       | `zig build wasm-small` (ReleaseSmall) | `packages/md4x/build/md4x-small.wasm` |
+| WASM (safe)        | `zig build wasm-safe` (ReleaseSafe)   | `packages/md4x/build/md4x-safe.wasm`  |
 | NAPI (9 platforms) | `zig build napi-all -Dnapi-include=…` | `packages/md4x/build/md4x.*.node`     |
 
 `md4x-small.wasm` is inlined into the `md4x/standalone` bundle and excluded from the npm tarball
 (`!build/md4x-small.wasm` in `files`). See [js-bindings.md](../docs/js-bindings.md) for the full
 NAPI target list and the standalone build pipeline.
+
+`md4x-safe.wasm` is a debugging aid, not a shipped artifact: nothing loads it, `build:js` does not
+build it, and it is excluded from the tarball too. Reach for it when a WASM run misbehaves —
+ReleaseFast turns an out-of-bounds index or a bad `@intCast` into silent linear-memory corruption,
+while ReleaseSafe traps at the offending instruction. Point a reproducer at it with
+`init({ wasm: await readFile("packages/md4x/build/md4x-safe.wasm") })`.
 
 ## Module graph
 
