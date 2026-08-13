@@ -39,10 +39,12 @@
     "prepack": "cd ../.. && zig build --verbose && zig build wasm && zig build wasm-small && bun scripts/build-standalone.ts"
   },
   "devDependencies": {
+    "@ox-content/napi": "^2.81.0",
     "markdown-it": "^14.1.1",
     "markdown-it-mdc": "^0.2.12",
     "md4w": "^0.2.7",
     "md4x-c": "npm:md4x@latest",
-    "mitata": "^1.0.34"
+    "mitata": "^1.0.34",
+    "satteri": "^0.9.5"
   }
 }

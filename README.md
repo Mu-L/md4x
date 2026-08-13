@@ -9,7 +9,7 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 
 ## Features
 
-- **Fast** — **~9x** faster than markdown-it
+- **Fast** — **~8x** faster than markdown-it
 - **CLI** — Render local files, remote URLs, GitHub repos, npm packages
 - **Small** — **~100KB** gzip WASM binary works in Node.js and Browser
 - **Multi-format output** — HTML, JSON AST, ANSI terminal, plain text, markdown, metadata
@@ -146,34 +146,46 @@ cpu: Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz
 runtime: bun 1.3.14 (x64-linux)
 
 benchmark                        avg (min … max) p75 / p99    (min … top 1%)
-md4x.napi (renderToHtml)            6.61 µs/iter   6.68 µs   6.69 µs ▄▁▂▁▂▂▂▅█▅█
-md4x.wasm (renderToHtml)           14.70 µs/iter  15.15 µs  28.74 µs █▅▃▂▂▁▁▁▁▁▁
-md4w (renderToHtml)                18.56 µs/iter  19.82 µs  37.28 µs ▇█▆▃▃▂▂▁▁▁▁
-markdown-it (renderToHtml)         59.43 µs/iter  57.07 µs 171.51 µs █▃▂▂▁▁▁▁▁▁▁
-markdown-exit (renderToHtml)       56.74 µs/iter  55.75 µs 112.25 µs ▂█▃▁▁▁▂▁▁▁▁
+md4x.napi (renderToHtml)            6.84 µs/iter   6.89 µs   7.01 µs ▂█▂▄▄▂▅▄▂▂▄
+md4x.wasm (renderToHtml)           14.75 µs/iter  15.20 µs  29.38 µs █▆▄▂▂▁▁▁▁▁▁
+md4w (renderToHtml)                17.07 µs/iter  17.65 µs  39.78 µs ██▄▂▁▁▁▁▁▁▁
+markdown-it (renderToHtml)         54.38 µs/iter  53.77 µs 122.02 µs ▅█▂▂▂▂▁▁▁▁▁
+markdown-exit (renderToHtml)       53.24 µs/iter  52.64 µs 105.82 µs ▃█▂▂▁▁▁▁▁▁▁
+satteri (renderToHtml)             25.59 µs/iter  26.40 µs  43.70 µs ▄█▆▃▂▁▁▁▁▁▁
+ox-content (renderToHtml)          10.87 µs/iter  10.98 µs  11.09 µs ▃▃▁▁▅▁▅▁█▁▃
 
 summary
   md4x.napi (renderToHtml)
-   2.22x faster than md4x.wasm (renderToHtml)
-   2.81x faster than md4w (renderToHtml)
-   8.59x faster than markdown-exit (renderToHtml)
-   8.99x faster than markdown-it (renderToHtml)
+   1.59x faster than ox-content (renderToHtml)
+   2.16x faster than md4x.wasm (renderToHtml)
+   2.5x faster than md4w (renderToHtml)
+   3.74x faster than satteri (renderToHtml)
+   7.79x faster than markdown-exit (renderToHtml)
+   7.95x faster than markdown-it (renderToHtml)
 
-md4x.napi (parseAST) (medium)      21.98 µs/iter  22.31 µs  22.43 µs ▅▁█▁▅▅█▁▁██
-md4x.wasm (parseAST) (medium)      36.79 µs/iter  37.58 µs  66.48 µs ▅█▆▃▂▁▁▁▁▁▁
-md4w (parseAST) (medium)           29.55 µs/iter  30.64 µs  50.68 µs ▇█▇▃▂▁▁▁▁▁▁
-markdown-it (parseAST) (medium)    35.81 µs/iter  35.64 µs  37.76 µs ▂▁█▂▄▁▁▁▁▂▂
-markdown-exit (parseAST) (medium)  35.33 µs/iter  35.67 µs  36.35 µs ▆▁▁▆▃▃▃█▁▁▃
+md4x.napi (parseAST) (medium)      22.56 µs/iter  23.77 µs  24.89 µs ▃█▆▁▃▃▁▃▁▃▃
+md4x.wasm (parseAST) (medium)      36.44 µs/iter  37.98 µs  58.69 µs ▅▇█▄▃▂▂▁▁▁▁
+md4w (parseAST) (medium)           29.40 µs/iter  30.76 µs  50.24 µs ▇█▇▄▂▂▁▁▁▁▁
+markdown-it (parseAST) (medium)    40.33 µs/iter  41.40 µs  73.95 µs ▃█▄▂▂▂▁▁▁▁▁
+markdown-exit (parseAST) (medium)  36.96 µs/iter  36.70 µs  38.13 µs ▃▁▁▆▃█▃▆▁▁▃
+satteri (parseAST) (medium)        21.56 µs/iter  21.86 µs  40.67 µs ▃█▃▂▂▁▁▁▁▁▁
+ox-content (parseAST) (medium)     22.75 µs/iter  23.12 µs  25.86 µs █▅▁▁▂▁▁▂▁▁▂
 
 summary
-  md4x.napi (parseAST) (medium)
-   1.34x faster than md4w (parseAST) (medium)
-   1.61x faster than markdown-exit (parseAST) (medium)
-   1.63x faster than markdown-it (parseAST) (medium)
-   1.67x faster than md4x.wasm (parseAST) (medium)
+  satteri (parseAST) (medium)
+   1.05x faster than md4x.napi (parseAST) (medium)
+   1.06x faster than ox-content (parseAST) (medium)
+   1.36x faster than md4w (parseAST) (medium)
+   1.69x faster than md4x.wasm (parseAST) (medium)
+   1.71x faster than markdown-exit (parseAST) (medium)
+   1.87x faster than markdown-it (parseAST) (medium)
 ```
 
-Note: markdown-it parser returns an array of tokens while md4x returns nested comark AST.
+Notes:
+
+- The `parseAST` trio at the top (satteri, md4x.napi, ox-content) sits within ~6% of each other, which is inside run-to-run noise on this machine — repeat runs reorder them. Treat them as tied; the clear gaps are further down the list.
+- The parsers do not all return the same thing: markdown-it yields a flat array of tokens where md4x returns a nested comark AST, satteri's mdast carries full `position` data on every node, and ox-content hands back the tree as a JSON string (the bench `JSON.parse`s it so every entry ends at a materialized tree).
+- ox-content ships with GFM off, so the bench passes `{ gfm: true }` to put it on the same fixture as the rest.
 
 </details>
 
