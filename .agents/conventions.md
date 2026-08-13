@@ -14,11 +14,11 @@ Do not hand-write `if (n >= alloc) { … realloc … }`.
 
 Three buffer flavors, each with its own helper family:
 
-| Kind                                                                                                                                                        | Helper                                                    | Notes                                                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The eight typed growable arrays (`marks`, `containers`, `ref_defs`, `block_component_info`, `slot_info`, `block_alert_info`, `inline_attrs`, `brace_pairs`) | `std.ArrayListUnmanaged(T)` over `c_allocator`            | `.append(c_allocator, …)`, `.clearRetainingCapacity()`, `.deinit(c_allocator)`, index via `.items[i]`. Depth is `ctx.nContainers()` / `ctx.nMarks()`. |
-| Raw byte arenas the parser reinterprets as typed records (`block_bytes`, the ref-def hashtable array, `MD_REF_DEF_LIST` flexible-array buckets)             | `util.arena_alloc` / `arena_realloc` / `arena_free`       | 16-byte aligned, mirroring libc `max_align_t`. `arena_realloc` returns null on OOM and leaves the old block intact.                                   |
-| Typed scratch buffers (`md_build_attribute`'s `text`/`substr_*`, `process.zig`'s `pipe_offs`/`align_arr`/code-`meta`)                                       | `util.alloc_array_a` / `realloc_array_a` / `free_array_a` | `[*c]T` in/out, element-count tracked.                                                                                                                |
+| Kind                                                                                                                                                                        | Helper                                                    | Notes                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The nine typed growable arrays (`marks`, `containers`, `ref_defs`, `footnote_defs`, `block_component_info`, `slot_info`, `block_alert_info`, `inline_attrs`, `brace_pairs`) | `std.ArrayListUnmanaged(T)` over `c_allocator`            | `.append(c_allocator, …)`, `.clearRetainingCapacity()`, `.deinit(c_allocator)`, index via `.items[i]`. Depth is `ctx.nContainers()` / `ctx.nMarks()`. |
+| Raw byte arenas the parser reinterprets as typed records (`block_bytes`, the ref-def hashtable array, `MD_REF_DEF_LIST` flexible-array buckets)                             | `util.arena_alloc` / `arena_realloc` / `arena_free`       | 16-byte aligned, mirroring libc `max_align_t`. `arena_realloc` returns null on OOM and leaves the old block intact.                                   |
+| Typed scratch buffers (`md_build_attribute`'s `text`/`substr_*`, `process.zig`'s `pipe_offs`/`align_arr`/code-`meta`)                                                       | `util.alloc_array_a` / `realloc_array_a` / `free_array_a` | `[*c]T` in/out, element-count tracked.                                                                                                                |
 
 Rules that apply across all three:
 
@@ -36,7 +36,9 @@ Rules that apply across all three:
   **zero-length guard** too (`n == 0` → null string, size 0): `Allocator.alloc(0)` short-circuits the
   vtable and returns a non-null `maxInt(usize)` sentinel, unlike C's `malloc(0)`.
 - **Teardown order:** the ref-def hashtable indexes into `ctx.ref_defs`, so `md_free_ref_def_hashtable`
-  runs **before** `md_free_ref_defs`.
+  runs **before** `md_free_ref_defs`. The footnote pair has the same dependency, and
+  `md_free_footnote_defs` encodes it internally (hashtable, then the owned `content_lines`
+  arrays, then the list).
 - `ptr_stack` entries (merged inline-link titles, stored in a dummy mark by `md_mark_store_ptr`) are
   freed by `inlines.md_mark_free_ptr`, which reads the length back out of the same mark's `prev`
   field — the size `md_resolve_links` already writes there for the emission path.
@@ -98,7 +100,9 @@ abort code, not a flag).
   per file, not fourteen per-flag aliases. Do not reintroduce loose `MD_MARK_*` consts, and do **not**
   make it a `packed struct(u8)`: the upper bits are deliberately overloaded per mark type (`0x20` is
   `emph_oc` / `autolink` / `valid_permissive_autolink` / `has_nested_brackets` depending on
-  `mark.ch`; `0x40` is both `emph_mod3_0` and `autolink_missing_mailto`). The values are frozen.
+  `mark.ch`; `0x40` is `emph_mod3_0`, `autolink_missing_mailto` **and** `footnote_ref` — the
+  last only ever set on a `'['`, which never carries either of the other two). The values are
+  frozen.
 - **`MD_BLOCK.getType()` vs `typeIsRaw()`:** `getType()` decodes the stored byte with `@enumFromInt`
   and is only valid on a real block header. `md_analyze_line`'s two-blank-lines hack peeks at the tail
   of `block_bytes`, which may be an `MD_LINE` payload instead — use `typeIsRaw(.li)` there (a raw byte

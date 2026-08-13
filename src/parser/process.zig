@@ -36,6 +36,7 @@ const md_text_with_null_replacement = util.md_text_with_null_replacement;
 const memmove = util.memmove;
 
 const md_build_ref_def_hashtable = refdefs.md_build_ref_def_hashtable;
+const md_build_footnote_def_hashtable = refdefs.md_build_footnote_def_hashtable;
 
 const mdText = inlines.mdText;
 const md_analyze_inlines = inlines.md_analyze_inlines;
@@ -88,7 +89,14 @@ pub fn md_analyze_table_alignment(ctx: *MD_CTX, beg: OFF, end: OFF, align_arr: [
     while (n_align > 0) {
         var index: usize = 0; // index into align_map[]
 
-        while (ctx.ch(off) != '-') off += 1;
+        // Bounded by the row end, like the three sibling loops (upstream ecbb091).
+        // `n_align` is the dash-group count `md_is_table_underline` measured on
+        // this very row, so today it cannot outrun the groups present — but
+        // `ctx.ch()` indexes a `[*c]` pointer, which Zig does not bounds-check in
+        // ANY build mode, so an unbounded scan here would walk past the input
+        // buffer entirely rather than panic. Running out of row now yields the
+        // default alignment instead of an over-read.
+        while (off < end and ctx.ch(off) != '-') off += 1;
         if (off > beg and ctx.ch(off - 1) == ':') index |= 1;
         while (off < end and ctx.ch(off) == '-') off += 1;
         if (off < end and ctx.ch(off) == ':') index |= 2;
@@ -596,8 +604,37 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
     else
         is_in_tight_list = (ctx.containers.items[@intCast(ctx.nContainers() - 1)].is_loose == 0);
 
-    const btype = block.getType();
     const block_lines: [*]const MD_BLOCK = @ptrCast(block);
+
+    // For a large table, check its density: if it is too low, suppress the
+    // interpretation as a table, as a safety measure against quadratic output
+    // size explosion (every missing cell is "helpfully" filled in with an empty
+    // <td></td>). See https://github.com/mity/md4c/issues/345. Upstream mutates
+    // `block->type` in place; demoting the local is equivalent, because the
+    // only later reader of the stored type (`md_process_all_blocks`) uses it
+    // just to pick MD_LINE vs MD_VERBATIMLINE, and `.table` and `.p` agree.
+    const raw_btype = block.getType();
+    const btype = blk: {
+        if (raw_btype != c.BlockType.table) break :blk raw_btype;
+
+        const n_cols: usize = block.bits.data;
+        const n_rows: usize = block.n_lines;
+        // n_cols > 32 also keeps the divisions below well defined.
+        if (n_cols <= 32 or n_rows <= 4096 / n_cols) break :blk raw_btype;
+
+        // Input bytes encoding the table: every line's contents, plus one byte
+        // per line break. `usize` because Zig traps on overflow in Debug.
+        const lines = @as([*]const MD_LINE, @ptrCast(@alignCast(block_lines + 1)))[0..n_rows];
+        var table_input_size: usize = n_rows;
+        for (lines) |l| table_input_size += l.end - l.beg;
+
+        if (table_input_size / n_cols < n_rows / 4) {
+            // Fewer than ~25% as many input bytes as cells to be generated.
+            ctx.log("Suppressing too sparse table (see https://github.com/mity/md4c/issues/345)");
+            break :blk c.BlockType.p;
+        }
+        break :blk raw_btype;
+    };
 
     // The detail is the union arm named by the runtime block type; the switch
     // below fills in whatever fields that arm actually carries. (This replaces
@@ -688,7 +725,8 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
 
 // md4x.c ~5814.
 pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
-    var byte_off: c_int = 0;
+    // Walks the block_bytes arena, so it tracks ctx.n_block_bytes's type.
+    var byte_off: usize = 0;
     var ret: c_int = 0;
     var comp_name_build: MD_ATTRIBUTE_BUILD = .{};
     var clean_component_detail: bool = false;
@@ -697,7 +735,7 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
     ctx.containers.clearRetainingCapacity();
 
     while (byte_off < ctx.n_block_bytes) {
-        const block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + @as(usize, @intCast(byte_off))));
+        const block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + byte_off));
         const btype = block.getType();
         // The detail is the union arm named by the runtime block type (see
         // md_process_leaf_block); the switch below fills in its fields.
@@ -785,7 +823,14 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
                     return ret;
                 }
 
-                if (btype == c.BlockType.ul or btype == c.BlockType.ol or btype == c.BlockType.quote or btype == c.BlockType.component or btype == c.BlockType.template or btype == c.BlockType.alert)
+                // The `> 0` is hardening, not a known repro: the block layer is
+                // believed to keep openers and closers balanced. But `items.len`
+                // is a `usize`, so a lone closer would wrap it to ~0 and
+                // `md_process_leaf_block`'s `containers.items[nContainers() - 1]`
+                // would then read out of a slice whose length is nonsense —
+                // unchecked in the shipping ReleaseFast build.
+                if ((btype == c.BlockType.ul or btype == c.BlockType.ol or btype == c.BlockType.quote or btype == c.BlockType.component or btype == c.BlockType.template or btype == c.BlockType.alert) and
+                    ctx.containers.items.len > 0)
                     ctx.containers.items.len -= 1;
             }
 
@@ -819,9 +864,9 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
             }
 
             if (btype == c.BlockType.code or btype == c.BlockType.html or btype == c.BlockType.frontmatter)
-                byte_off += @intCast(block.n_lines * @sizeOf(MD_VERBATIMLINE))
+                byte_off += @as(usize, block.n_lines) * @sizeOf(MD_VERBATIMLINE)
             else
-                byte_off += @intCast(block.n_lines * @sizeOf(MD_LINE));
+                byte_off += @as(usize, block.n_lines) * @sizeOf(MD_LINE);
         }
 
         if (clean_component_detail) {
@@ -918,6 +963,63 @@ pub fn md_process_line(ctx: *MD_CTX, p_pivot_line: *[*c]const MD_LINE_ANALYSIS, 
     return ret;
 }
 
+// Emit one footnote definition. Its body is re-parsed here, outside the block
+// loop, from the heap-copied MD_LINE array captured by md_is_footnote_definition
+// — so it is NOT wrapped in a `p` block: the inlines land directly inside
+// `footnote_def`, matching md4c. md4c a8b0d3e.
+fn md_process_footnote_def(ctx: *MD_CTX, def: *const types.MD_FOOTNOTE_DEF) c_int {
+    var label_build: MD_ATTRIBUTE_BUILD = .{};
+    var det: c.BlockFootnoteDefDetail = .{ .id = def.index, .ref_count = def.ref_count };
+    var ret: c_int = 0;
+
+    md_build_attribute(ctx, def.label, def.label_size, 0, &det.label, &label_build) catch {
+        ret = -1;
+    };
+
+    if (ret == 0) {
+        const d: c.BlockDetail = .{ .footnote_def = det };
+        ret = mdEnterBlock(ctx, &d);
+        if (ret == 0) ret = md_process_normal_block_contents(ctx, def.content_lines);
+        if (ret == 0) ret = mdLeaveBlock(ctx, &d);
+    }
+
+    md_free_attribute(ctx, &label_build);
+    return ret;
+}
+
+fn md_footnote_def_less_by_index(_: void, a: types.MD_FOOTNOTE_DEF, b: types.MD_FOOTNOTE_DEF) bool {
+    // Unreferenced defs (index == 0) always sort after referenced ones.
+    if (a.index == 0) return false;
+    if (b.index == 0) return true;
+    return a.index < b.index;
+}
+
+// Emit the footnote definitions that were actually referenced, in
+// first-reference order, wrapped in one `footnote_def_section`. Called from
+// md_process_doc AFTER md_process_all_blocks — this deferred emission is why the
+// definition lines are copied to the heap rather than left in the block arena,
+// which md_process_all_blocks has already consumed by now. md4c a8b0d3e.
+fn md_process_footnote_defs(ctx: *MD_CTX) c_int {
+    if (ctx.footnote_defs.items.len == 0 or ctx.next_footnote_index == 0)
+        return 0;
+
+    // Sort by index so emission follows reference order. Sorting in place is
+    // safe: every lookup is done by now, and md_free_footnote_defs only needs
+    // the array's bounds (unchanged), not its order.
+    std.sort.pdq(types.MD_FOOTNOTE_DEF, ctx.footnote_defs.items, {}, md_footnote_def_less_by_index);
+
+    var ret = mdEnterBlock(ctx, &.{ .footnote_def_section = {} });
+    if (ret != 0) return ret;
+
+    for (ctx.footnote_defs.items) |*def| {
+        if (def.index == 0) break;
+        ret = md_process_footnote_def(ctx, def);
+        if (ret != 0) return ret;
+    }
+
+    return mdLeaveBlock(ctx, &.{ .footnote_def_section = {} });
+}
+
 // md4x.c ~7942.
 pub fn md_process_doc(ctx: *MD_CTX) c_int {
     var pivot_line: [*c]const MD_LINE_ANALYSIS = &md_dummy_blank_line;
@@ -946,12 +1048,22 @@ pub fn md_process_doc(ctx: *MD_CTX) c_int {
 
     ret = md_build_ref_def_hashtable(ctx);
     if (ret < 0) return ret;
+    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) {
+        ret = md_build_footnote_def_hashtable(ctx);
+        if (ret < 0) return ret;
+    }
 
     // Process all blocks.
     ret = md_leave_child_containers(ctx, 0);
     if (ret < 0) return ret;
     ret = md_process_all_blocks(ctx);
     if (ret < 0) return ret;
+
+    // Emit the referenced footnote definitions, in reference order.
+    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) {
+        ret = md_process_footnote_defs(ctx);
+        if (ret < 0) return ret;
+    }
 
     ret = mdLeaveBlock(ctx, &.{ .doc = {} });
     if (ret != 0) return ret;

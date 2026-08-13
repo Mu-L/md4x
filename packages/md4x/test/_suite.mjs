@@ -67,6 +67,29 @@ export function defineSuite({
       expect(await renderToHtml("~~strike~~")).toContain("<del>strike</del>");
     });
 
+    it("supports highlight", async () => {
+      expect(await renderToHtml("==hit==")).toContain("<mark>hit</mark>");
+      expect(await renderToHtml("==hit=={.warn}")).toContain(
+        '<mark class="warn">hit</mark>',
+      );
+    });
+
+    it("supports footnotes", async () => {
+      const html = await renderToHtml("Text[^1] twice[^1].\n\n[^1]: The note.");
+      expect(html).toContain('<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>');
+      expect(html).toContain('<section class="footnotes">');
+      expect(html).toContain('<li id="fn-1">');
+      expect(html).toContain(
+        '<a href="#fnref-1-2" class="footnote-backref">&#8617;</a>',
+      );
+      // Unreferenced definitions are consumed, never emitted.
+      expect(await renderToHtml("Body.\n\n[^u]: unused")).toBe(
+        "<p>Body.</p>\n",
+      );
+      // An unknown label stays literal text.
+      expect(await renderToHtml("See [^nope].")).toBe("<p>See [^nope].</p>\n");
+    });
+
     it("supports task lists", async () => {
       expect(await renderToHtml("- [x] done\n- [ ] todo")).toContain(
         'type="checkbox"',
@@ -244,6 +267,19 @@ export function defineSuite({
       const strong = p[2];
       expect(strong[0]).toBe("strong");
       expect(strong[2]).toBe("bold");
+    });
+
+    it("parses footnotes as footnotes > footnote nodes", async () => {
+      const ast = await parseAST("Text[^a].\n\n[^a]: The note.");
+      const ref = ast.nodes[0][3];
+      expect(ref[0]).toBe("footnote-ref");
+      expect(ref[1]).toEqual({ id: 1, refId: 1, label: "a" });
+      const section = ast.nodes[1];
+      expect(section[0]).toBe("footnotes");
+      const def = section[2];
+      expect(def[0]).toBe("footnote");
+      expect(def[1]).toEqual({ id: 1, label: "a", refCount: 1 });
+      expect(def[2]).toBe("The note.");
     });
 
     it("parses code block as pre > code", async () => {
@@ -1297,6 +1333,13 @@ export function defineSuite({
       expect(html).not.toContain('<code class="language-js">');
     });
 
+    it("replaces the whole wrapper when the info string is already prefixed", async () => {
+      const html = await renderToHtml("```language-r\nfoo\n```", {
+        highlighter: () => '<pre class="custom">highlighted</pre>',
+      });
+      expect(html).toBe('<pre class="custom">highlighted</pre>');
+    });
+
     it("highlight ranges metadata is preserved", async () => {
       const { blocks } = await collectBlocks(
         "```js {1-3,5,7-9}\na\nb\nc\nd\ne\nf\ng\nh\ni\n```",
@@ -1438,6 +1481,20 @@ export function defineSuite({
     it("handles heading with inline code", async () => {
       const meta = await parseMeta("# Using `parseMeta` API");
       expect(meta.headings[0].text).toBe("Using parseMeta API");
+    });
+
+    // md4c #325: a numeric entity naming a surrogate is not a Unicode scalar
+    // value, and U+0000 is not one either. Both must become a single U+FFFD --
+    // not CESU-8 (which TextDecoder would turn into three U+FFFD) and not a
+    // raw NUL byte. The meta renderer is not reachable from the CLI, so this
+    // is the only regression pin on its copy of the UTF-8 encoder.
+    it("replaces surrogate and NUL entities in a heading with U+FFFD", async () => {
+      const meta = await parseMeta(
+        "# &#xD7FF; &#xD800; &#xDBFF; &#xDC00; &#xDFFF; &#xE000; &#x10FFFF; &#x110000; &#0; &#55296;",
+      );
+      expect(meta.headings[0].text).toBe(
+        "\uD7FF \uFFFD \uFFFD \uFFFD \uFFFD \uE000 \u{10FFFF} \uFFFD \uFFFD \uFFFD",
+      );
     });
 
     it("ignores component frontmatter", async () => {

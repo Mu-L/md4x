@@ -1,5 +1,5 @@
 // MD4X: Markdown parser for C
-// (http://github.com/unjs/md4x)
+// (https://github.com/unjs/md4x)
 //
 // Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
 //
@@ -34,6 +34,7 @@ const c = @import("abi");
 const md4x = @import("../md4x.zig");
 const entity = @import("../entity.zig");
 const heal = @import("md4x-heal.zig");
+const scan = @import("../scan.zig");
 const sys = @cImport({
     @cInclude("stdio.h");
 });
@@ -71,6 +72,10 @@ const ANSI_UNDERLINE = "\x1b[4m";
 const ANSI_UNDERLINE_OFF = "\x1b[24m";
 const ANSI_STRIKETHROUGH = "\x1b[9m";
 const ANSI_STRIKE_OFF = "\x1b[29m";
+// Highlight (`==x==`). Reverse video rather than a background colour: it is the
+// only spelling that stays legible on both light and dark terminal themes.
+const ANSI_REVERSE = "\x1b[7m";
+const ANSI_REVERSE_OFF = "\x1b[27m";
 
 const ANSI_COLOR_BLUE = "\x1b[34m";
 const ANSI_COLOR_CYAN = "\x1b[36m";
@@ -160,6 +165,92 @@ fn render_verbatim_lit(r: *MD_ANSI, comptime lit: []const u8) void {
     render_verbatim(r, lit.ptr, @intCast(lit.len));
 }
 
+// Document bytes are never handed to a terminal verbatim. A C0 control byte
+// coming out of the source document is *executed* by the terminal, not shown:
+// ESC opens a CSI/OSC/DCS sequence, BEL and ESC-backslash terminate an OSC
+// string, CR/BS rewrite the line already printed. Every path that copies
+// document-derived text into the output goes through render_sanitized (body
+// text) or render_url_ctrl_escaped (OSC 8 link destinations) instead of
+// render_verbatim; render_verbatim stays for the renderer's own literals.
+//
+// This is independent of MD_ANSI_FLAG_NO_COLOR, which gates only the renderer's
+// own escape codes -- with the document's own controls neutralised here, that
+// flag now really does yield the plain-text output docs/renderers.md promises.
+//
+// Substitution rule for body text: the offending byte becomes its Unicode
+// "control picture" (U+2400 + ch, U+2421 for DEL). One input byte in, one
+// character cell out, so table columns and code-block indentation keep their
+// alignment -- which stripping would break and caret notation (`^[`, two cells)
+// would break differently -- and the reader still sees which byte was there.
+// TAB and LF are passed through: the renderer emits them itself as layout and
+// neither can begin a control sequence.
+fn render_sanitized(r: *MD_ANSI, data: [*]const u8, size: c.MD_SIZE) void {
+    var beg: c.MD_SIZE = 0;
+    var off: c.MD_SIZE = 0;
+
+    while (true) {
+        // The `lt` threshold covers the whole C0 range in one vector compare;
+        // TAB/LF are the two members filtered back out here.
+        off = @intCast(scan.indexOfAnyPos("\x7f", 0x20, data, off, size));
+        while (off < size and (data[off] == '\t' or data[off] == '\n'))
+            off = @intCast(scan.indexOfAnyPos("\x7f", 0x20, data, off + 1, size));
+
+        if (off > beg)
+            render_verbatim(r, data + beg, off - beg);
+        if (off >= size)
+            break;
+
+        const cp: c_uint = if (data[off] == 0x7f) 0x2421 else 0x2400 + @as(c_uint, data[off]);
+        // U+2400..U+2421 all encode as three UTF-8 bytes.
+        const pic = [_]u8{
+            @intCast(0xe0 | (cp >> 12)),
+            @intCast(0x80 | ((cp >> 6) & 0x3f)),
+            @intCast(0x80 | (cp & 0x3f)),
+        };
+        render_verbatim(r, &pic, 3);
+
+        off += 1;
+        beg = off;
+    }
+}
+
+// Link destinations are interpolated into an OSC 8 hyperlink
+// (ESC ] 8 ; ; URL ESC backslash). An OSC string ends at BEL or ST and xterm
+// aborts it on the other C0 controls, so a control byte in the destination
+// closes the sequence early and hands everything after it to the terminal as a
+// fresh command -- the `\033]0;title\007` window-title attack. Escaping cannot
+// be done *inside* an OSC string, so the bytes are removed from the URL
+// instead: percent-encode them, which is what the HTML renderer already does
+// for href="..." and is also the only legal spelling of them in a URI
+// (RFC 3986), so the hyperlink keeps working rather than being dropped.
+//
+// Bytes >= 0x20 are left alone. Unlike HTML there is no quoted attribute here
+// to break out of, so they are inert, and percent-encoding them the way
+// md4x-html.zig's render_url_escaped does would rewrite every existing
+// hyperlink. Raw 0x80-0x9F are likewise left alone: in the UTF-8 terminals this
+// renderer targets they are continuation bytes of a legitimate non-ASCII URL,
+// not C1 controls.
+fn render_url_ctrl_escaped(r: *MD_ANSI, data: [*]const u8, size: c.MD_SIZE) void {
+    const hex_chars = "0123456789ABCDEF";
+    var beg: c.MD_SIZE = 0;
+    var off: c.MD_SIZE = 0;
+
+    while (true) {
+        off = @intCast(scan.indexOfAnyPos("\x7f", 0x20, data, off, size));
+
+        if (off > beg)
+            render_verbatim(r, data + beg, off - beg);
+        if (off >= size)
+            break;
+
+        const esc = [_]u8{ '%', hex_chars[data[off] >> 4], hex_chars[data[off] & 0xf] };
+        render_verbatim(r, &esc, 3);
+
+        off += 1;
+        beg = off;
+    }
+}
+
 fn render_ansi(r: *MD_ANSI, comptime code: []const u8) void {
     if (r.flags & MD_ANSI_FLAG_NO_COLOR == 0)
         render_verbatim_lit(r, code);
@@ -242,7 +333,11 @@ fn render_utf8_codepoint(r: *MD_ANSI, codepoint: c_uint, fn_append: AppendFn) vo
         utf8[3] = @intCast(0x80 + ((codepoint >> 0) & 0x3f));
     }
 
-    if (0 < codepoint and codepoint <= 0x10ffff)
+    // Surrogates (U+D800..U+DFFF) are not Unicode scalar values, so encoding
+    // them as an ordinary 3-byte sequence yields malformed UTF-8. CommonMark
+    // requires them -- like U+0000 -- to be rendered as U+FFFD.
+    if (0 < codepoint and codepoint <= 0x10ffff and
+        (codepoint < 0xd800 or codepoint > 0xdfff))
         fn_append(r, &utf8, @intCast(n))
     else
         fn_append(r, &utf8_replacement_char, 3);
@@ -670,7 +765,7 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
                 render_ansi_ptr(r, color.?);
                 render_verbatim_lit(r, ALERT_BAR ++ " ");
                 render_ansi(r, ANSI_BOLD);
-                render_verbatim(r, title.ptr, @intCast(title.len));
+                render_sanitized(r, title.ptr, @intCast(title.len));
                 render_ansi(r, ANSI_BOLD_OFF);
                 render_ansi(r, ANSI_COLOR_DEFAULT);
                 render_newline(r);
@@ -694,7 +789,7 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             render_verbatim_lit(r, ALERT_BAR ++ " ");
             render_ansi(r, ANSI_BOLD);
             if (det.type_name.text.len > 0)
-                render_verbatim(r, det.type_name.text.ptr, det.type_name.size());
+                render_sanitized(r, det.type_name.text.ptr, det.type_name.size());
             render_ansi(r, ANSI_BOLD_OFF);
             render_ansi(r, ANSI_COLOR_DEFAULT);
             render_newline(r);
@@ -704,6 +799,27 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
 
         .template => {
             // Transparent — content renders normally within parent component.
+        },
+
+        .footnote_def_section => {
+            // Set off the definitions from the body with a rule, the same one
+            // that separates a table head from its body.
+            render_separator(r);
+            r.need_newline = false;
+            render_indent(r);
+            render_ansi(r, ANSI_DIM);
+            render_verbatim_lit(r, HORIZONTAL_RULE);
+            render_ansi(r, ANSI_DIM_OFF);
+            render_newline(r);
+        },
+
+        .footnote_def => |*d| {
+            render_indent(r);
+            render_ansi(r, ANSI_DIM);
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "[{d}] ", .{d.id}) catch unreachable;
+            render_verbatim(r, s.ptr, @intCast(s.len));
+            render_ansi(r, ANSI_DIM_OFF);
         },
     }
 
@@ -818,6 +934,14 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .template => {
             // Transparent — no output needed.
         },
+
+        .footnote_def_section => {
+            r.need_newline = true;
+        },
+
+        .footnote_def => {
+            render_newline(r);
+        },
     }
 
     return 0;
@@ -840,7 +964,7 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
             // OSC 8 hyperlink: makes text clickable in supported terminals
             if (r.flags & MD_ANSI_FLAG_NO_COLOR == 0 and a.href.text.len > 0) {
                 render_verbatim_lit(r, ANSI_HYPERLINK_OPEN);
-                render_attribute(r, &a.href, render_verbatim);
+                render_attribute(r, &a.href, render_url_ctrl_escaped);
                 render_verbatim_lit(r, ANSI_HYPERLINK_SEP);
             }
             render_ansi(r, ANSI_LINK);
@@ -850,11 +974,22 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         },
         .code => render_ansi(r, ANSI_COLOR_CYAN),
         .del => render_ansi(r, ANSI_STRIKETHROUGH),
+        .mark => render_ansi(r, ANSI_REVERSE),
         .latexmath => render_ansi(r, ANSI_COLOR_YELLOW),
         .latexmath_display => render_ansi(r, ANSI_COLOR_YELLOW),
         .wikilink => render_ansi(r, ANSI_LINK),
         .component => render_ansi(r, ANSI_COLOR_CYAN),
         .span => {}, // Transparent: no special styling
+        // Self-contained span: the whole marker is emitted here. Only the
+        // numeric id reaches the terminal — no document-derived bytes — so
+        // there is nothing for render_sanitized to strip.
+        .footnote_ref => |*d| {
+            render_ansi(r, ANSI_DIM);
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "[{d}]", .{d.id}) catch unreachable;
+            render_verbatim(r, s.ptr, @intCast(s.len));
+            render_ansi(r, ANSI_DIM_OFF);
+        },
     }
 
     return 0;
@@ -882,7 +1017,7 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
             if (r.flags & MD_ANSI_FLAG_SHOW_URLS != 0 and a.href.text.len > 0 and !a.is_autolink) {
                 render_ansi(r, ANSI_LINK_URL);
                 render_verbatim_lit(r, " (");
-                render_attribute(r, &a.href, render_verbatim);
+                render_attribute(r, &a.href, render_url_ctrl_escaped);
                 render_verbatim_lit(r, ")");
                 render_ansi(r, ANSI_RESET);
             }
@@ -890,11 +1025,13 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .img => {},
         .code => render_ansi(r, ANSI_COLOR_DEFAULT),
         .del => render_ansi(r, ANSI_STRIKE_OFF),
+        .mark => render_ansi(r, ANSI_REVERSE_OFF),
         .latexmath => render_ansi(r, ANSI_COLOR_DEFAULT),
         .latexmath_display => render_ansi(r, ANSI_COLOR_DEFAULT),
         .wikilink => render_ansi(r, ANSI_RESET),
         .component => render_ansi(r, ANSI_COLOR_DEFAULT),
         .span => {}, // Transparent: no special styling
+        .footnote_ref => {}, // enter_span already emitted the marker.
     }
 
     return 0;
@@ -933,7 +1070,9 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
         },
 
         .entity => {
-            render_entity(r, text, size, render_verbatim);
+            // A numeric character reference decodes to an arbitrary code point,
+            // so `&#27;` is a raw ESC unless the decoded bytes are sanitized too.
+            render_entity(r, text, size, render_sanitized);
         },
 
         .code => {
@@ -950,16 +1089,16 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
                         render_verbatim_lit(r, "  ");
                         r.need_indent = false;
                     }
-                    render_verbatim(r, text, size);
+                    render_sanitized(r, text, size);
                 }
             } else {
                 // Inline code span
-                render_verbatim(r, text, size);
+                render_sanitized(r, text, size);
             }
         },
 
         else => {
-            render_verbatim(r, text, size);
+            render_sanitized(r, text, size);
         },
     }
 

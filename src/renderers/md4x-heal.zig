@@ -1,5 +1,5 @@
 // MD4X: Markdown parser for C
-// (http://github.com/unjs/md4x)
+// (https://github.com/unjs/md4x)
 //
 // Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
 //
@@ -66,8 +66,19 @@ fn buf_init(buf: *HEAL_BUF, initial_cap: u32) void {
 
 fn buf_append(buf: *HEAL_BUF, s: [*]const u8, len: u32) void {
     if (len == 0 or buf.err != 0) return;
-    if (buf.size +% len > buf.cap) {
-        const new_cap: u32 = buf.cap +% buf.cap / 2 +% len +% 64;
+    // `+%` here used to DEFINE the wrap it was supposed to guard against: once
+    // `size + len` passed 2^32 the test read false, no realloc happened, and the
+    // @memcpy below wrote past the end of a buffer that was never grown — a plain
+    // heap overflow, well-defined even in ReleaseSafe. Fail instead: `err` is
+    // what md_heal already turns into a clean -1.
+    const needed: u32 = std.math.add(u32, buf.size, len) catch {
+        buf.err = 1;
+        return;
+    };
+    if (needed > buf.cap) {
+        // Saturating so the 1.5x step cannot wrap; @max so a saturated-but-short
+        // step still covers the demand.
+        const new_cap: u32 = @max(buf.cap +| buf.cap / 2 +| len +| 64, needed);
         const old = buf.data.?[0..buf.cap];
         const p = c_allocator.realloc(old, new_cap) catch {
             buf.err = 1;
@@ -78,7 +89,7 @@ fn buf_append(buf: *HEAL_BUF, s: [*]const u8, len: u32) void {
     }
     const dst = buf.data.? + buf.size;
     @memcpy(dst[0..len], s[0..len]);
-    buf.size +%= len;
+    buf.size = needed;
 }
 
 fn buf_append_ch(buf: *HEAL_BUF, c: u8) void {
@@ -1024,7 +1035,10 @@ pub fn md_heal(
         return 0;
     }
 
-    buf_init(&buf, input_size +% 64);
+    // Saturating: `+%` wrapped to a 63-byte allocation for an input within 64
+    // bytes of 4 GiB. At the ceiling the allocation simply fails and md_heal
+    // returns -1; buf_append's own checked growth covers the rest.
+    buf_init(&buf, input_size +| 64);
     if (buf.data == null) return -1;
 
     buf_append(&buf, input, input_size);
@@ -1059,4 +1073,54 @@ pub fn md_heal(
 
     buf_free(&buf);
     return 0;
+}
+
+// ***************************
+// ***  Tests              ***
+// ***************************
+
+// `buf_append` used to compute its own bounds check with explicitly wrapping
+// operators, so past 2^32 bytes it *defined* the wrap it existed to prevent:
+// `buf.size +% len > buf.cap` read false, no realloc happened, and the @memcpy
+// wrote `len` bytes past a buffer that was never grown. `+%` is well-defined
+// even in ReleaseSafe, so no build mode caught it.
+//
+// The real boundary needs >4 GiB of buffered output, which the CLI now refuses
+// at the input and wasm32 cannot reach at all, so the counter is seeded instead.
+// This file is reachable from `src/fuzz.zig` (via `lib.zig`), so the case runs
+// under `zig build fuzz-zig`.
+test "buf_append: the size counter cannot wrap past its own capacity check" {
+    var buf: HEAL_BUF = undefined;
+    buf_init(&buf, 64);
+    defer buf_free(&buf);
+    try std.testing.expect(buf.data != null);
+
+    // Ordinary appends are unchanged, including a grow whose 1.5x step is
+    // shorter than the demand (@max covers it).
+    buf_append(&buf, "abc", 3);
+    try std.testing.expectEqual(@as(u32, 3), buf.size);
+    try std.testing.expectEqual(@as(c_int, 0), buf.err);
+
+    const big = [_]u8{'z'} ** 1000;
+    buf_append(&buf, &big, big.len);
+    try std.testing.expectEqual(@as(u32, 1003), buf.size);
+    try std.testing.expectEqual(@as(c_int, 0), buf.err);
+    try std.testing.expect(buf.cap >= 1003);
+    try std.testing.expectEqualStrings("abc", buf.data.?[0..3]);
+
+    // The boundary: one byte short of 2^32, plus two. Must set `err` — which
+    // md_heal turns into a clean -1 — and leave the buffer untouched.
+    const saved_cap = buf.cap;
+    buf.size = std.math.maxInt(u32) - 1;
+    buf_append(&buf, "xy", 2);
+    try std.testing.expectEqual(@as(c_int, 1), buf.err);
+    try std.testing.expectEqual(std.math.maxInt(u32) - 1, buf.size);
+    try std.testing.expectEqual(saved_cap, buf.cap);
+
+    // `err` latches, so every later append is a no-op and md_heal reports -1.
+    buf_append(&buf, "abc", 3);
+    try std.testing.expectEqual(@as(c_int, 1), buf.err);
+
+    buf.size = 1003;
+    buf.err = 0;
 }

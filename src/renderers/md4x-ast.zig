@@ -1,5 +1,5 @@
 // MD4X: Markdown parser for C
-// (http://github.com/unjs/md4x)
+// (https://github.com/unjs/md4x)
 //
 // Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
 //
@@ -108,6 +108,9 @@ const TagKind = enum {
     math_display,
     html_block,
     frontmatter,
+    footnote_section,
+    footnote_def,
+    footnote_ref,
 };
 
 // Detail variants. The C version uses a union; since every dispatch checks the
@@ -154,6 +157,11 @@ const Detail = struct {
     tmpl_name: ?[*:0]u8 = null,
     // alert
     alert_type_name: ?[*:0]u8 = null,
+    // footnote-def / footnote-ref
+    footnote_id: c_uint = 0,
+    footnote_ref_id: c_uint = 0,
+    footnote_ref_count: c_uint = 0,
+    footnote_label: ?[*:0]u8 = null,
 };
 
 const JsonNode = struct {
@@ -389,6 +397,11 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
         .component => tag = null, // handled below
         .template => tag = null, // handled below
         .alert => tag = "alert",
+        // Comark shape rather than upstream's <section class="footnotes"><ol>:
+        // an MDC consumer wants the semantic nodes, and renderToHtml still
+        // produces the <section>/<ol>/<li> markup from the same SAX stream.
+        .footnote_def_section => tag = "footnotes",
+        .footnote_def => tag = "footnote",
     }
 
     // Dispatch on the detail union, so a dynamic component whose name
@@ -468,6 +481,8 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
         .frontmatter => n.tag_kind = .frontmatter,
         .template => n.tag_kind = .template,
         .alert => n.tag_kind = .alert,
+        .footnote_def_section => n.tag_kind = .footnote_section,
+        .footnote_def => n.tag_kind = .footnote_def,
         else => n.tag_kind = .other,
     }
 
@@ -509,6 +524,11 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
         },
         .th, .td => |*d| {
             n.detail.td_align = @intCast(@intFromEnum(d.@"align"));
+        },
+        .footnote_def => |*d| {
+            n.detail.footnote_id = d.id;
+            n.detail.footnote_ref_count = d.ref_count;
+            n.detail.footnote_label = jsonAttrToStr(&d.label);
         },
         else => {},
     }
@@ -600,11 +620,13 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .img => tag = "img",
             .code => tag = "code",
             .del => tag = "del",
+            .mark => tag = "mark",
             .latexmath => tag = "math",
             .latexmath_display => tag = "math-display",
             .wikilink => tag = "wikilink",
             .u => tag = "u",
             .span => tag = "span",
+            .footnote_ref => tag = "footnote-ref",
             // `.component` is resolved above; the arm only exists to keep the
             // switch exhaustive without an `unreachable` (AGENTS.md: prefer a
             // defensive guard, since `unreachable` is UB in ReleaseFast).
@@ -625,6 +647,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .latexmath => .math,
             .latexmath_display => .math_display,
             .wikilink => .wikilink,
+            .footnote_ref => .footnote_ref,
             else => .other,
         };
 
@@ -661,7 +684,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
                     }
                 }
             },
-            .em, .strong, .code, .del, .u => |*d| {
+            .em, .strong, .code, .del, .u, .mark => |*d| {
                 // These spans may carry trailing {attrs}; an empty raw_attrs
                 // means there were none.
                 if (d.raw_attrs.len > 0) {
@@ -672,6 +695,11 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
                 }
             },
             .latexmath, .latexmath_display => {},
+            .footnote_ref => |*d| {
+                n.detail.footnote_id = d.id;
+                n.detail.footnote_ref_id = d.ref_id;
+                n.detail.footnote_label = jsonAttrToStr(&d.label);
+            },
             .component => {}, // resolved above
         }
     }
@@ -1099,6 +1127,30 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
                 has_prop = @intFromBool(jsonWriteYamlProps(w, @ptrCast(node.text_value.?), node.text_size) > 0);
             }
         },
+        .footnote_def => {
+            var buf: [32]u8 = undefined;
+            _ = sys.snprintf(&buf, buf.len, "\"id\":%u", node.detail.footnote_id);
+            jsonWriteStrZ(w, @ptrCast(&buf));
+            if (node.detail.footnote_label != null) {
+                jsonWriteStr(w, ",\"label\":");
+                jsonWriteString(w, @ptrCast(node.detail.footnote_label.?), strlenZ(node.detail.footnote_label.?));
+            }
+            _ = sys.snprintf(&buf, buf.len, ",\"refCount\":%u", node.detail.footnote_ref_count);
+            jsonWriteStrZ(w, @ptrCast(&buf));
+            has_prop = 1;
+        },
+        .footnote_ref => {
+            var buf: [32]u8 = undefined;
+            _ = sys.snprintf(&buf, buf.len, "\"id\":%u", node.detail.footnote_id);
+            jsonWriteStrZ(w, @ptrCast(&buf));
+            _ = sys.snprintf(&buf, buf.len, ",\"refId\":%u", node.detail.footnote_ref_id);
+            jsonWriteStrZ(w, @ptrCast(&buf));
+            if (node.detail.footnote_label != null) {
+                jsonWriteStr(w, ",\"label\":");
+                jsonWriteString(w, @ptrCast(node.detail.footnote_label.?), strlenZ(node.detail.footnote_label.?));
+            }
+            has_prop = 1;
+        },
         else => {},
     }
 
@@ -1182,8 +1234,13 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
             if (!node.tag_is_dynamic and node.tag_kind == .pre) {
                 jsonWriteStr(w, ",[\"code\",{");
                 if (node.detail.code_lang != null and node.detail.code_lang.?[0] != 0) {
-                    jsonWriteStr(w, "\"class\":\"language-");
-                    jsonWriteEscaped(w, @ptrCast(node.detail.code_lang.?), strlenZ(node.detail.code_lang.?));
+                    const lang = node.detail.code_lang.?;
+                    const lang_size = strlenZ(lang);
+                    jsonWriteStr(w, "\"class\":\"");
+                    // Do not repeat the prefix if the info string already carries it.
+                    if (!std.mem.startsWith(u8, lang[0..lang_size], "language-"))
+                        jsonWriteStr(w, "language-");
+                    jsonWriteEscaped(w, @ptrCast(lang), lang_size);
                     jsonWrite(w, "\"", 1);
                 }
                 jsonWriteStr(w, "},");

@@ -17,7 +17,7 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 - **Full CommonMark** — Passes the CommonMark spec
 - **GitHub Flavored Markdown** — Tables, task lists, strikethrough, autolinks, alerts
 - **Built-in YAML frontmatter** — Parsed via libyaml into structured data
-- **Extra extensions** — LaTeX math, wiki links, underline, inline attributes
+- **Extra extensions** — LaTeX math, wiki links, underline, highlight, footnotes, inline attributes
 - **Comark (MDC) support** — Block and inline components with props, slots
 - **Universal JS** — Native Node.js addon (NAPI) + portable WASM for browsers, Deno, Bun, edge workers
 - **C library** — SAX-like streaming parser, zero-copy, no AST allocation overhead

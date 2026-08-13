@@ -1,8 +1,8 @@
 // MD4X: Markdown parser for C
-// (http://github.com/unjs/md4x)
+// (https://github.com/unjs/md4x)
 //
 // Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
-// Copyright (c) 2016-2024 Martin Mitáš (original md4c)
+// Copyright (c) 2016-2026 Martin Mitáš (original md4c)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
 // copy of this software and associated documentation files (the "Software"),
@@ -169,6 +169,7 @@ const md_build_ref_def_hashtable = refdefs.md_build_ref_def_hashtable;
 const md_free_ref_def_hashtable = refdefs.md_free_ref_def_hashtable;
 const md_lookup_ref_def = refdefs.md_lookup_ref_def;
 const md_free_ref_defs = refdefs.md_free_ref_defs;
+const md_free_footnote_defs = refdefs.md_free_footnote_defs;
 const MD_LINK_ATTR = refdefs.MD_LINK_ATTR;
 const md_is_link_label = refdefs.md_is_link_label;
 const md_is_link_destination_A = refdefs.md_is_link_destination_A;
@@ -271,9 +272,12 @@ fn md_parse_impl(alloc: std.mem.Allocator, text: [*c]const CHAR, size: SZ, parse
     // so it MUST be torn down before md_free_ref_defs frees/deinits ref_defs.
     md_free_ref_def_hashtable(&ctx);
     md_free_ref_defs(&ctx);
+    // The footnote hashtable indexes into ctx.footnote_defs the same way, so
+    // md_free_footnote_defs tears the two down in that order internally.
+    md_free_footnote_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
-    util.arena_free(ctx.alloc, ctx.block_bytes, @intCast(ctx.alloc_block_bytes));
+    util.arena_free(ctx.alloc, ctx.block_bytes, ctx.alloc_block_bytes);
     ctx.containers.deinit(ctx.alloc);
     ctx.block_component_info.deinit(ctx.alloc);
     ctx.slot_info.deinit(ctx.alloc);
@@ -399,6 +403,9 @@ fn _test_run_inline(parser: *const c.Parser, text: [*c]const CHAR, size: SZ) c_i
     // Hashtable before ref_defs: it indexes into ctx.ref_defs (see md_parse_impl).
     md_free_ref_def_hashtable(&ctx);
     md_free_ref_defs(&ctx);
+    // The footnote hashtable indexes into ctx.footnote_defs the same way, so
+    // md_free_footnote_defs tears the two down in that order internally.
+    md_free_footnote_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
     ctx.inline_attrs.deinit(ctx.alloc);
@@ -578,22 +585,22 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
         if (ret < 0) break;
 
         emit(&fbuf, "L type={d} data={d} enf={d} beg={d} end={d} indent={d} | nc={d} bcn={d} fm={d} llhle={d} llistwo={d} nblk={d} ncomp={d} nslot={d} nalert={d}\n", .{
-            @intFromEnum(line.type),                        line.data,
-            @intFromBool(line.enforce_new_block),           line.beg,
-            line.end,                                       line.indent,
-            ctx.nContainers(),                               ctx.block_component_nesting,
-            ctx.frontmatter_state,                          @intFromBool(ctx.last_line_has_list_loosening_effect),
+            @intFromEnum(line.type),                                      line.data,
+            @intFromBool(line.enforce_new_block),                         line.beg,
+            line.end,                                                     line.indent,
+            ctx.nContainers(),                                            ctx.block_component_nesting,
+            ctx.frontmatter_state,                                        @intFromBool(ctx.last_line_has_list_loosening_effect),
             @intFromBool(ctx.last_list_item_starts_with_two_blank_lines), ctx.n_block_bytes,
-            @as(c_int, @intCast(ctx.block_component_info.items.len)), @as(c_int, @intCast(ctx.slot_info.items.len)),
+            @as(c_int, @intCast(ctx.block_component_info.items.len)),     @as(c_int, @intCast(ctx.slot_info.items.len)),
             @as(c_int, @intCast(ctx.block_alert_info.items.len)),
         }, out_fn, out_ud);
         var i: c_int = 0;
         while (i < ctx.nContainers()) : (i += 1) {
             const co = &ctx.containers.items[@intCast(i)];
             emit(&fbuf, "  C[{d}] ch={d} loose={d} task={d} alert={d} start={d} mi={d} ci={d} bbo={d} tmo={d} cc={d} cfm={d}\n", .{
-                i,                 uval(co.ch),      co.is_loose,    @intFromBool(co.is_task),
-                @intFromBool(co.is_alert), co.start,   co.mark_indent, co.contents_indent,
-                co.block_byte_off, co.task_mark_off, co.colon_count, co.comp_fm_state,
+                i,                         uval(co.ch),      co.is_loose,    @intFromBool(co.is_task),
+                @intFromBool(co.is_alert), co.start,         co.mark_indent, co.contents_indent,
+                co.block_byte_off,         co.task_mark_off, co.colon_count, co.comp_fm_state,
             }, out_fn, out_ud);
         }
 
@@ -607,7 +614,7 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
     }
 
     // Cleanup.
-    util.arena_free(ctx.alloc, ctx.block_bytes, @intCast(ctx.alloc_block_bytes));
+    util.arena_free(ctx.alloc, ctx.block_bytes, ctx.alloc_block_bytes);
     ctx.containers.deinit(ctx.alloc);
     ctx.block_component_info.deinit(ctx.alloc);
     ctx.slot_info.deinit(ctx.alloc);
@@ -615,6 +622,9 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
     // Hashtable before ref_defs: it indexes into ctx.ref_defs (see md_parse_impl).
     md_free_ref_def_hashtable(&ctx);
     md_free_ref_defs(&ctx);
+    // The footnote hashtable indexes into ctx.footnote_defs the same way, so
+    // md_free_footnote_defs tears the two down in that order internally.
+    md_free_footnote_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
     ctx.inline_attrs.deinit(ctx.alloc);
@@ -1126,6 +1136,238 @@ test "16-bit info index: component/slot/alert openers stop at the cap (PLAN 10)"
     }
 }
 
+// The `block_bytes` arena is the one growable buffer md4x still sizes by hand,
+// and md4c sizes it with `int`. At 1 677 392 853 bytes the 1.5x growth step
+// signed-overflows; every counter past that point describes an allocation that
+// does not exist, and the slot pointer derived from `n_block_bytes` leaves the
+// arena. It is reachable — a blank line inside a fenced code block is one input
+// byte and twelve arena bytes, so ~140 MB of Markdown gets there, well under
+// the 4 GiB an `MD_SIZE` input allows — but reproducing it needs a >1.6 GB
+// allocation, which no unit test should make.
+//
+// So the boundary is driven directly: seed the counters at the values a huge
+// document would reach and check `md_push_block_bytes` computes in `usize` and
+// refuses at `MAX_BLOCK_BYTES` instead of wrapping. The stub allocator below
+// fails every request, so nothing is actually allocated; it records the size it
+// was asked for, which is the growth arithmetic's only observable output.
+test "block_bytes arena: growth arithmetic is usize and the cap refuses cleanly" {
+    const Refuser = struct {
+        last_len: usize = 0,
+        n_calls: usize = 0,
+
+        fn allocFn(p: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            _ = alignment;
+            _ = ret_addr;
+            const self: *@This() = @ptrCast(@alignCast(p));
+            self.last_len = len;
+            self.n_calls += 1;
+            return null;
+        }
+        fn resizeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+            return false;
+        }
+        fn remapFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+            return null;
+        }
+        fn freeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {}
+
+        fn allocator(self: *@This()) std.mem.Allocator {
+            return .{ .ptr = self, .vtable = &.{
+                .alloc = allocFn,
+                .resize = resizeFn,
+                .remap = remapFn,
+                .free = freeFn,
+            } };
+        }
+    };
+
+    var refuser: Refuser = .{};
+    var ctx: types.MD_CTX = .{ .alloc = refuser.allocator() };
+    const MAX = types.MAX_BLOCK_BYTES;
+
+    // 1. THE regression case: the last capacity the 1.5x sequence reaches
+    //    before `int` overflows. `512 * 1.5^n` lands on exactly this value, and
+    //    a fenced code block of 139 782 738 blank lines — a 140 MB file — is
+    //    what walks it here. Pre-fix, computing the next capacity was
+    //    `1677392853 + 838696426`: a panic under ReleaseSafe (this test build)
+    //    and illegal behavior under the shipping ReleaseFast. It must now be a
+    //    plain 2 516 089 279-byte request that the allocator is free to refuse.
+    ctx.n_block_bytes = 1_677_392_853;
+    ctx.alloc_block_bytes = 1_677_392_853;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_VERBATIMLINE)) == null);
+    try std.testing.expectEqual(@as(usize, 1), refuser.n_calls);
+    try std.testing.expectEqual(@as(usize, 2_516_089_279), refuser.last_len);
+    // A refused grow leaves the counters describing the block that still exists.
+    try std.testing.expectEqual(@as(usize, 1_677_392_853), ctx.alloc_block_bytes);
+    try std.testing.expectEqual(@as(usize, 1_677_392_853), ctx.n_block_bytes);
+
+    // 2. Growth from a capacity `int` cannot even hold. 1.5x saturates over the
+    //    ceiling, so the request is clamped to MAX rather than wrapping.
+    ctx.n_block_bytes = 3_000_000_000;
+    ctx.alloc_block_bytes = 3_000_000_000;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_VERBATIMLINE)) == null);
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+    try std.testing.expectEqual(MAX, refuser.last_len);
+    try std.testing.expectEqual(@as(usize, 3_000_000_000), ctx.alloc_block_bytes);
+    try std.testing.expectEqual(@as(usize, 3_000_000_000), ctx.n_block_bytes);
+
+    // 3. One byte short of the ceiling: the demand itself overflows it, so the
+    //    push is refused before any capacity is computed — no realloc at all.
+    ctx.n_block_bytes = MAX - 1;
+    ctx.alloc_block_bytes = MAX;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_LINE)) == null);
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+    try std.testing.expectEqual(MAX - 1, ctx.n_block_bytes);
+    try std.testing.expectEqual(MAX, ctx.alloc_block_bytes);
+
+    // 4. Landing exactly on the ceiling is still allowed (the test is `>`), and
+    //    it is the growth path that then refuses — not the cap.
+    ctx.n_block_bytes = MAX - @sizeOf(types.MD_LINE);
+    ctx.alloc_block_bytes = MAX - @sizeOf(types.MD_LINE);
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_LINE)) == null);
+    try std.testing.expectEqual(@as(usize, 3), refuser.n_calls);
+    try std.testing.expectEqual(MAX, refuser.last_len);
+
+    // 5. The ordinary first push still asks for the 512-byte seed capacity.
+    ctx.n_block_bytes = 0;
+    ctx.alloc_block_bytes = 0;
+    try std.testing.expect(blocks.md_push_block_bytes(&ctx, @sizeOf(types.MD_BLOCK)) == null);
+    try std.testing.expectEqual(@as(usize, 512), refuser.last_len);
+    try std.testing.expectEqual(@as(usize, 0), ctx.n_block_bytes);
+
+    // Nothing was ever allocated, so there is nothing to free.
+    try std.testing.expect(ctx.block_bytes == null);
+}
+
+// Same instrument the block_bytes test above builds inline: an allocator that
+// refuses every request and records the size it was asked for. Growth arithmetic
+// is only observable through that size, and refusing means a boundary seeded at
+// hundreds of millions of elements costs no memory.
+const RecordingRefuser = struct {
+    last_len: usize = 0,
+    n_calls: usize = 0,
+
+    fn allocFn(p: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        _ = alignment;
+        _ = ret_addr;
+        const self: *@This() = @ptrCast(@alignCast(p));
+        self.last_len = len;
+        self.n_calls += 1;
+        return null;
+    }
+    fn resizeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+        return false;
+    }
+    fn remapFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+        return null;
+    }
+    fn freeFn(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {}
+
+    fn allocator(self: *@This()) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = allocFn,
+            .resize = resizeFn,
+            .remap = remapFn,
+            .free = freeFn,
+        } };
+    }
+};
+
+// md4c sizes the ref-def hashtable with `(int)n_ref_defs * 5 / 4`. The `* 5`
+// signed-overflows above 429 496 729 ref-defs, and a ~2.6 GB document of nothing
+// but `[a]:b` lines gets there while still under the 4 GiB an MD_SIZE input
+// allows — so it is inside the documented input range, not outside it. Upstream
+// widened the arithmetic in 19dd06f; md4x computes it in `usize`.
+//
+// Reproducing it for real would need ~34 GB of MD_REF_DEF records, so the
+// boundary is driven directly instead: seed the ref-def count and observe the
+// bucket-array size through a recording allocator that refuses to serve it.
+test "ref-def hashtable: bucket count is computed in usize" {
+    // `n + n/4` is what md4x writes instead of `n * 5 / 4`, and the two agree on
+    // every non-negative n (n = 4k + r ⇒ both are 5k + r) while the first never
+    // forms the 5x intermediate. Spot-check the identity, remainders included.
+    var n: usize = 0;
+    while (n < 4096) : (n += 1) {
+        try std.testing.expectEqual((n * 5) / 4, n + n / 4);
+    }
+
+    var refuser: RecordingRefuser = .{};
+    var ctx: MD_CTX = .{ .alloc = refuser.allocator() };
+
+    // The smallest ref-def count whose `* 5` leaves `int` range: 429 496 730 * 5
+    // is 2 147 483 650, one past maxInt(i32). Pre-fix this was a panic under
+    // ReleaseSafe (this test build) and illegal behavior under the shipping
+    // ReleaseFast. It must now be a plain 536 870 912-bucket request.
+    const n_defs: usize = 429_496_730;
+    ctx.ref_defs.items.len = n_defs;
+    defer ctx.ref_defs.items.len = 0;
+
+    try std.testing.expectEqual(@as(c_int, -1), refdefs.md_build_ref_def_hashtable(&ctx));
+    try std.testing.expectEqual(@as(usize, 1), refuser.n_calls);
+    try std.testing.expectEqual(@as(usize, 536_870_912), n_defs + n_defs / 4);
+    try std.testing.expectEqual(536_870_912 * @sizeOf(?*anyopaque), refuser.last_len);
+    // A refused build resets the size, so md_lookup_ref_def short-circuits and
+    // md_free_ref_def_hashtable has nothing to walk.
+    try std.testing.expectEqual(@as(usize, 0), ctx.ref_def_hashtable_size);
+}
+
+// md4c counts an attribute's substrings in `int`, so the 1.5x growth step in
+// md_build_attr_append_substr signed-overflows above 1 431 655 765 substrings and
+// the `@intCast` of the negative result is illegal behavior in ReleaseFast
+// (upstream 174fe05 widened them). The cheapest input generating one substring
+// per byte is a link title full of NUL bytes, so the attribute would have to be
+// ~1.4 GB — constructible under the 4 GiB MD_SIZE ceiling, but the two reallocs
+// it implies are ~11 GB, which no unit test should attempt.
+//
+// So the counters are seeded at the boundary and the requested element counts
+// are read back through the refusing allocator.
+test "attribute substrings: growth arithmetic is usize and the cap refuses cleanly" {
+    var refuser: RecordingRefuser = .{};
+    var ctx: MD_CTX = .{ .alloc = refuser.allocator() };
+    var build: util.MD_ATTRIBUTE_BUILD = .{};
+    const MAX = util.MAX_ATTR_SUBSTRS;
+
+    // 1. THE regression case. 1 431 655 766 + 715 827 883 = 2 147 483 649, one
+    //    past maxInt(i32). Both tables are still null here, so `types_alloc`
+    //    stays 0 and the first realloc is really an alloc.
+    build.substr_count = 1_431_655_766;
+    build.substr_alloc = 1_431_655_766;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 1), refuser.n_calls);
+    try std.testing.expectEqual(2_147_483_649 * @sizeOf(c.TextType), refuser.last_len);
+    // A refused grow publishes nothing: both capacities still describe the
+    // (absent) blocks, so md_free_attribute frees each at its own real length.
+    try std.testing.expectEqual(@as(usize, 0), build.types_alloc);
+    try std.testing.expectEqual(@as(usize, 1_431_655_766), build.substr_alloc);
+    try std.testing.expectEqual(@as(usize, 1_431_655_766), build.substr_count);
+
+    // 2. A capacity `int` cannot hold at all: 1.5x overshoots the ceiling, so the
+    //    request is clamped to MAX_ATTR_SUBSTRS rather than wrapping.
+    build.substr_count = 3_000_000_000;
+    build.substr_alloc = 3_000_000_000;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+    try std.testing.expectEqual(MAX * @sizeOf(c.TextType), refuser.last_len);
+
+    // 3. At the ceiling the append is refused before any capacity is computed —
+    //    no allocation is even attempted. This is the "refuse at the opener" arm.
+    build.substr_count = MAX;
+    build.substr_alloc = MAX;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 2), refuser.n_calls);
+
+    // 4. The ordinary first append still asks for the 8-element seed capacity.
+    build.substr_count = 0;
+    build.substr_alloc = 0;
+    try std.testing.expectError(error.OutOfMemory, util.md_build_attr_append_substr(&ctx, &build, c.TextType.normal, 0));
+    try std.testing.expectEqual(@as(usize, 3), refuser.n_calls);
+    try std.testing.expectEqual(8 * @sizeOf(c.TextType), refuser.last_len);
+
+    // Nothing was ever allocated, so there is nothing to free.
+    try std.testing.expect(build.substr_types == null);
+    try std.testing.expect(build.substr_offsets == null);
+}
+
 test "link label hash + cmp: whitespace & case-fold equivalence" {
     // Case-fold + whitespace collapse mean these labels are equivalent.
     const a = "Foo   Bar";
@@ -1273,7 +1515,8 @@ test "OOM: full md_parse sweep is crash- and leak-free under FailingAllocator" {
     // md_merge_lines_alloc buffers (PLAN item 5 — see the tail of the document).
     // std.testing.allocator flags any leak; FailingAllocator turns each
     // successive internal allocation into OOM so every abort/cleanup path runs.
-    // The document currently makes 40 ctx.alloc allocations, 4 of them merges.
+    // The document currently makes 46 ctx.alloc allocations, 4 of them merges
+    // and 6 of them the footnote sites listed at the tail of the document.
     //
     // The second titled link carries a 15-substring title (8 entities separated
     // by literal text), which is the ONLY thing in this document that drives
@@ -1302,7 +1545,16 @@ test "OOM: full md_parse sweep is crash- and leak-free under FailingAllocator" {
         //      whose buffer is handed to the `ptr_stack` and freed by its walk.
         "[multi\nline label]: /m \"multi\nline title\"\n\n" ++
         "Ref to [multi\nline label] here.\n\n" ++
-        "An [x](/u \"multi\nline title\") link.\n";
+        "An [x](/u \"multi\nline title\") link.\n\n" ++
+        // Footnotes add four ctx.alloc sites of their own: the heap-copied
+        // content_lines array, the footnote_defs list, the footnote hashtable
+        // (buckets, and a complex bucket once two labels collide), and the
+        // md_build_attribute label attribute on both the ref span and the def
+        // block. The unreferenced def keeps the "consumed but never emitted"
+        // free path covered, and the two-line def keeps the multi-line
+        // content_lines copy covered.
+        "See [^a] twice [^a] and [^b] and [^missing].\n\n" ++
+        "[^a]: first *note*.\nsecond line.\n[^b]: second note.\n[^unused]: dropped.\n";
     var probe: AbortProbe = .{};
     var p = probe.parser();
     var fail: usize = 0;
@@ -1430,6 +1682,8 @@ const TraceProbe = struct {
             c.BlockType.component => "COMPONENT",
             c.BlockType.template => "TEMPLATE",
             c.BlockType.alert => "ALERT",
+            c.BlockType.footnote_def_section => "FOOTNOTE_DEF_SECTION",
+            c.BlockType.footnote_def => "FOOTNOTE_DEF",
         };
     }
 
@@ -1441,12 +1695,14 @@ const TraceProbe = struct {
             c.SpanType.img => "IMG",
             c.SpanType.code => "CODE",
             c.SpanType.del => "DEL",
+            c.SpanType.mark => "MARK",
             c.SpanType.latexmath => "LATEXMATH",
             c.SpanType.latexmath_display => "LATEXMATH_DISPLAY",
             c.SpanType.wikilink => "WIKILINK",
             c.SpanType.u => "U",
             c.SpanType.component => "COMPONENT",
             c.SpanType.span => "SPAN",
+            c.SpanType.footnote_ref => "FOOTNOTE_REF",
         };
     }
 
@@ -1520,6 +1776,11 @@ const TraceProbe = struct {
             c.BlockType.alert => |x| {
                 self.attr("type", x.type_name);
             },
+            c.BlockType.footnote_def_section => self.raw(" <no-detail>", .{}),
+            c.BlockType.footnote_def => |x| {
+                self.raw(" id={d} ref_count={d}", .{ x.id, x.ref_count });
+                self.attr("label", x.label);
+            },
         }
     }
 
@@ -1549,10 +1810,14 @@ const TraceProbe = struct {
             c.SpanType.span => |x| {
                 self.rawStr("attrs", x.raw_attrs);
             },
-            // em/strong/code/del/u carry SpanAttrsDetail; an empty raw_attrs is
+            // em/strong/code/del/u/mark carry SpanAttrsDetail; an empty raw_attrs is
             // the old "NULL detail" case.
-            c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.u => |x| {
+            c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.u, c.SpanType.mark => |x| {
                 if (x.raw_attrs.len == 0) self.raw(" <no-detail>", .{}) else self.rawStr("attrs", x.raw_attrs);
+            },
+            c.SpanType.footnote_ref => |x| {
+                self.raw(" id={d} ref_id={d}", .{ x.id, x.ref_id });
+                self.attr("label", x.label);
             },
         }
     }
@@ -1623,7 +1888,7 @@ const trace_doc =
     \\Setext
     \\======
     \\
-    \\Para **strong**, *em*, `code`, ~~del~~, _u_, &amp; ent, &#65; num.
+    \\Para **strong**, *em*, `code`, ~~del~~, _u_, ==mark==, &amp; ent, &#65; num.
     \\
     \\Link [text](/url "the title") and auto <https://a.example/> and
     \\bare https://b.example/ and mail@c.example and www.d.example.
@@ -1632,7 +1897,7 @@ const trace_doc =
     \\
     \\Math $x^2$ and $$y_1$$ and [[Wiki Target]].
     \\
-    \\Attrs: **bold**{.hi} *it*{#id} `cs`{.l} ~~d~~{.r} _uu_{.a} [sp]{.cls}
+    \\Attrs: **bold**{.hi} *it*{#id} `cs`{.l} ~~d~~{.r} _uu_{.a} ==hl=={.m} [sp]{.cls}
     \\
     \\Hard break\
     \\after break, soft
@@ -1697,6 +1962,12 @@ const trace_doc =
     \\
     \\<!-- a comment -->
     \\
+    \\Note[^fn] twice[^fn] and once[^two].
+    \\
+    \\[^fn]: first *body*.
+    \\[^two]: second.
+    \\[^unused]: never referenced.
+    \\
 ;
 
 test "SAX event trace: golden baseline (freezes detail packaging for Phase 4c)" {
@@ -1753,6 +2024,10 @@ const expected_trace =
     \\    +span U <no-detail>
     \\      text NORMAL "u"
     \\    -span U
+    \\    text NORMAL ", "
+    \\    +span MARK <no-detail>
+    \\      text NORMAL "mark"
+    \\    -span MARK
     \\    text NORMAL ", "
     \\    text ENTITY "&amp;"
     \\    text NORMAL " ent, "
@@ -1826,6 +2101,10 @@ const expected_trace =
     \\      text NORMAL "uu"
     \\    -span U
     \\    text NORMAL " "
+    \\    +span MARK attrs=".m"
+    \\      text NORMAL "hl"
+    \\    -span MARK
+    \\    text NORMAL " "
     \\    +span SPAN attrs=".cls"
     \\      text NORMAL "sp"
     \\    -span SPAN
@@ -1848,10 +2127,10 @@ const expected_trace =
     \\    -block P
     \\  -block ALERT
     \\  +block UL is_tight=1 mark='-'
-    \\    +block LI is_task=1 task_mark=' ' off=502
+    \\    +block LI is_task=1 task_mark=' ' off=523
     \\      text NORMAL "todo"
     \\    -block LI
-    \\    +block LI is_task=1 task_mark='x' off=513
+    \\    +block LI is_task=1 task_mark='x' off=534
     \\      text NORMAL "done"
     \\    -block LI
     \\    +block LI is_task=0 task_mark='-' off=0
@@ -1992,9 +2271,33 @@ const expected_trace =
     \\    text HTML "\n"
     \\  -block HTML
     \\  +block P <detail:opaque>
+    \\    text NORMAL "Note"
+    \\    +span FOOTNOTE_REF id=1 ref_id=1 label="fn"[NORMAL@0|end@2]
+    \\    -span FOOTNOTE_REF
+    \\    text NORMAL " twice"
+    \\    +span FOOTNOTE_REF id=1 ref_id=2 label="fn"[NORMAL@0|end@2]
+    \\    -span FOOTNOTE_REF
+    \\    text NORMAL " and once"
+    \\    +span FOOTNOTE_REF id=2 ref_id=1 label="two"[NORMAL@0|end@3]
+    \\    -span FOOTNOTE_REF
+    \\    text NORMAL "."
+    \\  -block P
+    \\  +block P <detail:opaque>
     \\    text NORMAL "nul"
     \\    text NULLCHAR "\0"
     \\    text NORMAL "char"
     \\  -block P
+    \\  +block FOOTNOTE_DEF_SECTION <no-detail>
+    \\    +block FOOTNOTE_DEF id=1 ref_count=2 label="fn"[NORMAL@0|end@2]
+    \\      text NORMAL "first "
+    \\      +span EM <no-detail>
+    \\        text NORMAL "body"
+    \\      -span EM
+    \\      text NORMAL "."
+    \\    -block FOOTNOTE_DEF
+    \\    +block FOOTNOTE_DEF id=2 ref_count=1 label="two"[NORMAL@0|end@3]
+    \\      text NORMAL "second."
+    \\    -block FOOTNOTE_DEF
+    \\  -block FOOTNOTE_DEF_SECTION
     \\-block DOC
 ++ "\n";

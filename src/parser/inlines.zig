@@ -40,6 +40,7 @@ const MD_LINK_ATTR = refdefs.MD_LINK_ATTR;
 const md_is_autolink = refdefs.md_is_autolink;
 const md_is_inline_link_spec = refdefs.md_is_inline_link_spec;
 const md_is_link_reference = refdefs.md_is_link_reference;
+const md_lookup_footnote_def = refdefs.md_lookup_footnote_def;
 
 // ============================================================================
 //  Pass C — Raw HTML recognizers (needed by md_collect_marks). These are
@@ -219,6 +220,7 @@ pub const TILDE_OPENERS_1: usize = 12;
 pub const TILDE_OPENERS_2: usize = 13;
 pub const BRACKET_OPENERS: usize = 14;
 pub const DOLLAR_OPENERS: usize = 15;
+pub const EQUAL_OPENERS: usize = 16;
 
 // md4x.c ~2609. Returns the base index into ctx.opener_stacks for the given
 // emphasis char + flags (applying the EMPH_OC offset of +3 and the mod3 offset).
@@ -346,9 +348,52 @@ pub fn md_rollback(ctx: *MD_CTX, opener_index: c_int, closer_index: c_int, how: 
     if (how == MD_ROLLBACK_ALL) {
         var j: c_int = opener_index + 1;
         while (j < closer_index) : (j += 1) {
-            ctx.marks.items[@intCast(j)].ch = 'D';
-            ctx.marks.items[@intCast(j)].flags = 0;
+            const mark = &ctx.marks.items[@intCast(j)];
+
+            // Same asymmetry md_disable_marks guards against (md4c 326fe25):
+            // a footnote-reference opener inside the rolled-back range may have
+            // its `]` closer outside it. md4x reaches the wiki-link case through
+            // md_rollback rather than md_disable_marks, so the guard is needed
+            // in both.
+            if (mark.ch == '[' and (mark.flags & MarkFlags.footnote_ref) != 0 and
+                mark.next >= 0 and mark.next >= closer_index)
+            {
+                const closer = &ctx.marks.items[@intCast(mark.next)];
+                closer.ch = 'D';
+                closer.flags &= ~MarkFlags.resolved;
+            }
+
+            mark.ch = 'D';
+            mark.flags = 0;
         }
+    }
+}
+
+// Turn the marks in [mark_index0, mark_index1) into dummy ('D') marks so no
+// later analysis pass can pair them with anything. Unlike MD_ROLLBACK_ALL this
+// clears ONLY `resolved`: the remaining flag bits stay readable, and `beg`/
+// `end`/`prev`/`next` are untouched so the `ptr_stack` chain and its stored
+// title lengths survive.
+// md4c 44c90ca (post-fork-point).
+pub fn md_disable_marks(ctx: *MD_CTX, mark_index0: c_int, mark_index1: c_int) void {
+    var i: c_int = mark_index0;
+    while (i < mark_index1) : (i += 1) {
+        const mark = &ctx.marks.items[@intCast(i)];
+
+        // A footnote-reference opener's `]` closer may live OUTSIDE the disabled
+        // range (it does when the opener is swallowed by a wiki-link
+        // destination). Leaving it behind is what tripped md4c's assert in
+        // #348 — kill it with its opener. md4c 326fe25.
+        if (mark.ch == '[' and (mark.flags & MarkFlags.footnote_ref) != 0 and
+            mark.next >= 0 and mark.next >= mark_index1)
+        {
+            const closer = &ctx.marks.items[@intCast(mark.next)];
+            closer.ch = 'D';
+            closer.flags &= ~MarkFlags.resolved;
+        }
+
+        mark.ch = 'D';
+        mark.flags &= ~MarkFlags.resolved;
     }
 }
 
@@ -372,6 +417,7 @@ pub fn md_build_mark_char_map(ctx: *MD_CTX) void {
     const flags = ctx.parser.flags;
     if (flags & c.MD_FLAG_STRIKETHROUGH != 0) ctx.mark_char_map['~'] = 1;
     if (flags & c.MD_FLAG_LATEXMATHSPANS != 0) ctx.mark_char_map['$'] = 1;
+    if (flags & c.MD_FLAG_HIGHLIGHT != 0) ctx.mark_char_map['='] = 1;
     if (flags & c.MD_FLAG_PERMISSIVEEMAILAUTOLINKS != 0) ctx.mark_char_map['@'] = 1;
     if (flags & (c.MD_FLAG_PERMISSIVEURLAUTOLINKS | c.MD_FLAG_COMPONENTS) != 0) ctx.mark_char_map[':'] = 1;
     if (flags & c.MD_FLAG_PERMISSIVEWWWAUTOLINKS != 0) ctx.mark_char_map['.'] = 1;
@@ -707,6 +753,35 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 continue :scan;
             }
 
+            // A potential footnote reference: `[^label]`. Collected BEFORE the
+            // generic `[` arm so the opener swallows the `^` and can never be
+            // mistaken for a link / image / wikilink opener. The opener spans
+            // `[^` (end - beg == 2); the `]` is collected by the generic closer
+            // arm below and paired by md_analyze_bracket like any other bracket.
+            if ((ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) and
+                ch == '[' and off + 1 < line.*.end and ctx.ch(off + 1) == '^')
+            {
+                const tmp: OFF = off + 2;
+                if (addMark(ctx, '[', off, tmp, MarkFlags.potential_opener | MarkFlags.footnote_ref) == null) {
+                    ret = -1;
+                    return ret;
+                }
+                off = tmp;
+                // Two dummies, matching the generic `[` arm's shape so every
+                // `opener + 1` / `opener + 2` reader stays in range. Only the
+                // first is used: md_resolve_footnote_refs parks the resolved
+                // (id, ref_id) pair in its `beg`/`end`.
+                if (addMark(ctx, 'D', off, off, 0) == null) {
+                    ret = -1;
+                    return ret;
+                }
+                if (addMark(ctx, 'D', off, off, 0) == null) {
+                    ret = -1;
+                    return ret;
+                }
+                continue :scan;
+            }
+
             // Potential link or its part.
             if (ch == '[' or (ch == '!' and off + 1 < line.*.end and ctx.ch(off + 1) == '[')) {
                 const tmp: OFF = if (ch == '[') off + 1 else off + 2;
@@ -927,6 +1002,38 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                     return ret;
                 }
                 off += 1;
+                continue :scan;
+            }
+
+            // Potential highlight start/end: `==text==`. Gated by the flag
+            // because `=` is otherwise an ordinary character (setext
+            // underlines are block-level and never reach the mark collector,
+            // and `key=value` in attributes/props uses a single `=`).
+            if (ch == '=' and ctx.parser.flags & c.MD_FLAG_HIGHLIGHT != 0) {
+                var tmp: OFF = off + 1;
+                while (tmp < line.*.end and ctx.ch(tmp) == '=') tmp += 1;
+
+                // Only a run of exactly two is a delimiter; `===` and longer
+                // stay literal.
+                if (tmp - off == 2) {
+                    var flags: u8 = MarkFlags.potential_opener | MarkFlags.potential_closer;
+
+                    // Cannot open before whitespace; cannot close after it.
+                    // (Whitespace-adjacency only — NOT the emphasis flanking
+                    // rules, so `a==b==c` highlights, matching md4c.)
+                    if (tmp >= line.*.end or ctx.isUnicodeWhitespace(tmp))
+                        flags &= ~MarkFlags.potential_opener;
+                    if (off == line.*.beg or ctx.isUnicodeWhitespaceBefore(off))
+                        flags &= ~MarkFlags.potential_closer;
+                    if (flags != 0) {
+                        if (addMark(ctx, ch, off, tmp, flags) == null) {
+                            ret = -1;
+                            return ret;
+                        }
+                    }
+                }
+
+                off = tmp;
                 continue :scan;
             }
 
@@ -1160,6 +1267,21 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
         var attr: MD_LINK_ATTR = .{};
         var is_link: c_int = 0;
 
+        if (opener.ch == 'D') {
+            // We could have disabled this in a previous iteration (it fell
+            // inside a resolved link URL); processing it would just burn CPU
+            // cycles, or worse, resurrect a mark that was deliberately killed.
+            opener_index = next_index;
+            continue;
+        }
+
+        // Footnote-reference openers are never links: md_resolve_footnote_refs
+        // resolves them after this pass has finished with the real links.
+        if (opener.flags & MarkFlags.footnote_ref != 0) {
+            opener_index = next_index;
+            continue;
+        }
+
         if (next_index >= 0) {
             next_opener = &ctx.marks.items[@intCast(next_index)];
             next_closer = &ctx.marks.items[@intCast(next_opener.?.next)];
@@ -1273,13 +1395,15 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
             if (closer.end < ctx.size and ctx.ch(closer.end) == '(') {
                 // Might be inline link.
                 var inline_link_end: OFF = OFF_MAX;
+                // Hoisted out of the scan below: once the link is confirmed,
+                // this is one past the last mark swallowed by the "(...)".
+                var following_mark_index: c_int = closer_index + 1;
                 is_link = md_is_inline_link_spec(ctx, lines, closer.end, &inline_link_end, &attr);
                 if (is_link < 0) return -1;
 
                 if (is_link != 0) {
-                    var i: c_int = closer_index + 1;
-                    while (i < ctx.nMarks()) {
-                        const m = &ctx.marks.items[@intCast(i)];
+                    while (following_mark_index < ctx.nMarks()) {
+                        const m = &ctx.marks.items[@intCast(following_mark_index)];
                         if (m.beg >= inline_link_end) break;
                         if ((m.flags & (MarkFlags.opener | MarkFlags.resolved)) == (MarkFlags.opener | MarkFlags.resolved)) {
                             if (ctx.marks.items[@intCast(m.next)].beg >= inline_link_end) {
@@ -1289,15 +1413,20 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                                 is_link = 0;
                                 break;
                             }
-                            i = m.next + 1;
+                            following_mark_index = m.next + 1;
                         } else {
-                            i += 1;
+                            following_mark_index += 1;
                         }
                     }
                 }
 
                 if (is_link != 0) {
+                    // Eat the "(...)".
                     closer.end = inline_link_end;
+                    // Everything the URL swallowed must stop being a mark, or an
+                    // opener inside the URL pairs with a closer outside it and
+                    // emits an unbalanced enter_span/leave_span.
+                    md_disable_marks(ctx, closer_index + 1, following_mark_index);
                 }
             }
 
@@ -1377,6 +1506,56 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
     }
 
     return 0;
+}
+
+// Resolve every `[^label]` footnote reference in the current block. Runs after
+// md_resolve_links, so all real links are already resolved and any footnote
+// opener that a link URL / wiki-link destination swallowed has been turned into
+// a 'D' dummy (which is what the `ch != '['` guard below rejects — md4c
+// 54bfec0, since the footnote_ref FLAG survives disabling but the char does not).
+//
+// An unknown label is simply left unresolved, so it renders as literal text.
+// md4c a8b0d3e.
+pub fn md_resolve_footnote_refs(ctx: *MD_CTX) void {
+    var i: c_int = 0;
+    while (i < ctx.nMarks()) : (i += 1) {
+        const opener = &ctx.marks.items[@intCast(i)];
+
+        if (opener.ch != '[' or (opener.flags & MarkFlags.footnote_ref) == 0)
+            continue;
+        if (opener.next < 0)
+            continue; // No matching ']' was found.
+
+        const closer = &ctx.marks.items[@intCast(opener.next)];
+        if (closer.ch != ']')
+            continue; // The closer was disabled; see md_disable_marks.
+
+        // The label is the raw text between the marks: `opener.end` points past
+        // `[^`, `closer.beg` at the `]`.
+        const label_beg: OFF = opener.end;
+        const label_end: OFF = closer.beg;
+        if (label_beg >= label_end)
+            continue; // Empty label.
+
+        const def = md_lookup_footnote_def(ctx, ctx.str(label_beg), label_end - label_beg) orelse
+            continue; // Unknown label -> stays literal text.
+
+        // Assign the id on first reference; count every reference.
+        if (def.index == 0) {
+            ctx.next_footnote_index += 1;
+            def.index = ctx.next_footnote_index;
+        }
+        def.ref_count += 1;
+
+        // Park the public detail values in the dummy mark after the opener.
+        const index_mark = &ctx.marks.items[@intCast(i + 1)];
+        std.debug.assert(index_mark.ch == 'D');
+        index_mark.beg = def.index;
+        index_mark.end = def.ref_count;
+
+        opener.flags |= MarkFlags.opener | MarkFlags.resolved;
+        closer.flags |= MarkFlags.closer | MarkFlags.resolved;
+    }
 }
 
 // md4x.c ~3977.
@@ -1506,6 +1685,29 @@ pub fn md_analyze_tilde(ctx: *MD_CTX, mark_index: c_int) void {
         md_mark_stack_push(ctx, stack, mark_index);
 }
 
+// md4c d2a08e5 (post-fork-point). A plain LIFO resolver: `==` carries no
+// flanking rules beyond the whitespace adjacency the collector already applied,
+// and opener and closer are always the same length. `md_rollback` with
+// MD_ROLLBACK_CROSSING is upstream's `md_pop_openers` — it pops every stack
+// down past the opener without dummying the marks in between.
+pub fn md_analyze_highlight(ctx: *MD_CTX, mark_index: c_int) void {
+    const mark = &ctx.marks.items[@intCast(mark_index)];
+    const stack = &ctx.opener_stacks[EQUAL_OPENERS];
+
+    // Defensive: the collector only ever emits runs of exactly two.
+    if (mark.end - mark.beg != 2) return;
+
+    if ((mark.flags & MarkFlags.potential_closer != 0) and stack.top >= 0) {
+        const opener_index = stack.top;
+        md_rollback(ctx, opener_index, mark_index, MD_ROLLBACK_CROSSING);
+        md_resolve_range(ctx, opener_index, mark_index);
+        return;
+    }
+
+    if (mark.flags & MarkFlags.potential_opener != 0)
+        md_mark_stack_push(ctx, stack, mark_index);
+}
+
 // md4x.c ~4131.
 pub fn md_analyze_dollar(ctx: *MD_CTX, mark_index: c_int) void {
     const mark = &ctx.marks.items[@intCast(mark_index)];
@@ -1571,22 +1773,103 @@ pub fn md_scan_right_for_resolved_mark(ctx: *MD_CTX, mark_from: MarkCursor, off:
     return null;
 }
 
-// md4x.c ~4204.
-pub fn md_analyze_permissive_autolink(ctx: *MD_CTX, mark_index: c_int) void {
-    const UrlMapEntry = struct {
-        start_char: CHAR,
-        delim_char: CHAR,
-        allowed_nonalnum_chars: [*:0]const u8,
-        min_components: c_int,
-        optional_end_char: CHAR,
-    };
-    const URL_MAP = [_]UrlMapEntry{
-        .{ .start_char = 0, .delim_char = '.', .allowed_nonalnum_chars = ".-_", .min_components = 2, .optional_end_char = 0 },
-        .{ .start_char = '/', .delim_char = '/', .allowed_nonalnum_chars = "/.-_", .min_components = 0, .optional_end_char = '/' },
-        .{ .start_char = '?', .delim_char = '&', .allowed_nonalnum_chars = "&.-+_=()", .min_components = 1, .optional_end_char = 0 },
-        .{ .start_char = '#', .delim_char = 0, .allowed_nonalnum_chars = ".-+_", .min_components = 1, .optional_end_char = 0 },
-    };
+// md4x.c ~4381.
+//
+// Scans one segment of a suspected permissive autolink (e-mail user name,
+// hostname, path, query or fragment), each parameterized by its component
+// delimiter, the extra non-alnum characters allowed inside a word
+// (`word_extra`) and the delimiters allowed *between* two words
+// (`word_delims`). A word delimiter that ends the run is rolled back, so it
+// stays outside the link.
+//
+// `off_in` is the start offset; the scan runs towards `end` (backwards when
+// `scan_backwards`, i.e. `off_in > end`). Writes the resulting offset through
+// `p_end` and returns the number of components, or -1 on unbalanced brackets.
+//
+// NOTE: `off -= 1` / `off - 1` cannot underflow: backwards scans only step
+// while `off != end` with `off > end >= 0`, and every forward call site passes
+// `off_in >= 1` (the opener mark of a permissive autolink always ends at least
+// one byte into the line).
+fn md_analyze_permissive_autolink_segment(
+    ctx: *MD_CTX,
+    off_in: OFF,
+    end: OFF,
+    p_end: *OFF,
+    scan_backwards: bool,
+    component_delim: CHAR,
+    word_extra: [*:0]const u8,
+    word_delims: [*:0]const u8,
+    p_cursor: *MarkCursor,
+) c_int {
+    var off: OFF = off_in;
+    var n_components: c_int = 0;
+    var n_open_brackets: c_int = 0;
+    var seen_word_delim: bool = true;
+    var seen_component_delim: bool = true;
+    var component_beg: OFF = off;
 
+    while (off != end) {
+        if (scan_backwards) off -= 1;
+
+        // Only accept extra and delimiter characters if they're not part of a
+        // resolved mark.
+        if (!ctx.isAlnum(off) and !ctx.isWhitespace(off)) {
+            if ((!scan_backwards and md_scan_right_for_resolved_mark(ctx, p_cursor.*, off, p_cursor) != null) or
+                (scan_backwards and md_scan_left_for_resolved_mark(ctx, p_cursor.*, off, p_cursor) != null))
+            {
+                if (scan_backwards) off += 1;
+                break;
+            }
+        }
+
+        // The autolink can be _inside_ brackets so we disallow unbalanced
+        // bracket pairs in the URL. (Note the brackets are not allowed in
+        // e-mail username, so we happily skip this in that case.)
+        if (!scan_backwards) {
+            if (ctx.ch(off) == '(') {
+                n_open_brackets += 1;
+            } else if (ctx.ch(off) == ')') {
+                if (n_open_brackets <= 0) break;
+                n_open_brackets -= 1;
+            }
+        }
+
+        if (ctx.isAlnum(off) or ctx.isAnyOf(off, word_extra)) {
+            seen_word_delim = false;
+            seen_component_delim = false;
+        } else {
+            if (seen_word_delim) break;
+
+            if (ctx.isAnyOf(off, word_delims)) {
+                seen_word_delim = true;
+            } else if (component_delim != 0 and ctx.ch(off) == component_delim) {
+                if (seen_component_delim) break;
+                seen_component_delim = true;
+                component_beg = off;
+                n_components += 1;
+            } else {
+                if (scan_backwards) off += 1;
+                break;
+            }
+        }
+
+        if (!scan_backwards) off += 1;
+    }
+
+    // Rollback falsely consumed delimiter.
+    if (seen_word_delim or seen_component_delim)
+        off = if (scan_backwards) off + 1 else off - 1;
+
+    if (off != component_beg) n_components += 1;
+
+    if (n_open_brackets != 0) return -1;
+
+    p_end.* = off;
+    return n_components;
+}
+
+// md4x.c ~4459.
+pub fn md_analyze_permissive_autolink(ctx: *MD_CTX, mark_index: c_int) void {
     const opener = &ctx.marks.items[@intCast(mark_index)];
     const closer = &ctx.marks.items[@intCast(mark_index + 1)]; // The dummy.
     const line_beg: OFF = closer.beg;
@@ -1594,86 +1877,57 @@ pub fn md_analyze_permissive_autolink(ctx: *MD_CTX, mark_index: c_int) void {
     var beg: OFF = opener.beg;
     var end: OFF = opener.end;
     var left_cursor: MarkCursor = mark_index;
-    var left_boundary_ok: bool = false;
     var right_cursor: MarkCursor = mark_index;
-    var right_boundary_ok: bool = false;
 
+    // E-mail requires the user name (before '@', i.e. scanning backwards).
     if (opener.ch == '@') {
-        while (beg > line_beg) {
-            if (ctx.isAlnum(beg - 1)) {
-                beg -= 1;
-            } else if (beg >= line_beg + 2 and ctx.isAlnum(beg - 2) and
-                ctx.isAnyOf(beg - 1, ".-_+") and
-                md_scan_left_for_resolved_mark(ctx, left_cursor, beg - 1, &left_cursor) == null and
-                ctx.isAlnum(beg))
-            {
-                beg -= 1;
-            } else {
-                break;
-            }
-        }
-        if (beg == opener.beg) return; // empty user name
+        if (md_analyze_permissive_autolink_segment(ctx, beg, line_beg, &beg, true, 0, "", ".-_+", &left_cursor) < 1)
+            return;
     }
 
-    if (beg == line_beg or ctx.isUnicodeWhitespaceBefore(beg) or ctx.isAnyOf(beg - 1, "({[")) {
-        left_boundary_ok = true;
-    } else if (ctx.isAnyOf(beg - 1, "*_~")) {
+    // Verify there's line boundary, whitespace, allowed punctuation or resolved
+    // opener mark just before the suspected autolink.
+    if (beg > line_beg and !ctx.isUnicodeWhitespaceBefore(beg) and !ctx.isAnyOf(beg - 1, "({[")) {
         const left_mark = md_scan_left_for_resolved_mark(ctx, left_cursor, beg - 1, &left_cursor);
-        if (left_mark != null and (left_mark.?.flags & MarkFlags.opener != 0)) left_boundary_ok = true;
-    }
-    if (!left_boundary_ok) return;
-
-    var i: usize = 0;
-    while (i < URL_MAP.len) : (i += 1) {
-        var n_components: c_int = 0;
-        var n_open_brackets: c_int = 0;
-
-        if (URL_MAP[i].start_char != 0) {
-            if (end >= line_end or ctx.ch(end) != URL_MAP[i].start_char) continue;
-            if (URL_MAP[i].min_components > 0 and (end + 1 >= line_end or !ctx.isAlnum(end + 1))) continue;
-            end += 1;
-        }
-
-        while (end < line_end) {
-            if (ctx.isAlnum(end)) {
-                if (n_components == 0) n_components += 1;
-                end += 1;
-            } else if (end < line_end and
-                ctx.isAnyOf(end, URL_MAP[i].allowed_nonalnum_chars) and
-                md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor) == null and
-                ((end > line_beg and (ctx.isAlnum(end - 1) or ctx.ch(end - 1) == ')')) or ctx.ch(end) == '(') and
-                ((end + 1 < line_end and (ctx.isAlnum(end + 1) or ctx.ch(end + 1) == '(')) or ctx.ch(end) == ')'))
-            {
-                if (ctx.ch(end) == URL_MAP[i].delim_char) n_components += 1;
-
-                if (ctx.ch(end) == '(') {
-                    n_open_brackets += 1;
-                } else if (ctx.ch(end) == ')') {
-                    if (n_open_brackets <= 0) break;
-                    n_open_brackets -= 1;
-                }
-                end += 1;
-            } else {
-                break;
-            }
-        }
-
-        if (end < line_end and URL_MAP[i].optional_end_char != 0 and ctx.ch(end) == URL_MAP[i].optional_end_char)
-            end += 1;
-
-        if (n_components < URL_MAP[i].min_components or n_open_brackets != 0) return;
-
-        if (opener.ch == '@') break; // e-mail wants only the host
+        if (left_mark == null or (left_mark.?.flags & MarkFlags.opener == 0)) return;
     }
 
-    if (end == line_end or ctx.isUnicodeWhitespace(end) or ctx.isAnyOf(end, ")}].!?,;")) {
-        right_boundary_ok = true;
-    } else {
+    // Scan for hostname segment. Hostname is mandatory and requires at least
+    // two components delimited with a dot.
+    if (md_analyze_permissive_autolink_segment(ctx, end, line_end, &end, false, '.', "", "-_", &right_cursor) < 2)
+        return;
+
+    if (opener.ch != '@') {
+        // Scan for path segment.
+        if (end < line_end and ctx.ch(end) == '/') {
+            if (md_analyze_permissive_autolink_segment(ctx, end + 1, line_end, &end, false, '/', ".+-_~%", "", &right_cursor) < 0)
+                return;
+
+            // Path can also end with additional '/' if its a directory.
+            if (end < line_end and ctx.ch(end) == '/') end += 1;
+        }
+
+        // Scan for query segment.
+        if (end < line_end and ctx.ch(end) == '?') {
+            if (md_analyze_permissive_autolink_segment(ctx, end + 1, line_end, &end, false, '&', "._=()", "+-", &right_cursor) < 0)
+                return;
+        }
+
+        // Scan for fragment segment.
+        if (end < line_end and ctx.ch(end) == '#') {
+            if (md_analyze_permissive_autolink_segment(ctx, end + 1, line_end, &end, false, 0, "", ".-+_", &right_cursor) < 0)
+                return;
+        }
+    }
+
+    // Verify there's line boundary, whitespace, allowed punctuation or resolved
+    // closer mark just after the suspected autolink.
+    if (end < line_end and !ctx.isUnicodeWhitespace(end) and !ctx.isAnyOf(end, ")}].!?,;")) {
         const right_mark = md_scan_right_for_resolved_mark(ctx, right_cursor, end, &right_cursor);
-        if (right_mark != null and (right_mark.?.flags & MarkFlags.closer != 0)) right_boundary_ok = true;
+        if (right_mark == null or (right_mark.?.flags & MarkFlags.closer == 0)) return;
     }
-    if (!right_boundary_ok) return;
 
+    // Success, we are an autolink.
     opener.beg = beg;
     opener.end = beg;
     closer.beg = end;
@@ -1694,7 +1948,7 @@ pub fn md_analyze_marks(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, m
 
         if (mark.flags & MarkFlags.resolved != 0) {
             if ((mark.flags & MarkFlags.opener != 0) and mark.ch != 'C' and
-                !((flags & MD_ANALYZE_NOSKIP_EMPH != 0) and ISANYOF_(mark.ch, "*_~")))
+                !((flags & MD_ANALYZE_NOSKIP_EMPH != 0) and ISANYOF_(mark.ch, "*_~=")))
             {
                 i = mark.next + 1;
             } else {
@@ -1720,6 +1974,7 @@ pub fn md_analyze_marks(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, m
             '_', '*' => md_analyze_emph(ctx, i),
             '~' => md_analyze_tilde(ctx, i),
             '$' => md_analyze_dollar(ctx, i),
+            '=' => md_analyze_highlight(ctx, i),
             '.', ':', '@' => md_analyze_permissive_autolink(ctx, i),
             else => {},
         }
@@ -1776,7 +2031,7 @@ pub fn md_resolve_attrs(ctx: *MD_CTX) c_int {
         if (mark.flags & MarkFlags.closer == 0) continue;
         if (mark.ch == 'C') continue;
         if (mark.ch == 'D') continue;
-        if (mark.ch != '*' and mark.ch != '_' and mark.ch != '`' and mark.ch != '~' and mark.ch != ']') continue;
+        if (mark.ch != '*' and mark.ch != '_' and mark.ch != '`' and mark.ch != '~' and mark.ch != '=' and mark.ch != ']') continue;
 
         if (mark.ch == ']') {
             const opener_index = mark.prev;
@@ -1784,6 +2039,12 @@ pub fn md_resolve_attrs(ctx: *MD_CTX) c_int {
                 const opener = &ctx.marks.items[@intCast(opener_index)];
                 if (opener_index + 1 < ctx.nMarks() and ctx.marks.items[@intCast(opener_index + 1)].ch == 'S') continue;
                 if (opener.ch == '[' and opener.end - opener.beg >= 2 and mark.end - mark.beg >= 2) continue;
+                // `[^1]{.cls}`: footnote wins, the attrs are not consumed. The
+                // span is self-contained (no text between enter and leave), so
+                // there is nothing for a `{...}` to attach to, and stretching
+                // the closer's `end` here would silently eat the braces from the
+                // output. Neither md4c nor md4x had a rule; this is the choice.
+                if (opener.ch == '[' and (opener.flags & MarkFlags.footnote_ref) != 0) continue;
             }
         }
 
@@ -1817,6 +2078,11 @@ pub fn md_analyze_inlines(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool
     ctx.unresolved_link_head = -1;
     ctx.unresolved_link_tail = -1;
 
+    // (1b) Footnote references. Must run after links, so a footnote pair inside
+    // a resolved link is still found and one inside a link URL is already dead.
+    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0)
+        md_resolve_footnote_refs(ctx);
+
     if (table_mode) {
         // (2) Table cell boundaries.
         ctx.n_table_cell_boundaries = 0;
@@ -1837,7 +2103,9 @@ pub fn md_analyze_inlines(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool
 // md4x.c ~4574.
 pub fn md_analyze_link_contents(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, mark_end: c_int) void {
     md_analyze_marks(ctx, lines, mark_beg, mark_end, "&", 0);
-    md_analyze_marks(ctx, lines, mark_beg, mark_end, "*_~$", 0);
+    // `=` marks only exist when MD_FLAG_HIGHLIGHT is on, so the char can be
+    // listed unconditionally (md4c builds the string from the flags instead).
+    md_analyze_marks(ctx, lines, mark_beg, mark_end, "*_~$=", 0);
 
     if (ctx.parser.flags & c.MD_FLAG_PERMISSIVEAUTOLINKS != 0) {
         md_analyze_marks(ctx, lines, mark_beg, mark_end, "@:.", MD_ANALYZE_NOSKIP_EMPH);
@@ -1986,6 +2254,27 @@ pub fn md_enter_leave_span_a_with_attrs(ctx: *MD_CTX, enter: bool, ty: c.SpanTyp
     return ret;
 }
 
+// A footnote reference is emitted as a SELF-CONTAINED span: enter and leave fire
+// back to back with no text callback between them, so the renderer gets
+// everything from the detail. md4c a8b0d3e.
+pub fn md_enter_leave_span_footnote_ref(ctx: *MD_CTX, id: c_uint, ref_id: c_uint, label: [*c]const CHAR, label_size: SZ) c_int {
+    var label_build: MD_ATTRIBUTE_BUILD = .{};
+    var det: c.SpanFootnoteRefDetail = .{ .id = id, .ref_id = ref_id };
+    var ret: c_int = 0;
+
+    md_build_attribute(ctx, label, label_size, 0, &det.label, &label_build) catch {
+        ret = -1;
+    };
+    if (ret == 0) {
+        const d: c.SpanDetail = .{ .footnote_ref = det };
+        ret = mdEnterSpan(ctx, &d);
+        if (ret == 0) ret = mdLeaveSpan(ctx, &d);
+    }
+
+    md_free_attribute(ctx, &label_build);
+    return ret;
+}
+
 // md4x.c ~4700.
 pub fn md_enter_leave_span_span(ctx: *MD_CTX, enter: bool, raw_attrs: [*c]const CHAR, raw_attrs_size: SZ) c_int {
     var det: c.SpanSpanDetail = .{};
@@ -2115,6 +2404,29 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                     if (ret != 0) return ret;
                 },
 
+                // Highlight (`==x==`). Unlike md4c this span carries a
+                // SpanAttrsDetail so `==x=={.cls}` composes with ATTRIBUTES;
+                // md_resolve_attrs has already stretched the closer's `end`
+                // over the `{...}`, which is also why there is no
+                // `end - beg == 2` guard here (md4c has one, and it is
+                // unreachable there: the collector only emits runs of two).
+                '=' => {
+                    var raw_a: [*c]const CHAR = null;
+                    var raw_a_sz: SZ = 0;
+                    if (mark.*.flags & MarkFlags.opener != 0)
+                        _ = md_find_inline_attr(ctx, mark.*.next, &raw_a, &raw_a_sz, null)
+                    else
+                        _ = md_find_inline_attr(ctx, @intCast((@intFromPtr(mark) - @intFromPtr(ctx.marks.items.ptr)) / @sizeOf(MD_MARK)), &raw_a, &raw_a_sz, null);
+
+                    const det: c.SpanDetail = .{ .mark = attrsDetail(raw_a, raw_a_sz) };
+                    if (mark.*.flags & MarkFlags.opener != 0) {
+                        ret = mdEnterSpan(ctx, &det);
+                    } else {
+                        ret = mdLeaveSpan(ctx, &det);
+                    }
+                    if (ret != 0) return ret;
+                },
+
                 '$' => {
                     const math_inline: c.SpanDetail = .{ .latexmath = {} };
                     const math_display: c.SpanDetail = .{ .latexmath_display = {} };
@@ -2133,7 +2445,16 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                     const opener: [*c]MD_MARK = if (mark.*.ch != ']') mark else &ctx.marks.items[@intCast(mark.*.prev)];
                     const closer: [*c]MD_MARK = &ctx.marks.items[@intCast(opener.*.next)];
 
-                    if ((opener.*.ch == '[' and closer.*.ch == ']') and
+                    // Footnote reference: self-contained span, no text emitted.
+                    // Only the opener is ever seen here — the opener's `end` is
+                    // redirected past the whole `[^label]`, so the post-switch
+                    // `off = mark.end` skips the label text and the `]` closer.
+                    if (opener.*.flags & MarkFlags.footnote_ref != 0) {
+                        const index_mark: [*c]MD_MARK = opener + 1;
+                        ret = md_enter_leave_span_footnote_ref(ctx, index_mark.*.beg, index_mark.*.end, ctx.str(opener.*.end), closer.*.beg - opener.*.end);
+                        if (ret != 0) return ret;
+                        mark.*.end = closer.*.end;
+                    } else if ((opener.*.ch == '[' and closer.*.ch == ']') and
                         opener.*.end - opener.*.beg >= 2 and
                         closer.*.end - closer.*.beg >= 2)
                     {
@@ -2295,7 +2616,9 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
             }
 
             line += 1;
-            off = line.*.beg;
+            // Do not skip back: a span closer may already have advanced `off`
+            // past the beginning of this line, and those bytes are consumed.
+            off = @max(off, line.*.beg);
             enforce_hardbreak = 0;
         }
     }

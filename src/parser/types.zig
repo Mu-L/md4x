@@ -139,6 +139,27 @@ pub const MD_BLOCK = extern struct {
 /// enter/leave emission balanced; no container is pushed, so none is popped.
 pub const MAX_BLOCK_INFO_RECORDS: usize = 0x10000;
 
+/// Hard ceiling on the `block_bytes` arena, in bytes.
+///
+/// The arena accumulates the WHOLE document — one `MD_BLOCK` (8 bytes) per
+/// block plus one `MD_LINE` (8) or `MD_VERBATIMLINE` (12) per line — and is
+/// only reset once `md_process_all_blocks` has walked it. Fenced code amplifies
+/// hardest: a one-byte blank line inside a fence costs 12 arena bytes, so a
+/// ~180 MB document already demands >2 GiB of arena, far below the 4 GiB an
+/// `MD_SIZE` input allows. `md_push_block_bytes` therefore has to be able to
+/// refuse.
+///
+/// The ceiling is `maxInt(OFF)` because `MD_CONTAINER.block_byte_off` is an
+/// `OFF` (u32): every list opener records its arena offset there and
+/// `md_analyze_line` writes the loose-list flag back through it. An arena
+/// larger than `OFF` can address would truncate that offset and flip the flag
+/// on an unrelated earlier block. Refusing keeps the two in step.
+///
+/// Like every other allocation refusal in the parser this surfaces as `null`
+/// from `md_push_block_bytes` and `-1` from its callers, i.e. it is
+/// indistinguishable from OOM — which is what running out of arena is.
+pub const MAX_BLOCK_BYTES: usize = std.math.maxInt(OFF);
+
 // `struct MD_CONTAINER_tag` (md4x.c ~5379). Internal-only (never crosses the C
 // ABI). C uses several `unsigned :8`/`:2` bitfields; we model with plain integer
 // fields since only the *values* matter (containers live in ctx.containers, a
@@ -205,6 +226,13 @@ pub const MarkFlags = struct {
     pub const autolink_missing_mailto: u8 = 0x40;
     pub const valid_permissive_autolink: u8 = 0x20; // For permissive autolinks.
     pub const has_nested_brackets: u8 = 0x20; // For '[' to rule out invalid labels early.
+    // `[` opener of a `[^label]` footnote reference (never a link/image/wikilink
+    // opener). Aliases the same bit as `emph_mod3_0` / `autolink_missing_mailto`
+    // — neither of which is ever written on a '[' mark: mod-3 bits belong to
+    // '*'/'_' and the mailto bit to '<'/'>'/'@'/':'/'.'. The bit a '[' mark DOES
+    // already use is 0x20 (`has_nested_brackets`), which is why this one is 0x40
+    // and not 0x20.
+    pub const footnote_ref: u8 = 0x40;
 };
 
 pub const CODESPAN_MARK_MAXLEN: usize = 32;
@@ -227,15 +255,39 @@ pub const MD_REF_DEF = extern struct {
     title_needs_free: bool = false,
 };
 
-// Complex hashtable bucket: holds multiple ref-def pointers (a hash collision
+// One footnote definition, `[^label]: text…`. Internal-only (renderers see the
+// public `BlockFootnoteDefDetail` instead), so plain struct / Zig slices.
+//
+// `label` points **into ctx.text** — a footnote label may not span lines, so
+// unlike a link-reference label it never needs the merge-and-own path and there
+// is nothing to free. `content_lines` is the one owned allocation; its length is
+// exactly `content_lines.len`, which is what `md_free_footnote_defs` frees.
+pub const MD_FOOTNOTE_DEF = struct {
+    // Non-const to keep the `label`/`label_size`/`hash` header layout-compatible
+    // with MD_REF_DEF, which is what lets both share `LabelHashTable`.
+    label: [*c]CHAR = null,
+    label_size: SZ = 0,
+    hash: c_uint = 0,
+    /// 0 = unreferenced; otherwise the 1-based order of the first reference.
+    index: c_uint = 0,
+    /// Number of `[^label]` references that resolved to this definition.
+    ref_count: c_uint = 0,
+    content_lines: []MD_LINE = &.{},
+};
+
+// Complex hashtable bucket: holds multiple label-def pointers (a hash collision
 // of distinct labels). Mirrors `struct MD_REF_DEF_LIST_tag` with the C
 // flexible-array member `MD_REF_DEF* ref_defs[]`. We allocate
-// `@sizeOf(MD_REF_DEF_LIST) + n * @sizeOf(?*MD_REF_DEF)` bytes and index past
-// the header manually (see md_ref_def_list_items).
+// `@sizeOf(MD_REF_DEF_LIST) + n * @sizeOf(?*Def)` bytes and index past the
+// header manually (see refdefs.LabelHashTable(Def).items).
+//
+// The header is shared by every label hashtable (link ref-defs and footnote
+// defs): the flexible array is pointer-sized whatever `Def` is, so only the
+// element *type* differs and that lives in the generic, not here.
 pub const MD_REF_DEF_LIST = extern struct {
     n_ref_defs: c_int = 0,
     alloc_ref_defs: c_int = 0,
-    // Flexible array `MD_REF_DEF* ref_defs[]` follows in memory.
+    // Flexible array `Def* defs[]` follows in memory.
 };
 
 // "During analyzes of inline marks, we need to manage stacks of unresolved
@@ -332,8 +384,19 @@ pub const MD_CTX = struct {
     // built only after collection completes — no append moves the buffer after.)
     ref_defs: std.ArrayListUnmanaged(MD_REF_DEF) = .empty,
     ref_def_hashtable: [*c]?*anyopaque = null,
-    ref_def_hashtable_size: c_int = 0,
+    // A bucket count, so `usize` — the type the allocation and every index into
+    // the table already want. md4c keeps it `int` and computes `n * 5 / 4` in
+    // `int`, which overflows above ~429M ref-defs; upstream 19dd06f widened it.
+    ref_def_hashtable_size: usize = 0,
     max_ref_def_output: SZ = 0,
+
+    // Footnote definitions. Same shape as the ref-def pair above and driven by
+    // the same generic (`refdefs.LabelHashTable`); only the record type differs.
+    footnote_defs: std.ArrayListUnmanaged(MD_FOOTNOTE_DEF) = .empty,
+    footnote_hashtable: [*c]?*anyopaque = null,
+    footnote_hashtable_size: usize = 0,
+    /// 1-based counter handing out `MD_FOOTNOTE_DEF.index` on first reference.
+    next_footnote_index: c_uint = 0,
 
     // Stack of inline/span markers. (PLAN 8.1: ArrayListUnmanaged. The emphasis
     // engine walks it with raw `[*c]MD_MARK` pointers derived from
@@ -353,7 +416,8 @@ pub const MD_CTX = struct {
     //   13   TILDE_OPENERS_2
     //   14   BRACKET_OPENERS
     //   15   DOLLAR_OPENERS
-    opener_stacks: [16]MD_MARKSTACK = [_]MD_MARKSTACK{.{}} ** 16,
+    //   16   EQUAL_OPENERS
+    opener_stacks: [17]MD_MARKSTACK = [_]MD_MARKSTACK{.{}} ** 17,
 
     // Stack of dummies which need to call free() for pointers stored in them.
     ptr_stack: MD_MARKSTACK = .{},
@@ -376,8 +440,14 @@ pub const MD_CTX = struct {
     // For block analysis. Holds MD_BLOCK as well as MD_LINE structures.
     block_bytes: ?*anyopaque = null,
     current_block: [*c]MD_BLOCK = null,
-    n_block_bytes: c_int = 0,
-    alloc_block_bytes: c_int = 0,
+    // Byte counters, not indices into a C array: `usize` (what `arena_realloc`
+    // takes), never `c_int`. As `int` — md4c's type, inherited verbatim — the
+    // 1.5x growth step signed-overflows once the arena passes ~1.6 GB, which a
+    // ~140 MB document reaches; both counters then go incoherent and the slot
+    // pointer derived from `n_block_bytes` is no longer inside the arena.
+    // `MAX_BLOCK_BYTES` caps them; see md_push_block_bytes.
+    n_block_bytes: usize = 0,
+    alloc_block_bytes: usize = 0,
 
     // For container block analysis.
     // Container stack (PLAN 8.1: ArrayListUnmanaged). `nContainers()` returns the

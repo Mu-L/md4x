@@ -30,6 +30,50 @@
 
 `~text~` or `~~text~~`. Opener/closer must match length. Follows same flanking rules as emphasis.
 
+## Extension: Highlight (`MD_FLAG_HIGHLIGHT`)
+
+`==text==` renders as `<mark>text</mark>`. Exactly two `=` on each side — `=x=`,
+`===x===` and longer runs stay literal. Unlike emphasis and strikethrough the
+delimiter is gated on **whitespace adjacency only**, not on the flanking rules:
+it cannot open when followed by whitespace and cannot close when preceded by
+whitespace, but an intra-word `a==b==c` is a highlight. Setext underlines are
+block-level and are unaffected.
+
+## Extension: Footnotes (`MD_FLAG_FOOTNOTES`)
+
+```
+Text with a footnote[^1] and again[^1].
+
+[^1]: The footnote content.
+```
+
+- **Reference** `[^label]` — the label is a non-empty run of characters that are
+  not whitespace, `[` or `]`. Labels are matched case-insensitively (the same
+  case-folding link reference labels use), so `[^AB]` and `[^ab]` are one
+  footnote.
+- **Definition** `[^label]:` at the **start of a paragraph block**. Like a link
+  reference definition it cannot interrupt a paragraph. The body is the rest of
+  that first line plus the remaining lines of the same paragraph block, stopping
+  before a line that itself starts a new `[^…]:` definition. A blank line ends it,
+  because a blank line ends the block — so, unlike GFM, an indented
+  multi-paragraph footnote body is not supported.
+- Definitions are emitted **at the very end of the document**, in order of
+  **first reference**, not definition order. A definition that is never
+  referenced is consumed and never emitted; a reference whose label has no
+  definition stays literal text. Duplicate labels: the first definition wins.
+- The reference renders `<sup><a href="#fn-N" id="fnref-N-K">N</a></sup>`, and the
+  definitions render inside `<section class="footnotes"><ol><li id="fn-N">…`, with
+  one `↩` back-reference anchor per reference.
+
+Interactions with the other MD4X extensions:
+
+- `[^1]{.cls}` — **footnote wins**, the `{...}` stays literal. The span is
+  self-contained, so there is no content for inline attributes to attach to.
+- Wiki links are unaffected: a footnote opener is `[^`, never the `[[` a wiki link
+  needs. A reference that lands inside a wiki-link **destination** is swallowed by
+  the destination.
+- Alerts (`[!TYPE]`) and components (`:name[…]`, `::name`) do not overlap `[^`.
+
 ## Extension: Permissive Autolinks
 
 - **URL** (`MD_FLAG_PERMISSIVEURLAUTOLINKS`): `https://example.com`
@@ -66,7 +110,8 @@ GitHub-style alert/admonition syntax. A blockquote whose first line is `> [!TYPE
 > This is a warning
 ```
 
-- TYPE is any alphanumeric/hyphenated name (`[a-zA-Z][a-zA-Z0-9_-]*`), case-insensitive
+- TYPE is any non-empty ASCII name matching `[a-zA-Z0-9_-]+`, case-insensitive. The charset is applied uniformly from the first character, so a type may also begin with a digit, `-` or `_` (`[!123]`, `[!-x]`, `[!_]` are all alerts). Non-ASCII letters are not accepted
+- The parser reports the type as **source text** (`"NOTE"`); only the HTML renderer lowercases it for the class name, so a consumer matching on the JSON/AST prop must case-fold itself
 - The `[!TYPE]` line must be the **first line** of the blockquote and the **only content** on that line
 - Text after `[!TYPE]` on the same line disqualifies it (treated as normal blockquote)
 - `[!TYPE]` not on the first line is treated as literal text
@@ -209,6 +254,7 @@ Attributes can be added to inline elements using `{...}` syntax immediately afte
 *italic*{#myid}            → <em id="myid">italic</em>
 `code`{.lang}              → <code class="lang">code</code>
 ~~del~~{.red}              → <del class="red">del</del>
+==mark=={.hit}             → <mark class="hit">mark</mark>
 _underline_{.accent}       → <u class="accent">underline</u>
 [Link](url){target="_blank"} → <a href="url" target="_blank">Link</a>
 ![img](pic.png){.responsive} → <img src="pic.png" alt="img" class="responsive">
@@ -227,7 +273,7 @@ Constraints:
 
 - `{...}` must immediately follow the closing delimiter (no space)
 - Only applies to resolved inline elements (not plain text — `hello{.class}` is literal)
-- Spans with `MD_FLAG_ATTRIBUTES`: em/strong/code/del/u pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
+- Spans with `MD_FLAG_ATTRIBUTES`: em/strong/code/del/u/mark pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
 - `MD_SPAN_SPAN` is emitted for `[text]{attrs}` with `MD_SPAN_SPAN_DETAIL`
 
 HTML renderer: attributes rendered on opening tags. JSON renderer: attrs merged into node props. ANSI renderer: transparent (ignores attrs).

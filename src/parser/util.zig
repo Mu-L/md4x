@@ -548,16 +548,21 @@ pub const MD_ATTRIBUTE_BUILD = struct {
     text: [*c]CHAR = null,
     substr_types: [*c]c.TextType = null,
     substr_offsets: [*c]OFF = null,
-    substr_count: c_int = 0,
+    // All three counters are `usize` — they are only ever element counts and
+    // array indices. md4c keeps them `int`, so the 1.5x growth step below
+    // signed-overflows above 1 431 655 764 substrings and the `@intCast` of the
+    // negative result is illegal behavior in the shipping ReleaseFast build
+    // (upstream 174fe05 widened them for the same reason).
+    substr_count: usize = 0,
     // Exact element count owned by `substr_offsets` MINUS one (the tables are
     // sized `substr_alloc` / `substr_alloc + 1`), and the capacity the append
     // loop grows against.
-    substr_alloc: c_int = 0,
+    substr_alloc: usize = 0,
     // Exact element count owned by `substr_types`. Normally equal to
     // `substr_alloc`, but the two legitimately diverge when growth fails between
     // the two reallocs, so one field cannot express the state (PLAN item 1c).
     // Each array must be freed at its OWN length.
-    types_alloc: c_int = 0,
+    types_alloc: usize = 0,
     // Exact element count owned by `text` (the decoded-text buffer), so it can be
     // freed through ctx.alloc (PLAN C). 0 when `text` is borrowed (trivial path)
     // or unset; md_free_attribute only frees `text` when this is > 0.
@@ -568,27 +573,38 @@ pub const MD_ATTRIBUTE_BUILD = struct {
 
 pub const MD_BUILD_ATTR_NO_ESCAPES: c_uint = 0x0001;
 
+// Hard ceiling on the substring tables of one attribute. A substring consumes at
+// least one byte of the raw attribute text, and raw text is bounded by `SZ`, so
+// no reachable document can want more; the `- 1` keeps `substr_alloc + 1` (the
+// offsets table's length) inside `usize` on 32-bit targets.
+pub const MAX_ATTR_SUBSTRS: usize = @min(std.math.maxInt(SZ), std.math.maxInt(usize) - 1);
+
 pub fn md_build_attr_append_substr(ctx: *MD_CTX, build: *MD_ATTRIBUTE_BUILD, ttype: c.TextType, off: OFF) error{OutOfMemory}!void {
     if (build.substr_count >= build.substr_alloc) {
-        const old_alloc: usize = @intCast(build.substr_alloc);
-        const new_alloc: c_int = if (build.substr_alloc > 0)
-            build.substr_alloc + @divTrunc(build.substr_alloc, 2)
-        else
-            8;
-        const alloc_u: usize = @intCast(new_alloc);
+        // Refuse at the opener rather than saturate: a substring costs at least
+        // one byte of raw attribute text and raw text is an SZ, so this many
+        // substrings can never be legitimately requested. The cap is what keeps
+        // `alloc_u + 1` inside `usize` on 32-bit targets too.
+        if (build.substr_count >= MAX_ATTR_SUBSTRS) {
+            ctx.log("Too many attribute substrings.");
+            return error.OutOfMemory;
+        }
+        const old_alloc: usize = build.substr_alloc;
+        // Saturating so the 1.5x step cannot wrap; @min honours the cap.
+        const alloc_u: usize = @min(if (old_alloc > 0) old_alloc +| old_alloc / 2 else 8, MAX_ATTR_SUBSTRS);
 
         // A capacity field is published only AFTER the block it describes exists,
         // so md_free_attribute always frees at the length actually allocated
         // (same discipline as md_push_block_bytes in blocks.zig).
         //
         // realloc substr_types (routed through ctx.alloc; exact old length passed).
-        const new_types = realloc_array_a(c.TextType, ctx.alloc, build.substr_types, @intCast(build.types_alloc), alloc_u);
+        const new_types = realloc_array_a(c.TextType, ctx.alloc, build.substr_types, build.types_alloc, alloc_u);
         if (new_types == null) {
             ctx.log("realloc() failed.");
             return error.OutOfMemory;
         }
         build.substr_types = new_types;
-        build.types_alloc = new_alloc;
+        build.types_alloc = alloc_u;
 
         // realloc substr_offsets (+1 for final offset == raw_size).
         const old_off_alloc: usize = if (old_alloc > 0) old_alloc + 1 else 0;
@@ -598,11 +614,11 @@ pub fn md_build_attr_append_substr(ctx: *MD_CTX, build: *MD_ATTRIBUTE_BUILD, tty
             return error.OutOfMemory;
         }
         build.substr_offsets = new_offsets;
-        build.substr_alloc = new_alloc;
+        build.substr_alloc = alloc_u;
     }
 
-    build.substr_types[@intCast(build.substr_count)] = ttype;
-    build.substr_offsets[@intCast(build.substr_count)] = off;
+    build.substr_types[build.substr_count] = ttype;
+    build.substr_offsets[build.substr_count] = off;
     build.substr_count += 1;
 }
 
@@ -614,8 +630,8 @@ pub fn md_free_attribute(ctx: *MD_CTX, build: *MD_ATTRIBUTE_BUILD) void {
     // the trivial path (borrowed `text`, embedded trivial_* tables, all lengths
     // 0) relies on.
     free_array_a(CHAR, ctx.alloc, build.text, build.text_alloc);
-    free_array_a(c.TextType, ctx.alloc, build.substr_types, @intCast(build.types_alloc));
-    free_array_a(OFF, ctx.alloc, build.substr_offsets, if (build.substr_alloc > 0) @as(usize, @intCast(build.substr_alloc)) + 1 else 0);
+    free_array_a(c.TextType, ctx.alloc, build.substr_types, build.types_alloc);
+    free_array_a(OFF, ctx.alloc, build.substr_offsets, if (build.substr_alloc > 0) build.substr_alloc + 1 else 0);
     // Reset so a second call is a safe no-op. md_build_attribute() frees the
     // build itself on an OOM mid-build and returns -1; callers then also free
     // it in their error cleanup, which would otherwise double-free. (Idempotent
@@ -696,7 +712,7 @@ pub fn md_build_attribute(ctx: *MD_CTX, raw_text: [*c]const CHAR, raw_size: SZ, 
                 }
             }
 
-            if (build.substr_count == 0 or build.substr_types[@intCast(build.substr_count - 1)] != c.TextType.normal) {
+            if (build.substr_count == 0 or build.substr_types[build.substr_count - 1] != c.TextType.normal) {
                 md_build_attr_append_substr(ctx, build, c.TextType.normal, off) catch {
                     md_free_attribute(ctx, build);
                     return error.OutOfMemory;
@@ -714,7 +730,7 @@ pub fn md_build_attribute(ctx: *MD_CTX, raw_text: [*c]const CHAR, raw_size: SZ, 
             off += 1;
             raw_off += 1;
         }
-        build.substr_offsets[@intCast(build.substr_count)] = off;
+        build.substr_offsets[build.substr_count] = off;
     }
 
     // Hand the build buffers over as exact-length slices. The buffers stay owned
@@ -722,7 +738,7 @@ pub fn md_build_attribute(ctx: *MD_CTX, raw_text: [*c]const CHAR, raw_size: SZ, 
     // only the *view* handed to the callback is a slice. `substr_count` is >= 1
     // on every path through this function, so the two tables are non-empty and
     // keep the `offsets.len == types.len + 1` invariant.
-    const n: usize = @intCast(build.substr_count);
+    const n: usize = build.substr_count;
     attr.text = if (build.text != null) build.text[0..off] else &.{};
     attr.substr_types = build.substr_types[0..n];
     attr.substr_offsets = build.substr_offsets[0 .. n + 1];

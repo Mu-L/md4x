@@ -17,6 +17,7 @@ const MD_SIZE = types.MD_SIZE;
 const MD_CTX = types.MD_CTX;
 const MD_LINE = types.MD_LINE;
 const MD_REF_DEF = types.MD_REF_DEF;
+const MD_FOOTNOTE_DEF = types.MD_FOOTNOTE_DEF;
 const c_allocator = types.c_allocator;
 const MD_REF_DEF_LIST = types.MD_REF_DEF_LIST;
 
@@ -154,232 +155,304 @@ pub fn md_link_label_cmp(a_label: [*c]const CHAR, a_size: SZ, b_label: [*c]const
     return 0;
 }
 
-// Pointer arithmetic helper: the flexible-array `ref_defs[]` of MD_REF_DEF_LIST
-// begins immediately after the header. Returns a many-item pointer to the array.
-pub inline fn md_ref_def_list_items(list: *MD_REF_DEF_LIST) [*c]?*MD_REF_DEF {
-    const base: [*]u8 = @ptrCast(list);
-    return @ptrCast(@alignCast(base + @sizeOf(MD_REF_DEF_LIST)));
-}
-
-// Byte size of a complex bucket holding `n` ref-def pointers (header + flexible
-// array). Used to track the exact allocation length for the ctx.alloc-routed
-// arena helpers (PLAN C).
-inline fn md_ref_def_list_bytes(n: c_int) usize {
-    return @sizeOf(MD_REF_DEF_LIST) + @as(usize, @intCast(n)) * @sizeOf(?*MD_REF_DEF);
-}
-
-// qsort/bsearch comparators. CRITICAL ORDERING NOTE (see PARSER-PORT.md log):
-// these mirror md_ref_def_cmp / md_ref_def_cmp_for_sort byte-for-byte and are
-// passed to libc qsort()/bsearch() (via std.c) so that, on the *same* glibc
-// runtime, the ordering and tie-breaking are bit-identical to the C parser. The
-// comparators read only the MD_REF_DEF fields + the pointer values (for sort
-// stability) — they need no ctx, so they are pure `callconv(.c)` functions.
+// ---- The generic label hashtable ------------------------------------------
 //
-// `a`/`b` are `const void*` pointing at `MD_REF_DEF*` slots (i.e. *(MD_REF_DEF**)).
-pub fn md_ref_def_cmp(a: ?*const anyopaque, b: ?*const anyopaque) callconv(.c) c_int {
-    const a_pp: *const (*const MD_REF_DEF) = @ptrCast(@alignCast(a.?));
-    const b_pp: *const (*const MD_REF_DEF) = @ptrCast(@alignCast(b.?));
-    const a_ref = a_pp.*;
-    const b_ref = b_pp.*;
+// Upstream md4c grew this generalization for footnotes (915676f + 19dd06f):
+// its `MD_LABEL_HASH_TABLE` carries a runtime `def_size` and reaches the label
+// through byte offsets, so `void*` records of either kind share one
+// implementation. Zig can express the same thing with a comptime parameter and
+// keep every access typed, which is what this is.
+//
+// `Def` must open with the three-field label header — `label: [*c]CHAR`,
+// `label_size: SZ`, `hash: c_uint` — that `md_link_label_hash` /
+// `md_link_label_cmp` operate on. `MD_REF_DEF` and `MD_FOOTNOTE_DEF` both do.
+//
+// The table itself is unchanged from the ref-def-only version: an array of
+// `?*anyopaque` buckets, each either null, a pointer straight into `defs[]`
+// (the simple case, told apart by an address-range check against that array),
+// or a pointer to a sorted `MD_REF_DEF_LIST` of `?*Def` (the collision case).
+// The buckets store raw `&defs[i]` pointers and are therefore only valid once
+// collection has finished — no append may move the backing buffer afterwards.
+pub fn LabelHashTable(comptime Def: type) type {
+    return struct {
+        // Pointer arithmetic helper: the flexible array `Def* defs[]` of
+        // MD_REF_DEF_LIST begins immediately after the header. Returns a
+        // many-item pointer to it.
+        pub inline fn listItems(list: *MD_REF_DEF_LIST) [*c]?*Def {
+            const base: [*]u8 = @ptrCast(list);
+            return @ptrCast(@alignCast(base + @sizeOf(MD_REF_DEF_LIST)));
+        }
 
-    if (a_ref.hash < b_ref.hash)
-        return -1
-    else if (a_ref.hash > b_ref.hash)
-        return 1
-    else
-        return md_link_label_cmp(a_ref.label, a_ref.label_size, b_ref.label, b_ref.label_size);
+        // Byte size of a complex bucket holding `n` def pointers (header +
+        // flexible array). Used to track the exact allocation length for the
+        // ctx.alloc-routed arena helpers (PLAN C).
+        inline fn listBytes(n: c_int) usize {
+            return @sizeOf(MD_REF_DEF_LIST) + @as(usize, @intCast(n)) * @sizeOf(?*Def);
+        }
+
+        // qsort/bsearch comparators. CRITICAL ORDERING NOTE (see PARSER-PORT.md
+        // log): these mirror md_ref_def_cmp / md_ref_def_cmp_for_sort
+        // byte-for-byte and are passed to libc qsort()/bsearch() (via std.c) so
+        // that, on the *same* glibc runtime, the ordering and tie-breaking are
+        // bit-identical to the C parser. The comparators read only the label
+        // header + the pointer values (for sort stability) — they need no ctx,
+        // so they are pure `callconv(.c)` functions.
+        //
+        // `a`/`b` are `const void*` pointing at `Def*` slots (i.e. *(Def**)).
+        pub fn cmp(a: ?*const anyopaque, b: ?*const anyopaque) callconv(.c) c_int {
+            const a_pp: *const (*const Def) = @ptrCast(@alignCast(a.?));
+            const b_pp: *const (*const Def) = @ptrCast(@alignCast(b.?));
+            const a_ref = a_pp.*;
+            const b_ref = b_pp.*;
+
+            if (a_ref.hash < b_ref.hash)
+                return -1
+            else if (a_ref.hash > b_ref.hash)
+                return 1
+            else
+                return md_link_label_cmp(a_ref.label, a_ref.label_size, b_ref.label, b_ref.label_size);
+        }
+
+        pub fn cmpForSort(a: ?*const anyopaque, b: ?*const anyopaque) callconv(.c) c_int {
+            var r = cmp(a, b);
+
+            // Ensure stability of the sorting (tie-break on pointer identity,
+            // exactly as C does — these pointers index into the defs array, so
+            // this reproduces the array order for equal labels).
+            if (r == 0) {
+                const a_pp: *const (*const Def) = @ptrCast(@alignCast(a.?));
+                const b_pp: *const (*const Def) = @ptrCast(@alignCast(b.?));
+                const a_ref = @intFromPtr(a_pp.*);
+                const b_ref = @intFromPtr(b_pp.*);
+
+                if (a_ref < b_ref)
+                    r = -1
+                else if (a_ref > b_ref)
+                    r = 1
+                else
+                    r = 0;
+            }
+
+            return r;
+        }
+
+        // Faithful port of md_build_label_hashtable (md4x.c ~1793, upstream
+        // 915676f). Returns 0 / -1.
+        pub fn build(ctx: *MD_CTX, defs: []Def, p_table: *[*c]?*anyopaque, p_size: *usize) c_int {
+            if (defs.len == 0)
+                return 0;
+
+            // Computed in `usize`: `defs.len * 5` overflows a `c_int` above
+            // ~429M defs, which a ~2.6 GB document of nothing but `[a]:b` lines
+            // reaches while still under the 4 GiB an MD_SIZE input allows.
+            // `n + n/4` is exactly `n * 5 / 4` for every non-negative n, without
+            // ever forming the 5x intermediate — so it cannot wrap on a 32-bit
+            // usize either.
+            p_size.* = defs.len + defs.len / 4;
+            p_table.* = @ptrCast(@alignCast(util.arena_alloc(ctx.alloc, p_size.* * @sizeOf(?*anyopaque))));
+            if (p_table.* == null) {
+                ctx.log("malloc() failed.");
+                p_size.* = 0;
+                return -1;
+            }
+            const table = p_table.*;
+            const n_buckets = p_size.*;
+            @memset(table[0..n_buckets], null);
+
+            const defs_base = @intFromPtr(defs.ptr);
+            const defs_end = @intFromPtr(defs.ptr + defs.len);
+
+            // Build the buckets.
+            var i: c_int = 0;
+            while (i < @as(c_int, @intCast(defs.len))) : (i += 1) {
+                const def: *Def = &defs[@intCast(i)];
+
+                def.hash = md_link_label_hash(def.label, def.label_size);
+                const slot: usize = @as(usize, def.hash) % n_buckets;
+                const bucket = table[slot];
+
+                if (bucket == null) {
+                    // Empty bucket: point it at the def.
+                    table[slot] = @ptrCast(def);
+                    continue;
+                }
+
+                const bucket_addr = @intFromPtr(bucket);
+                if (defs_base <= bucket_addr and bucket_addr < defs_end) {
+                    // Bucket holds one def. Same label (dup) or hash conflict?
+                    const old_def: *Def = @ptrCast(@alignCast(bucket));
+
+                    if (md_link_label_cmp(def.label, def.label_size, old_def.label, old_def.label_size) == 0) {
+                        // Duplicate label: ignore this def.
+                        continue;
+                    }
+
+                    // Promote to a complex bucket.
+                    const list: ?*MD_REF_DEF_LIST = @ptrCast(@alignCast(util.arena_alloc(ctx.alloc, listBytes(2))));
+                    if (list == null) {
+                        ctx.log("malloc() failed.");
+                        return -1;
+                    }
+                    const l = list.?;
+                    const items = listItems(l);
+                    items[0] = old_def;
+                    items[1] = def;
+                    l.n_ref_defs = 2;
+                    l.alloc_ref_defs = 2;
+                    table[slot] = @ptrCast(l);
+                    continue;
+                }
+
+                // Append to the existing complex bucket. (Duplicates within
+                // complex buckets are resolved after sorting, below — matching C.)
+                var list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
+                if (list.n_ref_defs >= list.alloc_ref_defs) {
+                    // Same class as the hashtable sizing above, one level down:
+                    // the 1.5x step signed-overflows a `c_int` bucket capacity.
+                    // `alloc_ref_defs` lives in an extern struct whose layout is
+                    // frozen (the flexible array follows it), so it cannot be
+                    // widened — compute in `usize` and refuse instead. -1 is
+                    // what every caller already treats as OOM.
+                    const old_alloc: usize = @intCast(list.alloc_ref_defs);
+                    const grown: usize = old_alloc +| old_alloc / 2;
+                    if (grown > std.math.maxInt(c_int)) {
+                        ctx.log("label hashtable bucket capacity limit exceeded.");
+                        return -1;
+                    }
+                    const new_alloc: c_int = @intCast(grown);
+                    const list_tmp: ?*MD_REF_DEF_LIST = @ptrCast(@alignCast(util.arena_realloc(ctx.alloc, list, listBytes(list.alloc_ref_defs), listBytes(new_alloc))));
+                    if (list_tmp == null) {
+                        ctx.log("realloc() failed.");
+                        return -1;
+                    }
+                    list = list_tmp.?;
+                    list.alloc_ref_defs = new_alloc;
+                    table[slot] = @ptrCast(list);
+                }
+
+                const items = listItems(list);
+                items[@intCast(list.n_ref_defs)] = def;
+                list.n_ref_defs += 1;
+            }
+
+            // Sort the complex buckets so we can bsearch() them.
+            var bi: usize = 0;
+            while (bi < n_buckets) : (bi += 1) {
+                const bucket = table[bi];
+                if (bucket == null)
+                    continue;
+                const bucket_addr = @intFromPtr(bucket);
+                if (defs_base <= bucket_addr and bucket_addr < defs_end)
+                    continue;
+
+                const list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
+                const items = listItems(list);
+                qsort(@ptrCast(items), @intCast(list.n_ref_defs), @sizeOf(?*Def), cmpForSort);
+
+                // Disable duplicates in the complex bucket by forcing duplicate
+                // records to point to the 1st such def (so lookup always
+                // resolves the same).
+                var j: c_int = 1;
+                while (j < list.n_ref_defs) : (j += 1) {
+                    if (cmp(@ptrCast(&items[@intCast(j - 1)]), @ptrCast(&items[@intCast(j)])) == 0)
+                        items[@intCast(j)] = items[@intCast(j - 1)];
+                }
+            }
+
+            return 0;
+        }
+
+        // Faithful port of md_free_label_hashtable (md4x.c ~1907).
+        pub fn free(ctx: *MD_CTX, defs: []const Def, table: [*c]?*anyopaque, n_buckets: usize) void {
+            if (table == null) return;
+
+            const defs_base = @intFromPtr(defs.ptr);
+            const defs_end = @intFromPtr(defs.ptr + defs.len);
+
+            var i: usize = 0;
+            while (i < n_buckets) : (i += 1) {
+                const bucket = table[i];
+                if (bucket == null)
+                    continue;
+                const bucket_addr = @intFromPtr(bucket);
+                if (defs_base <= bucket_addr and bucket_addr < defs_end)
+                    continue;
+                const list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
+                util.arena_free(ctx.alloc, bucket, listBytes(list.alloc_ref_defs));
+            }
+
+            util.arena_free(ctx.alloc, @ptrCast(table), n_buckets * @sizeOf(?*anyopaque));
+        }
+
+        // Faithful port of md_lookup_label_hashtable (md4x.c ~1925). Returns the
+        // matching `*Def` or null.
+        pub fn lookup(defs: []Def, table: [*c]?*anyopaque, n_buckets: usize, label: [*c]const CHAR, label_size: SZ) ?*Def {
+            if (n_buckets == 0)
+                return null;
+
+            const hash = md_link_label_hash(label, label_size);
+            const slot: usize = @as(usize, hash) % n_buckets;
+            const bucket = table[slot];
+
+            if (bucket == null) {
+                return null;
+            }
+
+            const defs_base = @intFromPtr(defs.ptr);
+            const defs_end = @intFromPtr(defs.ptr + defs.len);
+            const bucket_addr = @intFromPtr(bucket);
+
+            if (defs_base <= bucket_addr and bucket_addr < defs_end) {
+                const def: *Def = @ptrCast(@alignCast(bucket));
+                if (md_link_label_cmp(def.label, def.label_size, label, label_size) == 0)
+                    return def
+                else
+                    return null;
+            } else {
+                const list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
+                var key_buf: Def = .{};
+                key_buf.label = @constCast(label);
+                key_buf.label_size = label_size;
+                key_buf.hash = md_link_label_hash(key_buf.label, key_buf.label_size);
+                const key: *const Def = &key_buf;
+
+                const items = listItems(list);
+                const ret = bsearch(@ptrCast(&key), @ptrCast(items), @intCast(list.n_ref_defs), @sizeOf(?*Def), cmp);
+                if (ret) |r| {
+                    const rp: *const (?*Def) = @ptrCast(@alignCast(r));
+                    return rp.*;
+                } else {
+                    return null;
+                }
+            }
+        }
+    };
 }
 
-pub fn md_ref_def_cmp_for_sort(a: ?*const anyopaque, b: ?*const anyopaque) callconv(.c) c_int {
-    var cmp = md_ref_def_cmp(a, b);
+pub const RefDefTable = LabelHashTable(MD_REF_DEF);
+pub const FootnoteTable = LabelHashTable(MD_FOOTNOTE_DEF);
 
-    // Ensure stability of the sorting (tie-break on pointer identity, exactly as
-    // C does — these pointers index into ctx->ref_defs[], so this reproduces the
-    // array order for equal labels).
-    if (cmp == 0) {
-        const a_pp: *const (*const MD_REF_DEF) = @ptrCast(@alignCast(a.?));
-        const b_pp: *const (*const MD_REF_DEF) = @ptrCast(@alignCast(b.?));
-        const a_ref = @intFromPtr(a_pp.*);
-        const b_ref = @intFromPtr(b_pp.*);
-
-        if (a_ref < b_ref)
-            cmp = -1
-        else if (a_ref > b_ref)
-            cmp = 1
-        else
-            cmp = 0;
-    }
-
-    return cmp;
-}
+// Kept as named aliases: the qsort/bsearch comparator pair is the glibc-parity
+// contract called out in .agents/conventions.md, and the unit tests re-export
+// the ref-def entry points by name.
+pub const md_ref_def_cmp = RefDefTable.cmp;
+pub const md_ref_def_cmp_for_sort = RefDefTable.cmpForSort;
+pub const md_ref_def_list_items = RefDefTable.listItems;
 
 // Faithful port of md_build_ref_def_hashtable (md4x.c ~1793). Returns 0 / -1.
 pub fn md_build_ref_def_hashtable(ctx: *MD_CTX) c_int {
-    if (ctx.ref_defs.items.len == 0)
-        return 0;
-
-    ctx.ref_def_hashtable_size = @divTrunc(@as(c_int, @intCast(ctx.ref_defs.items.len)) * 5, 4);
-    ctx.ref_def_hashtable = @ptrCast(@alignCast(util.arena_alloc(ctx.alloc, @as(usize, @intCast(ctx.ref_def_hashtable_size)) * @sizeOf(?*anyopaque))));
-    if (ctx.ref_def_hashtable == null) {
-        ctx.log("malloc() failed.");
-        ctx.ref_def_hashtable_size = 0;
-        return -1;
-    }
-    @memset(ctx.ref_def_hashtable[0..@intCast(ctx.ref_def_hashtable_size)], null);
-
-    const ref_defs_base = @intFromPtr(ctx.ref_defs.items.ptr);
-    const ref_defs_end = @intFromPtr(ctx.ref_defs.items.ptr + ctx.ref_defs.items.len);
-
-    // Build the buckets.
-    var i: c_int = 0;
-    while (i < @as(c_int, @intCast(ctx.ref_defs.items.len))) : (i += 1) {
-        const def: *MD_REF_DEF = @ptrCast(&ctx.ref_defs.items[@intCast(i)]);
-
-        def.hash = md_link_label_hash(def.label, def.label_size);
-        const slot: usize = @intCast(@mod(def.hash, @as(c_uint, @intCast(ctx.ref_def_hashtable_size))));
-        const bucket = ctx.ref_def_hashtable[slot];
-
-        if (bucket == null) {
-            // Empty bucket: point it at the def.
-            ctx.ref_def_hashtable[slot] = @ptrCast(def);
-            continue;
-        }
-
-        const bucket_addr = @intFromPtr(bucket);
-        if (ref_defs_base <= bucket_addr and bucket_addr < ref_defs_end) {
-            // Bucket holds one ref-def. Same label (dup) or hash conflict?
-            const old_def: *MD_REF_DEF = @ptrCast(@alignCast(bucket));
-
-            if (md_link_label_cmp(def.label, def.label_size, old_def.label, old_def.label_size) == 0) {
-                // Duplicate label: ignore this ref-def.
-                continue;
-            }
-
-            // Promote to a complex bucket.
-            const list: ?*MD_REF_DEF_LIST = @ptrCast(@alignCast(util.arena_alloc(ctx.alloc, md_ref_def_list_bytes(2))));
-            if (list == null) {
-                ctx.log("malloc() failed.");
-                return -1;
-            }
-            const l = list.?;
-            const items = md_ref_def_list_items(l);
-            items[0] = old_def;
-            items[1] = def;
-            l.n_ref_defs = 2;
-            l.alloc_ref_defs = 2;
-            ctx.ref_def_hashtable[slot] = @ptrCast(l);
-            continue;
-        }
-
-        // Append to the existing complex bucket. (Duplicates within complex
-        // buckets are resolved after sorting, below — matching C.)
-        var list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
-        if (list.n_ref_defs >= list.alloc_ref_defs) {
-            const new_alloc = list.alloc_ref_defs + @divTrunc(list.alloc_ref_defs, 2);
-            const list_tmp: ?*MD_REF_DEF_LIST = @ptrCast(@alignCast(util.arena_realloc(ctx.alloc, list, md_ref_def_list_bytes(list.alloc_ref_defs), md_ref_def_list_bytes(new_alloc))));
-            if (list_tmp == null) {
-                ctx.log("realloc() failed.");
-                return -1;
-            }
-            list = list_tmp.?;
-            list.alloc_ref_defs = new_alloc;
-            ctx.ref_def_hashtable[slot] = @ptrCast(list);
-        }
-
-        const items = md_ref_def_list_items(list);
-        items[@intCast(list.n_ref_defs)] = def;
-        list.n_ref_defs += 1;
-    }
-
-    // Sort the complex buckets so we can bsearch() them.
-    i = 0;
-    while (i < ctx.ref_def_hashtable_size) : (i += 1) {
-        const bucket = ctx.ref_def_hashtable[@intCast(i)];
-        if (bucket == null)
-            continue;
-        const bucket_addr = @intFromPtr(bucket);
-        if (ref_defs_base <= bucket_addr and bucket_addr < ref_defs_end)
-            continue;
-
-        const list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
-        const items = md_ref_def_list_items(list);
-        qsort(@ptrCast(items), @intCast(list.n_ref_defs), @sizeOf(?*MD_REF_DEF), md_ref_def_cmp_for_sort);
-
-        // Disable duplicates in the complex bucket by forcing duplicate records
-        // to point to the 1st such ref-def (so lookup always resolves the same).
-        var j: c_int = 1;
-        while (j < list.n_ref_defs) : (j += 1) {
-            if (md_ref_def_cmp(@ptrCast(&items[@intCast(j - 1)]), @ptrCast(&items[@intCast(j)])) == 0)
-                items[@intCast(j)] = items[@intCast(j - 1)];
-        }
-    }
-
-    return 0;
+    return RefDefTable.build(ctx, ctx.ref_defs.items, &ctx.ref_def_hashtable, &ctx.ref_def_hashtable_size);
 }
 
 // Faithful port of md_free_ref_def_hashtable (md4x.c ~1907).
 pub fn md_free_ref_def_hashtable(ctx: *MD_CTX) void {
-    if (ctx.ref_def_hashtable != null) {
-        const ref_defs_base = @intFromPtr(ctx.ref_defs.items.ptr);
-        const ref_defs_end = @intFromPtr(ctx.ref_defs.items.ptr + ctx.ref_defs.items.len);
-
-        var i: c_int = 0;
-        while (i < ctx.ref_def_hashtable_size) : (i += 1) {
-            const bucket = ctx.ref_def_hashtable[@intCast(i)];
-            if (bucket == null)
-                continue;
-            const bucket_addr = @intFromPtr(bucket);
-            if (ref_defs_base <= bucket_addr and bucket_addr < ref_defs_end)
-                continue;
-            const list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
-            util.arena_free(ctx.alloc, bucket, md_ref_def_list_bytes(list.alloc_ref_defs));
-        }
-
-        util.arena_free(ctx.alloc, @ptrCast(ctx.ref_def_hashtable), @as(usize, @intCast(ctx.ref_def_hashtable_size)) * @sizeOf(?*anyopaque));
-    }
+    RefDefTable.free(ctx, ctx.ref_defs.items, ctx.ref_def_hashtable, ctx.ref_def_hashtable_size);
 }
 
 // Faithful port of md_lookup_ref_def (md4x.c ~1925). Returns the matching
 // const MD_REF_DEF* or null.
 pub fn md_lookup_ref_def(ctx: *MD_CTX, label: [*c]const CHAR, label_size: SZ) ?*const MD_REF_DEF {
-    if (ctx.ref_def_hashtable_size == 0)
-        return null;
-
-    const hash = md_link_label_hash(label, label_size);
-    const slot: usize = @intCast(@mod(hash, @as(c_uint, @intCast(ctx.ref_def_hashtable_size))));
-    const bucket = ctx.ref_def_hashtable[slot];
-
-    if (bucket == null) {
-        return null;
-    }
-
-    const ref_defs_base = @intFromPtr(ctx.ref_defs.items.ptr);
-    const ref_defs_end = @intFromPtr(ctx.ref_defs.items.ptr + ctx.ref_defs.items.len);
-    const bucket_addr = @intFromPtr(bucket);
-
-    if (ref_defs_base <= bucket_addr and bucket_addr < ref_defs_end) {
-        const def: *const MD_REF_DEF = @ptrCast(@alignCast(bucket));
-        if (md_link_label_cmp(def.label, def.label_size, label, label_size) == 0)
-            return def
-        else
-            return null;
-    } else {
-        const list: *MD_REF_DEF_LIST = @ptrCast(@alignCast(bucket));
-        var key_buf: MD_REF_DEF = .{};
-        key_buf.label = @constCast(label);
-        key_buf.label_size = label_size;
-        key_buf.hash = md_link_label_hash(key_buf.label, key_buf.label_size);
-        const key: *const MD_REF_DEF = &key_buf;
-
-        const items = md_ref_def_list_items(list);
-        const ret = bsearch(@ptrCast(&key), @ptrCast(items), @intCast(list.n_ref_defs), @sizeOf(?*MD_REF_DEF), md_ref_def_cmp);
-        if (ret) |r| {
-            const rp: *const (?*MD_REF_DEF) = @ptrCast(@alignCast(r));
-            return rp.*;
-        } else {
-            return null;
-        }
-    }
+    return RefDefTable.lookup(ctx.ref_defs.items, ctx.ref_def_hashtable, ctx.ref_def_hashtable_size, label, label_size);
 }
 
 // Faithful port of md_free_ref_defs (md4x.c ~2491).
@@ -396,6 +469,113 @@ pub fn md_free_ref_defs(ctx: *MD_CTX) void {
             util.free_array_a(CHAR, ctx.alloc, def.title, @intCast(def.title_size));
     }
     ctx.ref_defs.deinit(ctx.alloc);
+}
+
+// ============================================================================
+//  Footnote Definitions  (md4c a8b0d3e + 54bfec0)
+// ============================================================================
+
+// Recognize `[^label]: text…` at the start of a paragraph block.
+//
+// Returns 0 when the lines are not a footnote definition, N > 0 (the number of
+// lines consumed) when they are and the definition was stored, and -1 on OOM —
+// the same tri-state `c_int` contract as md_is_link_reference_definition (see
+// .agents/conventions.md on why these stay `c_int` rather than `bool`).
+//
+// The caller guarantees `lines.len >= 1` and that lines[0] starts with `[^`.
+pub fn md_is_footnote_definition(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
+    std.debug.assert(lines.len >= 1);
+    var off: OFF = lines[0].beg;
+    std.debug.assert(ctx.ch(off) == '[' and ctx.ch(off + 1) == '^');
+    off += 2;
+
+    // Label: a non-empty run of non-whitespace, non-bracket characters.
+    const label_beg: OFF = off;
+    while (off < lines[0].end and ctx.ch(off) != ']' and !ctx.isWhitespace(off) and ctx.ch(off) != '[')
+        off += 1;
+    const label_end: OFF = off;
+    if (label_end == label_beg)
+        return 0;
+
+    // Closing bracket, then the colon.
+    if (off >= lines[0].end or ctx.ch(off) != ']')
+        return 0;
+    off += 1;
+    if (off >= lines[0].end or ctx.ch(off) != ':')
+        return 0;
+    off += 1;
+
+    // Skip optional whitespace after the colon on the first line.
+    while (off < lines[0].end and ctx.isWhitespace(off))
+        off += 1;
+
+    // Count continuation lines. GitHub-style footnotes let the rest of the
+    // paragraph block form the footnote body, unindented lines included. Blank
+    // lines cannot appear inside a paragraph block (they always end it), so they
+    // need no handling here. Stop before a line that itself starts a new
+    // footnote definition.
+    var n: MD_SIZE = 1;
+    while (n < lines.len) {
+        const def_off: OFF = lines[n].beg;
+
+        if (def_off + 3 < lines[n].end and ctx.ch(def_off) == '[' and ctx.ch(def_off + 1) == '^') {
+            var tmp: OFF = def_off + 2;
+            while (tmp < lines[n].end and ctx.ch(tmp) != ']' and !ctx.isWhitespace(tmp) and ctx.ch(tmp) != '[')
+                tmp += 1;
+            if (tmp > def_off + 2 and tmp + 1 < lines[n].end and ctx.ch(tmp) == ']' and ctx.ch(tmp + 1) == ':')
+                break;
+        }
+
+        n += 1;
+    }
+
+    // Build the content_lines array. Line 0's content starts after the
+    // `[^label]: ` prefix; when nothing follows the colon on that line it is
+    // dropped entirely (so the body starts at line 1). Lines 1.. are stored
+    // verbatim — the block layer has already stripped their indentation.
+    const n_content_lines: MD_SIZE = if (off >= lines[0].end and n > 1) n - 1 else n;
+    const content_lines = ctx.alloc.alloc(MD_LINE, n_content_lines) catch {
+        ctx.log("malloc() failed.");
+        return -1;
+    };
+
+    if (n_content_lines < n) {
+        @memcpy(content_lines, lines[1 .. 1 + n_content_lines]);
+    } else {
+        content_lines[0] = .{ .beg = off, .end = lines[0].end };
+        if (n > 1) @memcpy(content_lines[1..n], lines[1..n]);
+    }
+
+    ctx.footnote_defs.append(ctx.alloc, .{
+        .label = @constCast(ctx.str(label_beg)),
+        .label_size = label_end - label_beg,
+        .content_lines = content_lines,
+    }) catch {
+        ctx.alloc.free(content_lines);
+        ctx.log("realloc() failed.");
+        return -1;
+    };
+
+    return @intCast(n);
+}
+
+pub fn md_lookup_footnote_def(ctx: *MD_CTX, label: [*c]const CHAR, label_size: SZ) ?*MD_FOOTNOTE_DEF {
+    return FootnoteTable.lookup(ctx.footnote_defs.items, ctx.footnote_hashtable, ctx.footnote_hashtable_size, label, label_size);
+}
+
+pub fn md_build_footnote_def_hashtable(ctx: *MD_CTX) c_int {
+    return FootnoteTable.build(ctx, ctx.footnote_defs.items, &ctx.footnote_hashtable, &ctx.footnote_hashtable_size);
+}
+
+// Teardown order mirrors the ref-def pair: the hashtable indexes into
+// `ctx.footnote_defs`, so it must go first.
+pub fn md_free_footnote_defs(ctx: *MD_CTX) void {
+    FootnoteTable.free(ctx, ctx.footnote_defs.items, ctx.footnote_hashtable, ctx.footnote_hashtable_size);
+
+    for (ctx.footnote_defs.items) |*def| {
+        if (def.content_lines.len > 0) ctx.alloc.free(def.content_lines);
+    }
+    ctx.footnote_defs.deinit(ctx.alloc);
 }
 
 // ============================================================================
@@ -897,7 +1077,7 @@ pub fn md_is_autolink_uri(ctx: *MD_CTX, beg: OFF, max_end: OFF, p_end: *OFF) boo
     // MD_ASSERT(CH(beg) == '<');
 
     // Scheme.
-    if (off >= max_end or !ctx.isAscii(off))
+    if (off >= max_end or !ctx.isAlnum(off))
         return false;
     off += 1;
     while (true) {

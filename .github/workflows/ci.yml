@@ -39,6 +39,12 @@ jobs:
           zig build test
           zig build test -Doptimize=Debug
 
+      # Smoke-run each fuzz harness once (36 cases, ~0.3s of runtime after the
+      # build). Not a fuzzing campaign — it only guards against a regression
+      # that trips a harness before anyone runs `--fuzz` by hand.
+      - name: Fuzz harness smoke run
+        run: zig build fuzz-zig
+
       - name: Tests
         run: bun ./scripts/run-tests.ts
 

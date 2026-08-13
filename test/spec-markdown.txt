@@ -396,7 +396,7 @@ Line two.
 ```````````````````````````````` example [no-normalize]
 Use &amp; for ampersand.
 .
-Use & for ampersand.
+Use &amp; for ampersand.
 .
 -t markdown
 ````````````````````````````````
@@ -409,6 +409,193 @@ continues here.
 .
 Line one
 continues here.
+.
+-t markdown
+````````````````````````````````
+
+## Escaping
+
+Text that would be read back as markup is re-escaped, so the output re-parses
+to the same document. Everything below is checked to render the same HTML
+before and after the markdown round-trip.
+
+```````````````````````````````` example [no-normalize]
+\# not a heading
+
+\- not a list item
+
+\> not a quote
+.
+\# not a heading
+
+\- not a list item
+
+\> not a quote
+.
+-t markdown
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+text with \`backtick\` and \_underscore\_ and \*star\*
+.
+text with \`backtick\` and \_underscore\_ and \*star\*
+.
+-t markdown
+````````````````````````````````
+
+A `"` in a link title used to terminate the title early and destroy the link.
+
+```````````````````````````````` example [no-normalize]
+[t](/a "ti\"tle")
+.
+[t](/a "ti\"tle")
+.
+-t markdown
+````````````````````````````````
+
+A destination is wrapped in `<...>` only when it carries whitespace; otherwise
+parentheses are backslash-escaped so it stays readable.
+
+```````````````````````````````` example [no-normalize]
+[a](/x?y=1&z=2) and [b](/a(b)c) and [c](</a b>)
+.
+[a](/x?y=1&z=2) and [b](/a\(b\)c) and [c](</a b>)
+.
+-t markdown
+````````````````````````````````
+
+Backslashes do not exist inside a code span, so the fence grows past the
+longest backtick run in the content instead.
+
+```````````````````````````````` example [no-normalize]
+a ``code `span` here`` b
+.
+a ``code `span` here`` b
+.
+-t markdown
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+| a | b |
+|---|---|
+| x \| y | 2 |
+.
+| a | b |
+| --- | --- |
+| x \| y | 2 |
+.
+-t markdown
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+1\. not a list
+
+2\) also not
+.
+1\. not a list
+
+2\) also not
+.
+-t markdown
+````````````````````````````````
+
+`_`, `~` and `$` only become marks when they are not surrounded by word
+characters, so intra-word ones are left alone.
+
+```````````````````````````````` example [no-normalize]
+snake_case and file~name and cost$s
+.
+snake_case and file~name and cost$s
+.
+-t markdown
+````````````````````````````````
+
+A `=` is markup only in a run of two (`==highlight==`), and that run is
+whitespace-flanked rather than word-flanked, so every `=` next to another `=`
+is escaped while a lone one is left alone.
+
+```````````````````````````````` example [no-normalize]
+a = b and 2 ==2 and x \=\= y
+.
+a = b and 2 \=\=2 and x =\= y
+.
+-t markdown
+````````````````````````````````
+
+A real highlight span is re-emitted as `==`.
+
+```````````````````````````````` example [no-normalize]
+a ==hi== and b==c==d
+.
+a ==hi== and b==c==d
+.
+-t markdown
+````````````````````````````````
+
+An entity is resolved to its character, which then needs escaping of its own:
+`&amp;amp;` must not come back out as a bare `&amp;`.
+
+```````````````````````````````` example [no-normalize]
+&amp;amp; is an escaped entity
+.
+&amp;amp; is an escaped entity
+.
+-t markdown
+````````````````````````````````
+
+A trailing `#` run would close an ATX heading.
+
+```````````````````````````````` example [no-normalize]
+# heading with a \#
+.
+# heading with a \#
+.
+-t markdown
+````````````````````````````````
+
+## Footnotes
+
+A reference round-trips as `[^label]`. The definition is re-emitted at the end
+of the document, which is where the parser hands it over — a textual move, not
+a semantic one.
+
+```````````````````````````````` example [no-normalize]
+Text[^1] and again[^1].
+
+[^1]: The note.
+.
+Text[^1] and again[^1].
+
+[^1]: The note.
+.
+-t markdown
+````````````````````````````````
+
+Definitions move to the end even when they were written first, and follow
+first-reference order rather than definition order.
+
+```````````````````````````````` example [no-normalize]
+[^b]: B note.
+[^a]: A note.
+
+See [^a] then [^b].
+.
+See [^a] then [^b].
+
+[^a]: A note.
+
+[^b]: B note.
+.
+-t markdown
+````````````````````````````````
+
+A literal `[^1]` with no definition is not a reference, and `[` is escaped
+unconditionally, so it cannot become one on the re-parse.
+
+```````````````````````````````` example [no-normalize]
+Not a ref: [^1].
+.
+Not a ref: \[^1\].
 .
 -t markdown
 ````````````````````````````````

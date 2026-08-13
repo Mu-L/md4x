@@ -1,0 +1,436 @@
+# Highlight
+
+With the flag `MD_FLAG_HIGHLIGHT`, MD4X enables extension for recognition of
+inline highlight spans, written as `==text==` and rendered as `<mark>`.
+
+Ported from md4c `d2a08e5`. Note MD4X always parses with `MD_DIALECT_ALL`, so
+the examples below also show how highlight composes with the other extensions;
+md4c's "flag required" section cannot be expressed here.
+
+```````````````````````````````` example
+==Hello, world!==
+.
+<p><mark>Hello, world!</mark></p>
+````````````````````````````````
+
+Highlight spans may appear inline alongside normal text:
+
+```````````````````````````````` example
+This is ==very important== text.
+.
+<p>This is <mark>very important</mark> text.</p>
+````````````````````````````````
+
+Multiple independent highlight spans may appear in the same paragraph:
+
+```````````````````````````````` example
+==first== and ==second==
+.
+<p><mark>first</mark> and <mark>second</mark></p>
+````````````````````````````````
+
+
+## Delimiter length
+
+Exactly two equals signs form a delimiter. A single one is literal:
+
+```````````````````````````````` example
+=highlight=
+.
+<p>=highlight=</p>
+````````````````````````````````
+
+Longer runs are not split into delimiters:
+
+```````````````````````````````` example
+===highlight===
+.
+<p>===highlight===</p>
+````````````````````````````````
+
+```````````````````````````````` example
+====highlight====
+.
+<p>====highlight====</p>
+````````````````````````````````
+
+```````````````````````````````` example
+=====x=====
+.
+<p>=====x=====</p>
+````````````````````````````````
+
+A run of four on its own is neither an opener nor a closer pair:
+
+```````````````````````````````` example
+====
+.
+<p>====</p>
+````````````````````````````````
+
+A lone equals sign in prose is untouched:
+
+```````````````````````````````` example
+a = b and a == b
+.
+<p>a = b and a == b</p>
+````````````````````````````````
+
+
+## Whitespace rules
+
+Unlike emphasis, the delimiter is gated on whitespace adjacency only, not on
+the flanking rules. A delimiter cannot open a span when it is followed by
+whitespace:
+
+```````````````````````````````` example
+== highlight==
+.
+<p>== highlight==</p>
+````````````````````````````````
+
+And it cannot close a span when it is preceded by whitespace:
+
+```````````````````````````````` example
+==highlight ==
+.
+<p>==highlight ==</p>
+````````````````````````````````
+
+```````````````````````````````` example
+== ==
+.
+<p>== ==</p>
+````````````````````````````````
+
+Because the rule is whitespace-based, an intra-word delimiter still works:
+
+```````````````````````````````` example
+a==b==c
+.
+<p>a<mark>b</mark>c</p>
+````````````````````````````````
+
+
+## Unmatched delimiters
+
+An opener with no closer stays literal:
+
+```````````````````````````````` example
+==highlight
+.
+<p>==highlight</p>
+````````````````````````````````
+
+And so does a closer with no opener:
+
+```````````````````````````````` example
+highlight==
+.
+<p>highlight==</p>
+````````````````````````````````
+
+```````````````````````````````` example
+a==b
+.
+<p>a==b</p>
+````````````````````````````````
+
+A backslash-escaped delimiter is literal text:
+
+```````````````````````````````` example
+\==x\==
+.
+<p>==x==</p>
+````````````````````````````````
+
+
+## Span boundaries
+
+A highlight span may span a soft line break inside one paragraph:
+
+```````````````````````````````` example
+==a
+b==
+.
+<p><mark>a
+b</mark></p>
+````````````````````````````````
+
+But it cannot cross a paragraph boundary:
+
+```````````````````````````````` example
+This ==has a
+
+new paragraph==.
+.
+<p>This ==has a</p>
+<p>new paragraph==.</p>
+````````````````````````````````
+
+Delimiters nest, innermost pair first:
+
+```````````````````````````````` example
+==a ==b== c==
+.
+<p><mark>a <mark>b</mark> c</mark></p>
+````````````````````````````````
+
+A highlight span does not cross a strike-through span; the inner run is
+literal:
+
+```````````````````````````````` example
+==a~~b==c~~
+.
+<p><mark>a~~b</mark>c~~</p>
+````````````````````````````````
+
+
+## Suppression inside code
+
+Equals signs inside a code span are literal:
+
+```````````````````````````````` example
+`==code==`
+.
+<p><code>==code==</code></p>
+````````````````````````````````
+
+So are those in a fenced code block:
+
+```````````````````````````````` example
+```
+==code==
+```
+.
+<pre><code>==code==
+</code></pre>
+````````````````````````````````
+
+And in an indented code block:
+
+```````````````````````````````` example
+    ==code==
+.
+<pre><code>==code==
+</code></pre>
+````````````````````````````````
+
+
+## Nested inline spans
+
+```````````````````````````````` example
+==very *important* text==
+.
+<p><mark>very <em>important</em> text</mark></p>
+````````````````````````````````
+
+Note MD4X also enables `MD_FLAG_UNDERLINE`, so `_x_` is `<u>`, not `<em>`:
+
+```````````````````````````````` example
+==**bold** and _italic_==
+.
+<p><mark><strong>bold</strong> and <u>italic</u></mark></p>
+````````````````````````````````
+
+```````````````````````````````` example
+==highlighted `code`==
+.
+<p><mark>highlighted <code>code</code></mark></p>
+````````````````````````````````
+
+```````````````````````````````` example
+==highlighted [link](http://example.com)==
+.
+<p><mark>highlighted <a href="http://example.com">link</a></mark></p>
+````````````````````````````````
+
+```````````````````````````````` example
+==<b>raw html</b>==
+.
+<p><mark><b>raw html</b></mark></p>
+````````````````````````````````
+
+```````````````````````````````` example
+==&amp;==
+.
+<p><mark>&amp;</mark></p>
+````````````````````````````````
+
+A highlight span may itself be nested in another span:
+
+```````````````````````````````` example
+[==highlighted link==](http://example.com)
+.
+<p><a href="http://example.com"><mark>highlighted link</mark></a></p>
+````````````````````````````````
+
+```````````````````````````````` example
+*==a==* and **==b==**
+.
+<p><em><mark>a</mark></em> and <strong><mark>b</mark></strong></p>
+````````````````````````````````
+
+Adjacent spans do not interfere:
+
+```````````````````````````````` example
+**==a==**==b==
+.
+<p><strong><mark>a</mark></strong><mark>b</mark></p>
+````````````````````````````````
+
+A permissive autolink is still recognized inside a highlight span:
+
+```````````````````````````````` example
+==www.example.com==
+.
+<p><mark><a href="http://www.example.com">www.example.com</a></mark></p>
+````````````````````````````````
+
+
+## Setext headings
+
+`=` is also the setext underline character, but that is block-level
+classification, which the inline mark collector never sees. A setext underline
+is still a heading:
+
+```````````````````````````````` example
+para
+===
+.
+<h1>para</h1>
+````````````````````````````````
+
+Including an underline of exactly two:
+
+```````````````````````````````` example
+para
+==
+.
+<h1>para</h1>
+````````````````````````````````
+
+And a highlighted setext heading works:
+
+```````````````````````````````` example
+==h==
+=====
+.
+<h1><mark>h</mark></h1>
+````````````````````````````````
+
+```````````````````````````````` example
+# ==h==
+.
+<h1><mark>h</mark></h1>
+````````````````````````````````
+
+
+## Other MD4X extensions
+
+Strike-through composes both ways:
+
+```````````````````````````````` example
+~~==a==~~ and ==~~b~~==
+.
+<p><del><mark>a</mark></del> and <mark><del>b</del></mark></p>
+````````````````````````````````
+
+Highlight inside a table cell:
+
+```````````````````````````````` example
+| Feature | Status |
+| --- | --- |
+| Highlight | ==done== |
+.
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Highlight</td>
+<td><mark>done</mark></td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Highlight inside an inline component:
+
+```````````````````````````````` example
+:badge[==x==]
+.
+<p><badge><mark>x</mark></badge></p>
+````````````````````````````````
+
+LaTeX math is verbatim, so a delimiter inside it stays literal:
+
+```````````````````````````````` example
+==$x$== and $==y==$
+.
+<p><mark><x-equation>x</x-equation></mark> and <x-equation>==y==</x-equation></p>
+````````````````````````````````
+
+A wiki link target is verbatim too:
+
+```````````````````````````````` example
+[[==a==]]
+.
+<p><x-wikilink data-target="==a==">==a==</x-wikilink></p>
+````````````````````````````````
+
+
+## Attributes
+
+Unlike md4c, MD4X gives the span an attributes detail, so a trailing `{...}`
+attaches to it exactly as it does to `**bold**` or `~~del~~`:
+
+```````````````````````````````` example
+==x=={.warn}
+.
+<p><mark class="warn">x</mark></p>
+````````````````````````````````
+
+```````````````````````````````` example
+==x=={#id .a data-k="v"}
+.
+<p><mark id="id" data-k="v" class="a">x</mark></p>
+````````````````````````````````
+
+The braces must follow the closer immediately:
+
+```````````````````````````````` example
+x ==y== {.z}
+.
+<p>x <mark>y</mark> {.z}</p>
+````````````````````````````````
+
+Braces inside the span are ordinary text:
+
+```````````````````````````````` example
+==a{.b}==
+.
+<p><mark>a{.b}</mark></p>
+````````````````````````````````
+
+An attribute value may itself contain the delimiter; the attribute parser wins
+because the closer's `{...}` is consumed with the span:
+
+```````````````````````````````` example
+==a=={b==c}
+.
+<p><mark b="=c">a</mark></p>
+````````````````````````````````
+
+A `==` inside another span's attributes is not a highlight delimiter — it is
+part of the property value, exactly as before this extension existed:
+
+```````````````````````````````` example
+**b**{data=="x"}
+.
+<p><strong data="=&quot;x&quot;">b</strong></p>
+````````````````````````````````

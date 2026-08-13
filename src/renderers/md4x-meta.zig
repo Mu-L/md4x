@@ -1,5 +1,5 @@
 // MD4X: Markdown parser for C
-// (http://github.com/unjs/md4x)
+// (https://github.com/unjs/md4x)
 //
 // Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
 //
@@ -121,6 +121,19 @@ fn hex_val(ch: u8) c_uint {
 
 // Encode a Unicode codepoint as UTF-8 into a buffer. Returns bytes written.
 fn encode_utf8(codepoint: c_uint, out: [*]u8) c.MD_SIZE {
+    // U+0000, the surrogate range (U+D800..U+DFFF) and anything above U+10FFFF
+    // are not Unicode scalar values; CommonMark requires them to render as
+    // U+FFFD, matching the .nullchar text-type path below.
+    if (codepoint == 0 or codepoint > 0x10ffff or
+        (0xd800 <= codepoint and codepoint <= 0xdfff))
+    {
+        // U+FFFD replacement character
+        out[0] = 0xef;
+        out[1] = 0xbf;
+        out[2] = 0xbd;
+        return 3;
+    }
+
     if (codepoint <= 0x7f) {
         out[0] = @truncate(codepoint);
         return 1;
@@ -133,18 +146,12 @@ fn encode_utf8(codepoint: c_uint, out: [*]u8) c.MD_SIZE {
         out[1] = @intCast(0x80 | ((codepoint >> 6) & 0x3f));
         out[2] = @intCast(0x80 | (codepoint & 0x3f));
         return 3;
-    } else if (codepoint <= 0x10ffff) {
-        out[0] = @intCast(0xf0 | ((codepoint >> 18) & 0x7));
-        out[1] = @intCast(0x80 | ((codepoint >> 12) & 0x3f));
-        out[2] = @intCast(0x80 | ((codepoint >> 6) & 0x3f));
-        out[3] = @intCast(0x80 | (codepoint & 0x3f));
-        return 4;
     }
-    // U+FFFD replacement character
-    out[0] = 0xef;
-    out[1] = 0xbf;
-    out[2] = 0xbd;
-    return 3;
+    out[0] = @intCast(0xf0 | ((codepoint >> 18) & 0x7));
+    out[1] = @intCast(0x80 | ((codepoint >> 12) & 0x3f));
+    out[2] = @intCast(0x80 | ((codepoint >> 6) & 0x3f));
+    out[3] = @intCast(0x80 | (codepoint & 0x3f));
+    return 4;
 }
 
 // Resolve an HTML entity to UTF-8 and append to the heading buffer.

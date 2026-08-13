@@ -27,6 +27,54 @@ Ditto for Unicode punctuation (here U+00A1).
 <p>*foo¡*bar</p>
 ````````````````````````````````
 
+### `PUNCT_MAP` freshness (Unicode 18.0)
+
+`_` is an in-word character unless a neighbour is Unicode whitespace or
+punctuation, so `PUNCT_MAP` decides whether the closing run flanks. The
+1003 code points that became punctuation between Unicode 15.1 and 18.0 are
+therefore parse-affecting, and these pin representatives of that set: each
+one rendered `_foo_` literally while the tables were generated from 15.1.
+
+Control -- U+20C0 was already punctuation in 15.1:
+
+```````````````````````````````` example
+_foo_⃀
+.
+<p><u>foo</u>⃀</p>
+````````````````````````````````
+
+U+20C1, adjacent to the control and added after 15.1:
+
+```````````````````````````````` example
+_foo_⃁
+.
+<p><u>foo</u>⃁</p>
+````````````````````````````````
+
+U+2E60 (Supplemental Punctuation):
+
+```````````````````````````````` example
+_foo_⹠
+.
+<p><u>foo</u>⹠</p>
+````````````````````````````````
+
+U+1CC00, a 4-byte sequence from the largest added block (U+1CC00..U+1CCEF):
+
+```````````````````````````````` example
+_foo_𜰀
+.
+<p><u>foo</u>𜰀</p>
+````````````````````````````````
+
+U+1FBCB, from the last added range:
+
+```````````````````````````````` example
+_foo_🯋
+.
+<p><u>foo</u>🯋</p>
+````````````````````````````````
+
 
 ## `md_get_unicode_fold_info()`
 
@@ -36,6 +84,42 @@ Ditto for Unicode punctuation (here U+00A1).
 [PŘÍLIŠ ŽLUŤOUČKÝ KŮŇ ÚPĚL ĎÁBELSKÉ ÓDY.]: /url
 .
 <p><a href="/url">Příliš žluťoučký kůň úpěl ďábelské ódy.</a></p>
+````````````````````````````````
+
+### `FOLD_MAP_*` freshness (Unicode 18.0)
+
+Link reference labels are matched after case folding, so the 76 foldings added
+between Unicode 15.1 and 18.0 decide whether these labels resolve at all. Under
+15.1 tables both sides stayed distinct and the reference did not resolve.
+
+`FOLD_MAP_1`, U+1C89 CYRILLIC CAPITAL LETTER TJE folding to U+1C8A:
+
+```````````````````````````````` example
+[Ᲊ]
+
+[ᲊ]: /url
+.
+<p><a href="/url">Ᲊ</a></p>
+````````````````````````````````
+
+`FOLD_MAP_1`, U+10D50 (Garay) folding to U+10D70 -- a supplementary-plane pair:
+
+```````````````````````````````` example
+[𐵐]
+
+[𐵰]: /url
+.
+<p><a href="/url">𐵐</a></p>
+````````````````````````````````
+
+`FOLD_MAP_2`, U+1DF95 folding to `ss` -- the only new multi-codepoint folding:
+
+```````````````````````````````` example
+[𝾕]
+
+[ss]: /url
+.
+<p><a href="/url">𝾕</a></p>
 ````````````````````````````````
 
 
