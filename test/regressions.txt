@@ -1770,3 +1770,107 @@ x <- 1
 .
 -t json
 ````````````````````````````````
+
+
+## Terminal control bytes must not reach the terminal (ANSI / text renderers)
+
+The `ansi` and `text` renderers copied document bytes straight into their
+output, so a C0 control byte in the source document was *executed* by the
+terminal rather than displayed. Both now replace every C0 control except TAB
+and LF -- plus DEL -- with its Unicode control picture (U+2400 + ch, U+2421 for
+DEL), which is one character cell wide, so column alignment is preserved.
+
+The `\033]0;title\007` window-title attack, a CSI screen-clear plus cursor
+move, a lone ESC and a DEL, in ordinary paragraph text. (A raw CR cannot appear
+here -- the parser treats it as a line terminator -- so it is covered by the
+`&#13;` case below.)
+
+```````````````````````````````` example [no-normalize]
+Hello ]0;pwned then [2J[1;1H and a lone ,  here
+.
+Hello ␛]0;pwned␇ then ␛[2J␛[1;1H and a lone ␛, ␡ here
+.
+-t ansi
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+Hello ]0;pwned then [2J[1;1H and a lone ,  here
+.
+Hello ␛]0;pwned␇ then ␛[2J␛[1;1H and a lone ␛, ␡ here
+.
+-t text
+````````````````````````````````
+
+A numeric character reference decodes to an arbitrary code point, so the
+decoded bytes need the same treatment as literal ones -- `&#27;` was a raw ESC.
+TAB (`&#9;`) is deliberately kept, it is layout the renderers emit themselves.
+
+```````````````````````````````` example [no-normalize]
+A&#27;B&#7;C&#127;D&#13;E&#9;F
+.
+A␛B␇C␡D␍E→F
+.
+-t ansi
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+A&#27;B&#7;C&#127;D&#13;E&#9;F
+.
+A␛B␇C␡D␍E→F
+.
+-t text
+````````````````````````````````
+
+A CSI sequence inside a fenced code block. Code spans and code blocks are
+verbatim to the parser, so this is the one path an entity cannot reach.
+
+```````````````````````````````` example [no-normalize]
+```
+plain [2J end
+```
+.
+  plain ␛[2J␇ end
+.
+-t text
+````````````````````````````````
+
+One picture per control byte keeps a table cell the same width it would be
+without the attack, which stripping the bytes would not.
+
+```````````````````````````````` example [no-normalize]
+| a | b |
+| --- | --- |
+| [31mX | Y |
+.
+a→b→
+␛[31mX→Y␡→
+.
+-t text
+````````````````````````````````
+
+The sharpest case: the OSC 8 hyperlink interpolates the link destination
+between `ESC ] 8 ; ;` and `ESC \`, and an OSC string is terminated by BEL or
+ST -- so a control byte in the destination closed the sequence early and the
+rest of the URL ran as a fresh terminal command. Destinations percent-encode
+those bytes instead, matching the `href="..."` the HTML renderer produces for
+the same input; the hyperlink keeps working.
+
+```````````````````````````````` example [no-normalize]
+See [click](<http://a.b/]0;pwnedx>) now
+.
+See ]8;;http://a.b/%07%1B]0;pwned%07x\[4;34mclick[0m]8;;\ now
+.
+-t ansi
+````````````````````````````````
+
+The same input through the HTML renderer, for comparison -- this renderer was
+always correct, and pinning it here keeps the two escaping rules from drifting
+apart.
+
+```````````````````````````````` example [no-normalize]
+See [click](<http://a.b/]0;pwnedx>) now
+.
+<p>See <a href="http://a.b/%07%1B%5D0;pwned%07x">click</a> now</p>
+.
+-t html
+````````````````````````````````

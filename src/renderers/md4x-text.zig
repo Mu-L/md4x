@@ -34,6 +34,7 @@ const c = @import("abi");
 const md4x = @import("../md4x.zig");
 const entity = @import("../entity.zig");
 const heal = @import("md4x-heal.zig");
+const scan = @import("../scan.zig");
 const sys = @cImport({
     @cInclude("stdio.h");
 });
@@ -75,6 +76,44 @@ fn render_verbatim(r: *MD_TEXT, text: [*]const u8, size: c.MD_SIZE) void {
 
 fn render_verbatim_lit(r: *MD_TEXT, comptime lit: []const u8) void {
     render_verbatim(r, lit.ptr, @intCast(lit.len));
+}
+
+// Same rule, and for the same reason, as md4x-ansi.zig's render_sanitized: this
+// renderer's output is the CLI default whenever stdout is not a TTY, but it is
+// still routinely read in a terminal (pipes into a pager, CI logs), and it
+// copied document bytes through verbatim -- so an ESC in the source document
+// executed as a terminal control sequence here too. C0 controls other than TAB
+// and LF, plus DEL, become their Unicode control picture (U+2400 + ch, U+2421
+// for DEL): one byte in, one cell out, so the renderer's tab-separated table
+// columns and code-block indentation stay aligned.
+fn render_sanitized(r: *MD_TEXT, data: [*]const u8, size: c.MD_SIZE) void {
+    var beg: c.MD_SIZE = 0;
+    var off: c.MD_SIZE = 0;
+
+    while (true) {
+        // The `lt` threshold covers the whole C0 range in one vector compare;
+        // TAB/LF are the two members filtered back out here.
+        off = @intCast(scan.indexOfAnyPos("\x7f", 0x20, data, off, size));
+        while (off < size and (data[off] == '\t' or data[off] == '\n'))
+            off = @intCast(scan.indexOfAnyPos("\x7f", 0x20, data, off + 1, size));
+
+        if (off > beg)
+            render_verbatim(r, data + beg, off - beg);
+        if (off >= size)
+            break;
+
+        const cp: c_uint = if (data[off] == 0x7f) 0x2421 else 0x2400 + @as(c_uint, data[off]);
+        // U+2400..U+2421 all encode as three UTF-8 bytes.
+        const pic = [_]u8{
+            @intCast(0xe0 | (cp >> 12)),
+            @intCast(0x80 | ((cp >> 6) & 0x3f)),
+            @intCast(0x80 | (cp & 0x3f)),
+        };
+        render_verbatim(r, &pic, 3);
+
+        off += 1;
+        beg = off;
+    }
 }
 
 fn render_indent(r: *MD_TEXT) void {
@@ -318,7 +357,7 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             r.quote_depth += 1;
             render_indent(r);
             if (det.type_name.text.len > 0)
-                render_attribute(r, &det.type_name, render_verbatim);
+                render_attribute(r, &det.type_name, render_sanitized);
             render_newline(r);
         },
 
@@ -459,7 +498,9 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
         .html => {},
 
         .entity => {
-            render_entity(r, text, size, render_verbatim);
+            // A numeric character reference decodes to an arbitrary code point,
+            // so `&#27;` is a raw ESC unless the decoded bytes are sanitized too.
+            render_entity(r, text, size, render_sanitized);
         },
 
         .code => {
@@ -473,15 +514,15 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
                         render_verbatim_lit(r, "  ");
                         r.need_indent = false;
                     }
-                    render_verbatim(r, text, size);
+                    render_sanitized(r, text, size);
                 }
             } else {
-                render_verbatim(r, text, size);
+                render_sanitized(r, text, size);
             }
         },
 
         else => {
-            render_verbatim(r, text, size);
+            render_sanitized(r, text, size);
         },
     }
 

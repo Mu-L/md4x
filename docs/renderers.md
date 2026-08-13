@@ -190,6 +190,7 @@ pub fn md_ansi(
 - Frontmatter: suppressed by default (enable with `MD_ANSI_FLAG_SHOW_FRONTMATTER` for dim text output)
 - Raw HTML: stripped (not rendered)
 - Entities resolved to UTF-8 characters
+- Control bytes from the document — including ones a numeric character reference decodes to — are replaced with their Unicode control picture (`␛`, `␇`, `␍`, `␡`; U+2400 + ch, U+2421 for DEL) on every text path, so document content can never emit a terminal escape sequence. TAB and LF pass through: the renderer emits them itself as layout. One picture per byte keeps table columns aligned. Link destinations percent-encode those bytes instead (`%1B`), matching the `href="..."` the HTML renderer produces — escaping is impossible _inside_ the OSC 8 hyperlink string, which BEL or ST would otherwise terminate early. Only the renderer's own escape codes reach the terminal, which is what makes `MD_ANSI_FLAG_NO_COLOR` genuinely plain-text output rather than merely uncoloured.
 
 Uses streaming renderer pattern (like HTML renderer), no AST construction.
 
@@ -295,6 +296,7 @@ pub fn md_text(
 - Alerts: type label + content with `> ` prefix
 - Entities resolved to UTF-8 characters
 - Raw HTML: stripped (no output)
+- Control bytes from the document are replaced with their Unicode control picture, exactly as in the ANSI renderer above — this output is the CLI default whenever stdout is not a TTY, but it is still routinely read in a terminal
 - Uses streaming renderer pattern (like HTML renderer), no AST construction
 
 ## Markdown Renderer API (`src/renderers/md4x-markdown.zig`)
