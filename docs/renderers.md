@@ -210,7 +210,28 @@ const json = @import("md4x-json.zig");
 - `JSON_WRITER` — Streaming JSON writer struct with callback-based output
 - `json_write()` / `json_write_str()` — Raw and string output helpers
 - `json_write_escaped()` / `json_write_string()` — JSON-escaped string output
-- `json_write_yaml_props()` — Parses YAML frontmatter and writes key-value pairs as JSON properties (using libyaml)
+- `json_write_yaml_props()` — Parses YAML frontmatter and writes key-value pairs as JSON properties (using libyaml). Returns the number of props actually written, which callers use to place the separating comma before whatever they append next.
+
+### Malformed YAML
+
+The writer streams straight through `process_output`, so emitted bytes cannot be
+retracted — and libyaml reports a syntax error only after emitting the events
+that precede it. A mid-document YAML error is therefore repaired **forward**, on
+the invariant that the emitted JSON is always balanced: the pairs that parsed
+are kept, every container that was opened is closed, and a key whose value could
+not be parsed receives an explicit `null`.
+
+| Frontmatter        | Props emitted             |
+| ------------------ | ------------------------- |
+| `a: @bad`          | `{"a":null}`              |
+| `title: Hi\nb: @x` | `{"title":"Hi","b":null}` |
+| `a: [1`            | `{"a":[1]}`               |
+| `a: {x: 1`         | `{"a":{"x":1}}`           |
+
+The failing key is reported rather than dropped: dropping it would make a
+truncated or malformed document indistinguishable from one where the author
+simply omitted the field. Aliases are `null` too — libyaml's parser does not
+compose, so anchors are never resolved.
 
 ## Meta Renderer API (`src/renderers/md4x-meta.zig`)
 

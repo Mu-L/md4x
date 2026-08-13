@@ -190,11 +190,28 @@ fn json_write_yaml_scalar(w: *JsonWriter, event: *const sys.yaml_event_t) void {
     json_write_string(w, val, len);
 }
 
+// ---- Malformed-YAML contract ----
+//
+// `JsonWriter` streams straight through `process_output`: bytes handed to the
+// sink cannot be retracted, and libyaml reports a syntax error only once it has
+// already emitted the events preceding it. So a mid-mapping error is repaired
+// *forward*, never rolled back. Every function below upholds one invariant:
+//
+//   **on return — success or error — the JSON it emitted is balanced.**
+//
+// Concretely: a container it opened is always closed, and a position that
+// syntactically demands a value always receives one (`null` when nothing could
+// be parsed). What is kept is therefore the prefix libyaml did parse, plus an
+// explicit `null` for the key whose value it did not. Dropping the failing key
+// instead would make a truncated document indistinguishable from one where the
+// author simply omitted the field.
+
 // Write a YAML mapping as JSON object key-value pairs (without outer braces).
-// Assumes MAPPING_START consumed. Returns number of pairs, or -1 on error.
-fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
+// Assumes MAPPING_START consumed. Returns 0 on success, -1 on error; `n_written`
+// is incremented once per pair actually emitted (including a pair whose value
+// had to be repaired to `null`, since its key bytes are already on the wire).
+fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t, n_written: *c_int) c_int {
     var event: sys.yaml_event_t = undefined;
-    var n: c_int = 0;
 
     while (true) {
         if (sys.yaml_parser_parse(yp, &event) == 0)
@@ -206,11 +223,15 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
         }
 
         if (event.type != sys.YAML_SCALAR_EVENT) {
+            // A non-scalar key (a complex `? key` mapping, or a stray
+            // structural event). No byte of this pair has been written yet —
+            // not even the separating comma — so stopping here already leaves
+            // the object well-formed.
             sys.yaml_event_delete(&event);
             return -1;
         }
 
-        if (n > 0)
+        if (n_written.* > 0)
             json_write(w, ",", 1);
 
         // Write key.
@@ -219,13 +240,15 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
         json_write_str(w, "\":");
         sys.yaml_event_delete(&event);
 
-        // Write value (recursive).
-        if (json_write_yaml_value(w, yp) < 0)
+        // Write value (recursive). Past this point the key is committed, so the
+        // pair counts as written whatever happens: `json_write_yaml_value`
+        // guarantees it emitted *some* value at this position.
+        const ret = json_write_yaml_value(w, yp);
+        n_written.* += 1;
+        if (ret < 0)
             return -1;
-
-        n += 1;
     }
-    return n;
+    return 0;
 }
 
 // Write a YAML sequence as a JSON array.
@@ -233,12 +256,18 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
 fn json_write_yaml_sequence(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
     var event: sys.yaml_event_t = undefined;
     var n: c_int = 0;
+    var ret: c_int = 0;
 
     json_write(w, "[", 1);
 
     while (true) {
-        if (sys.yaml_parser_parse(yp, &event) == 0)
-            return -1;
+        if (sys.yaml_parser_parse(yp, &event) == 0) {
+            // Nothing is pending here: the comma is written only after an event
+            // has been parsed successfully, so the array closes cleanly on the
+            // elements seen so far.
+            ret = -1;
+            break;
+        }
 
         if (event.type == sys.YAML_SEQUENCE_END_EVENT) {
             sys.yaml_event_delete(&event);
@@ -248,68 +277,72 @@ fn json_write_yaml_sequence(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
         if (n > 0)
             json_write(w, ",", 1);
 
-        if (event.type == sys.YAML_SCALAR_EVENT) {
-            json_write_yaml_scalar(w, &event);
-            sys.yaml_event_delete(&event);
-        } else if (event.type == sys.YAML_MAPPING_START_EVENT) {
-            sys.yaml_event_delete(&event);
-            json_write(w, "{", 1);
-            if (json_write_yaml_mapping(w, yp) < 0)
-                return -1;
-            json_write(w, "}", 1);
-        } else if (event.type == sys.YAML_SEQUENCE_START_EVENT) {
-            sys.yaml_event_delete(&event);
-            if (json_write_yaml_sequence(w, yp) < 0)
-                return -1;
-        } else {
-            sys.yaml_event_delete(&event);
-            return -1;
+        if (json_write_yaml_event(w, yp, &event) < 0) {
+            ret = -1;
+            break;
         }
 
         n += 1;
     }
 
     json_write(w, "]", 1);
-    return 0;
+    return ret;
 }
 
-// Write the next YAML value (scalar, mapping, or sequence) as JSON.
-// Returns 0 on success, -1 on error.
-fn json_write_yaml_value(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
-    var event: sys.yaml_event_t = undefined;
-
-    if (sys.yaml_parser_parse(yp, &event) == 0)
-        return -1;
-
+// Write the value denoted by an already-parsed `event` as JSON. Takes ownership
+// of `event` and deletes it. Returns 0 on success, -1 on error; the output is
+// balanced either way (see the malformed-YAML contract above).
+fn json_write_yaml_event(w: *JsonWriter, yp: *sys.yaml_parser_t, event: *sys.yaml_event_t) c_int {
     if (event.type == sys.YAML_SCALAR_EVENT) {
-        json_write_yaml_scalar(w, &event);
-        sys.yaml_event_delete(&event);
+        json_write_yaml_scalar(w, event);
+        sys.yaml_event_delete(event);
         return 0;
     }
     if (event.type == sys.YAML_MAPPING_START_EVENT) {
-        sys.yaml_event_delete(&event);
+        sys.yaml_event_delete(event);
         json_write(w, "{", 1);
-        if (json_write_yaml_mapping(w, yp) < 0)
-            return -1;
+        var n: c_int = 0;
+        const ret = json_write_yaml_mapping(w, yp, &n);
         json_write(w, "}", 1);
-        return 0;
+        return ret;
     }
     if (event.type == sys.YAML_SEQUENCE_START_EVENT) {
-        sys.yaml_event_delete(&event);
+        sys.yaml_event_delete(event);
         return json_write_yaml_sequence(w, yp);
     }
     if (event.type == sys.YAML_ALIAS_EVENT) {
-        sys.yaml_event_delete(&event);
+        // libyaml's parser does not compose, so anchors are never resolved; an
+        // alias is a defined `null` rather than an error.
+        sys.yaml_event_delete(event);
         json_write_str(w, "null");
         return 0;
     }
 
-    sys.yaml_event_delete(&event);
+    // Anything else is a structural event where a value was expected. The
+    // position still needs one.
+    sys.yaml_event_delete(event);
+    json_write_str(w, "null");
     return -1;
 }
 
+// Write the next YAML value (scalar, mapping, or sequence) as JSON.
+// Returns 0 on success, -1 on error; a value is always emitted.
+fn json_write_yaml_value(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
+    var event: sys.yaml_event_t = undefined;
+
+    if (sys.yaml_parser_parse(yp, &event) == 0) {
+        json_write_str(w, "null");
+        return -1;
+    }
+
+    return json_write_yaml_event(w, yp, &event);
+}
+
 // Write parsed YAML frontmatter as JSON props using libyaml.
-// Returns number of top-level props written.
+// Returns the number of top-level props actually written to the output. A
+// malformed document still reports what it emitted (never 0 after writing
+// bytes) — callers use the count to decide whether a separating comma is
+// needed before whatever they append next.
 pub fn json_write_yaml_props(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE) c_int {
     var yp: sys.yaml_parser_t = undefined;
     var event: sys.yaml_event_t = undefined;
@@ -356,9 +389,9 @@ pub fn json_write_yaml_props(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE)
     }
     sys.yaml_event_delete(&event);
 
-    n_written = json_write_yaml_mapping(w, &yp);
-    if (n_written < 0)
-        n_written = 0;
+    // A mid-mapping error is already repaired in the output stream, so the
+    // status is not actionable here; `n_written` is what matters.
+    _ = json_write_yaml_mapping(w, &yp, &n_written);
 
     sys.yaml_parser_delete(&yp);
     return n_written;

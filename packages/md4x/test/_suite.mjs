@@ -9,6 +9,25 @@ const nitroIndex = readFileSync(
   "utf-8",
 );
 
+// Frontmatter that libyaml cannot parse to the end. It reports the error only
+// after emitting the events before it, and the JSON writer streams straight
+// through its sink, so the renderers repair forward rather than roll back: the
+// pairs that parsed are kept, every opened container is closed, and the key
+// whose value failed gets an explicit `null`. Whatever the shape, the output
+// must stay parseable -- these all used to emit `{"a":}` and friends, which
+// made parseAST()/parseMeta() throw outright.
+const MALFORMED_FRONTMATTER = [
+  ["reserved indicator", "---\na: @bad\n---\n\nhi"],
+  ["backtick indicator", "---\na: `bad\n---\n\nhi"],
+  ["unterminated quote", '---\na: "x\nb: [\n---\n\nhi'],
+  ["unterminated flow sequence", "---\na: [1\n---\n\nhi"],
+  ["unterminated flow mapping", "---\na: {x: 1\n---\n\nhi"],
+  ["pairs before the error", "---\ntitle: Hello\nb: @bad\n---\n\nhi"],
+  ["alias in a sequence", "---\na: [1, *x]\n---\n\nhi"],
+  ["error in a nested mapping", "---\na:\n  b: @bad\n---\n\nhi"],
+  ["complex key", "---\n? [a]\n: b\n---\n\nhi"],
+];
+
 export function defineSuite({
   renderToHtml,
   renderToAST,
@@ -548,6 +567,50 @@ export function defineSuite({
       );
       expect(ast.frontmatter.description).toContain("Line 1");
       expect(ast.frontmatter.description).toContain("Line 2");
+    });
+
+    it("keeps output valid JSON for malformed frontmatter", async () => {
+      for (const [name, input] of MALFORMED_FRONTMATTER) {
+        const json = await renderToAST(input);
+        expect(() => JSON.parse(json), name).not.toThrow();
+      }
+    });
+
+    it("keeps the pairs parsed before a frontmatter error", async () => {
+      const ast = await parseAST("---\ntitle: Hello\nb: @bad\n---\n\nhi");
+      // The failing key is reported as null, not dropped: dropping it would
+      // make a truncated document look like one that never had the field.
+      expect(ast.frontmatter).toEqual({ title: "Hello", b: null });
+    });
+
+    it("closes a container left open by a frontmatter error", async () => {
+      expect((await parseAST("---\na: [1\n---")).frontmatter).toEqual({
+        a: [1],
+      });
+      expect((await parseAST("---\na: {x: 1\n---")).frontmatter).toEqual({
+        a: { x: 1 },
+      });
+      expect((await parseAST("---\na: [1, *x]\n---")).frontmatter).toEqual({
+        a: [1, null],
+      });
+    });
+
+    it("keeps output valid JSON for malformed component frontmatter", async () => {
+      const cases = [
+        "::card\n\n---\nicon: @bad\n---\n\nbody\n::",
+        ":::card My Title\n\n---\nicon: @bad\n---\n\nbody\n:::",
+        '::card{color="red"}\n\n---\nicon: @bad\n---\n\nbody\n::',
+      ];
+      for (const input of cases) {
+        const json = await renderToAST(input);
+        expect(() => JSON.parse(json), input).not.toThrow();
+      }
+      // The repaired props still have to be separated from the title / props
+      // that follow them.
+      const ast = await parseAST(
+        ":::card My Title\n\n---\nicon: @bad\n---\n\nbody\n:::",
+      );
+      expect(ast.nodes[0][1]).toEqual({ icon: null, title: "My Title" });
     });
 
     it.skip("parses excerpt with <!-- more --> separator", async () => {
@@ -1489,6 +1552,23 @@ export function defineSuite({
       expect(meta.tags).toEqual(["js", "ts"]);
       expect(meta.count).toBe(42);
       expect(meta.draft).toBe(true);
+    });
+
+    it("keeps output valid JSON for malformed frontmatter", async () => {
+      for (const [name, input] of MALFORMED_FRONTMATTER) {
+        const json = await renderToMeta(`${input}\n\n# Heading`);
+        expect(() => JSON.parse(json), name).not.toThrow();
+      }
+    });
+
+    it("keeps the pairs parsed before a frontmatter error", async () => {
+      const meta = await parseMeta(
+        "---\ntitle: Hello\nb: @bad\n---\n\n# Heading",
+      );
+      expect(meta.title).toBe("Hello");
+      expect(meta.b).toBeNull();
+      // The repaired props must still be separated from the headings array.
+      expect(meta.headings).toEqual([{ level: 1, text: "Heading" }]);
     });
 
     it("handles frontmatter without title and heading", async () => {

@@ -148,3 +148,105 @@ Frontmatter cannot appear inside a container block.
 <h2>title: Hello</h2>
 </blockquote>
 ````````````````````````````````
+
+# Malformed Frontmatter in JSON Output
+
+libyaml reports a syntax error only after it has already emitted the events
+preceding it, and the JSON writer streams straight through `process_output` —
+so a mid-mapping error cannot be rolled back, only repaired forward. The
+contract is that the emitted JSON is always balanced: the pairs libyaml did
+parse are kept, every container that was opened is closed, and a key whose
+value could not be parsed gets an explicit `null` rather than being dropped
+(dropping it would make a truncated document look like one where the author
+simply omitted the field). Before the repair these all produced output that
+`JSON.parse` rejected.
+
+## Unparseable scalar value
+
+```````````````````````````````` example [no-normalize]
+---
+a: @bad
+---
+.
+{"nodes":[],"frontmatter":{"a":null},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Pairs parsed before the error are kept
+
+```````````````````````````````` example [no-normalize]
+---
+title: Hello
+b: @bad
+---
+.
+{"nodes":[],"frontmatter":{"title":"Hello","b":null},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Unterminated flow sequence is closed
+
+```````````````````````````````` example [no-normalize]
+---
+a: [1
+---
+.
+{"nodes":[],"frontmatter":{"a":[1]},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Unterminated flow mapping is closed
+
+```````````````````````````````` example [no-normalize]
+---
+a: {x: 1
+---
+.
+{"nodes":[],"frontmatter":{"a":{"x":1}},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Sequence element that is not a value
+
+An alias is never resolved (libyaml's parser does not compose), and any other
+stray event in a sequence used to leave the separating comma dangling.
+
+```````````````````````````````` example [no-normalize]
+---
+a: [1, *x]
+---
+.
+{"nodes":[],"frontmatter":{"a":[1,null]},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Error inside a nested mapping
+
+```````````````````````````````` example [no-normalize]
+---
+a:
+  b: @bad
+---
+.
+{"nodes":[],"frontmatter":{"a":{"b":null}},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Unterminated quoted scalar
+
+```````````````````````````````` example [no-normalize]
+---
+a: "x
+b: [
+---
+.
+{"nodes":[],"frontmatter":{"a":null},"meta":{}}
+.
+--format=json
+````````````````````````````````

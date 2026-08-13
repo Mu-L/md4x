@@ -833,3 +833,62 @@ body
 .
 --format=json
 ````````````````````````````````
+
+# Malformed Component Frontmatter in JSON Output
+
+Component frontmatter goes through the same YAML-to-JSON writer as document
+frontmatter, so the same repair applies: keep what parsed, close what was
+opened, and give the failing key an explicit `null`. The prop count the writer
+reports is what places the separator before the title / `{props}` that follow,
+so before the repair these emitted `{"icon":"title":"My Title"}`.
+
+## Unparseable value in component frontmatter
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+icon: @bad
+---
+
+body
+::
+.
+{"nodes":[["card",{"icon":null},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Repaired frontmatter is still separated from the title
+
+```````````````````````````````` example [no-normalize]
+:::card My Title
+
+---
+icon: @bad
+---
+
+body
+:::
+.
+{"nodes":[["card",{"icon":null,"title":"My Title"},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Repaired frontmatter is still separated from inline props
+
+```````````````````````````````` example [no-normalize]
+::card{color="red"}
+
+---
+icon: @bad
+---
+
+body
+::
+.
+{"nodes":[["card",{"icon":null,"color":"red"},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
