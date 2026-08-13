@@ -962,6 +962,41 @@ export function defineSuite({
       expect(comp[1].injected).toBeUndefined();
     });
 
+    it("keeps output valid JSON when {props} parse to nothing", async () => {
+      // A non-empty {...} string is not a guarantee of a prop: `{ }` is
+      // whitespace only and `{=}` / `{.}` / `{#}` are malformed shorthands the
+      // props parser skips. The separating comma must follow the parse, not the
+      // raw string, or a preceding title / frontmatter leaves `{"title":"T",}`.
+      for (const input of [
+        ":::foo T { }\nz\n:::",
+        ":::foo T {=}\nz\n:::",
+        ":::foo T {.}\nz\n:::",
+        ":::foo T {#}\nz\n:::",
+        "::card{ }\n\n---\na: 1\n---\n\nz\n::",
+        ":badge[x]{ }",
+        "**b**{ }",
+        "[t]{=}",
+        '[t](u "ti"){ }',
+        '![a](p "ti"){.}',
+      ]) {
+        const json = await renderToAST(input);
+        expect(() => JSON.parse(json), input).not.toThrow();
+      }
+    });
+
+    it("drops zero-prop {props} without disturbing the props it keeps", async () => {
+      expect((await parseAST(":::foo T { }\nz\n:::")).nodes[0][1]).toEqual({
+        title: "T",
+      });
+      expect(
+        (await parseAST("::card{ }\n\n---\na: 1\n---\n\nz\n::")).nodes[0][1],
+      ).toEqual({ a: 1 });
+      expect((await parseAST(":::foo T { .c }\nz\n:::")).nodes[0][1]).toEqual({
+        title: "T",
+        class: "c",
+      });
+    });
+
     it("renders merged classes in HTML", async () => {
       const html = await renderToHtml(":badge[Text]{.foo .bar .baz}");
       expect(html).toContain('class="foo bar baz"');

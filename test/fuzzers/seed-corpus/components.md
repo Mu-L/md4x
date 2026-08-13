@@ -40,3 +40,30 @@ Inner content
 ::alert{:k='1,"injected":"yes"'}
 Body
 ::
+
+:::zero T { }
+Whitespace-only props after a title.
+:::
+
+:::zero T {=}
+Malformed props after a title.
+:::
+
+:::zero T {.}
+Empty class shorthand after a title.
+:::
+
+:::zero T {#}
+Empty id shorthand after a title.
+:::
+
+::zero{ }
+
+---
+a: 1
+---
+
+Whitespace-only props after component frontmatter.
+::
+
+:zerospan[x]{ }

@@ -21,3 +21,13 @@ _underline_{.accent}
 **bind**{:k='hello'}
 
 [Link](https://example.com){:data='{"x":1}'}
+
+**bold**{ }
+
+[t]{=}
+
+[Link](https://example.com "Title"){ }
+
+![image](pic.png "Title"){.}
+
+`code`{#}

@@ -892,3 +892,99 @@ body
 .
 --format=json
 ````````````````````````````````
+
+# Zero-Prop Component `{props}` in JSON Output
+
+A non-empty `{...}` string does not guarantee a prop: `{ }` is whitespace only,
+and `{=}`, `{.}` and `{#}` are malformed shorthands the props parser skips. The
+AST renderer used to emit the separating comma before parsing, so any of these
+following a component title or component frontmatter left a trailing comma
+inside the props object (`{"title":"T",}`), which `JSON.parse` rejects. The
+separator is now emitted only once the parse says something will follow it.
+
+## Whitespace-only props after a title
+
+```````````````````````````````` example [no-normalize]
+:::foo T { }
+z
+:::
+.
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Malformed props after a title
+
+```````````````````````````````` example [no-normalize]
+:::foo T {=}
+z
+:::
+.
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Empty class shorthand after a title
+
+```````````````````````````````` example [no-normalize]
+:::foo T {.}
+z
+:::
+.
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Empty id shorthand after a title
+
+```````````````````````````````` example [no-normalize]
+:::foo T {#}
+z
+:::
+.
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Whitespace-only props after component frontmatter
+
+```````````````````````````````` example [no-normalize]
+::card{ }
+
+---
+a: 1
+---
+
+z
+::
+.
+{"nodes":[["card",{"a":1},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## A real prop after a title still gets its separator
+
+```````````````````````````````` example [no-normalize]
+:::foo T { .c }
+z
+:::
+.
+{"nodes":[["foo",{"title":"T","class":"c"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Whitespace-only props on an inline component
+
+```````````````````````````````` example [no-normalize]
+:badge[x]{ }
+.
+{"nodes":[["p",{},["badge",{},"x"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````

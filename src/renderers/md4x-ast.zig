@@ -918,14 +918,23 @@ fn jsonAlignStr(align_v: c_int) ?[*:0]const u8 {
     };
 }
 
-// Write parsed component props from a raw props string.
-// Uses the shared md_parse_props() parser from md4x-props.zig.
-// Returns number of props written.
-fn jsonWriteComponentProps(w: *JsonWriter, raw: [*]const u8, size: c.MD_SIZE) c_int {
-    var parsed: ParsedProps = undefined;
-    var n_written: c_int = 0;
+// True when a parsed prop string yields nothing for jsonWriteParsedProps() to
+// emit. A non-empty raw string is NOT enough: `{ }`, `{=}`, `{.}` and `{#}` all
+// parse to zero props, so a caller that emits the separating comma up front
+// would leave a trailing comma inside the props object (invalid JSON). Every
+// call site must consult this BEFORE writing the separator.
+fn parsedPropsAreEmpty(parsed: *const ParsedProps) bool {
+    return parsed.n_props == 0 and parsed.id == null and parsed.class_len == 0;
+}
 
-    mdParseProps(raw, size, &parsed);
+// Write already-parsed component props. Takes the parse result rather than the
+// raw string so a caller can decide whether anything will be written (see
+// parsedPropsAreEmpty) without parsing twice — ParsedProps is ~1.5 KB and
+// md_parse_props() zeroes all of it on entry, so the second parse was
+// measurable on attribute-heavy documents.
+// Returns number of props written.
+fn jsonWriteParsedProps(w: *JsonWriter, parsed: *const ParsedProps) c_int {
+    var n_written: c_int = 0;
 
     // Write #id.
     if (parsed.id != null and parsed.id_size > 0) {
@@ -1011,11 +1020,20 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             jsonWriteString(w, @ptrCast(node.detail.component_title.?), node.detail.component_title_size);
             has_prop = 1;
         }
-        // Component: parse raw props string.
+        // Component: parse raw props string. A non-empty raw string can still
+        // yield zero props (`{ }`, `{=}`, `{.}`, `{#}`), so the separating comma
+        // is emitted only once the parse says something will follow it.
         if (node.detail.component_raw_props != null and node.detail.component_raw_props_size > 0) {
-            if (has_prop != 0) jsonWrite(w, ",", 1);
-            const wrote = jsonWriteComponentProps(w, @ptrCast(node.detail.component_raw_props.?), node.detail.component_raw_props_size);
-            has_prop = @intFromBool(wrote != 0 or has_prop != 0);
+            // Declared inside the branch: ParsedProps is ~1.5 KB and Debug /
+            // ReleaseSafe fill `undefined` with 0xaa, so hoisting it would cost
+            // that memset on every element node, prop string or not.
+            var parsed: ParsedProps = undefined;
+            mdParseProps(@ptrCast(node.detail.component_raw_props.?), node.detail.component_raw_props_size, &parsed);
+            if (!parsedPropsAreEmpty(&parsed)) {
+                if (has_prop != 0) jsonWrite(w, ",", 1);
+                _ = jsonWriteParsedProps(w, &parsed);
+                has_prop = 1;
+            }
         }
     } else switch (node.tag_kind) {
         .ol => {
@@ -1159,14 +1177,14 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
         else => {},
     }
 
-    // Merge inline attributes from trailing {attrs} syntax.
+    // Merge inline attributes from trailing {attrs} syntax. Same rule as above:
+    // parse once, and only then decide whether a separator is due.
     if (node.raw_attrs != null and node.raw_attrs_size > 0) {
-        // Pre-parse to check if there are any props to write.
-        var check: ParsedProps = undefined;
-        mdParseProps(@ptrCast(node.raw_attrs.?), node.raw_attrs_size, &check);
-        if (check.n_props > 0 or check.id != null or check.class_len > 0) {
+        var parsed: ParsedProps = undefined;
+        mdParseProps(@ptrCast(node.raw_attrs.?), node.raw_attrs_size, &parsed);
+        if (!parsedPropsAreEmpty(&parsed)) {
             if (has_prop != 0) jsonWrite(w, ",", 1);
-            _ = jsonWriteComponentProps(w, @ptrCast(node.raw_attrs.?), node.raw_attrs_size);
+            _ = jsonWriteParsedProps(w, &parsed);
             has_prop = 1;
         }
     }

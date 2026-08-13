@@ -253,3 +253,49 @@ inject sibling keys into the props object.
 .
 --format=json
 ````````````````````````````````
+
+# Zero-Prop `{attrs}` in JSON Output
+
+`{ }`, `{=}`, `{.}` and `{#}` parse to no props at all. The trailing-`{attrs}`
+path must not emit a separating comma for them, whether or not the node already
+wrote props of its own.
+
+## Whitespace-only attrs on a span with no other props
+
+```````````````````````````````` example [no-normalize]
+**b**{ }
+.
+{"nodes":[["p",{},["strong",{},"b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Malformed attrs on an attribute span
+
+```````````````````````````````` example [no-normalize]
+[t]{=}
+.
+{"nodes":[["p",{},["span",{},"t"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Whitespace-only attrs on a link that already has props
+
+```````````````````````````````` example [no-normalize]
+[t](u "ti"){ }
+.
+{"nodes":[["p",{},["a",{"href":"u","title":"ti"},"t"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Empty class shorthand on an image that already has props
+
+```````````````````````````````` example [no-normalize]
+![a](p "ti"){.}
+.
+{"nodes":[["p",{},["img",{"src":"p","alt":"a","title":"ti"}]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
