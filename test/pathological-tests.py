@@ -89,12 +89,12 @@ pathological = {
     "deeply nested block quotes (json)":
             ((("> " * 50000) + "a"),
             re.compile(r'^\{"nodes":\[(\["blockquote",\{\},){1023}"a"\]{1023}\],'
-                       r'"frontmatter":\{\},"meta":\{"maxDepthExceeded":true\}\}'),
+                       r'"frontmatter":\{\},"meta":\{"headings":\[\],"maxDepthExceeded":true\}\}'),
             ["--format=json"]),
     "deeply nested lists (json)":
             ("".join(map(lambda x: ("  " * x + "* a\n"), range(0,1000))),
             re.compile(r'^\{"nodes":\[(\["ul",\{\},\["li",\{\},"a",){511}\["ul",\{\},"a{489}"[\]]+,'
-                       r'"frontmatter":\{\},"meta":\{"maxDepthExceeded":true\}\}'),
+                       r'"frontmatter":\{\},"meta":\{"headings":\[\],"maxDepthExceeded":true\}\}'),
             ["--format=json"]),
     "many html openers and closers":
             (("<>" * 50000),
