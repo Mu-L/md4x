@@ -61,6 +61,24 @@ const MD_MARKDOWN = struct {
     need_indent: bool,
     li_opened: bool,
     in_frontmatter: bool,
+    in_heading: bool,
+
+    // Escaping state. `at_line_start` means nothing but block prefixes ("> ",
+    // "- ", the list indent) has been emitted on the current output line, so a
+    // block opener would still be recognized there; `line_digits` narrows that
+    // to "only ASCII digits since the line start", which is what makes a "." or
+    // ")" an ordered-list marker. `last_ch` is the last text byte emitted (0
+    // after a newline or after renderer-emitted markup), used for the
+    // intra-word test that `_`, `$` and `~` are gated on.
+    at_line_start: bool,
+    line_digits: bool,
+    last_ch: u8,
+
+    // Code-span content is buffered because the fence has to be longer than the
+    // longest backtick run inside it, which is only known once the span ends.
+    code_buf: ?[*]u8,
+    code_size: c_uint,
+    code_cap: c_uint,
 
     // Table state
     in_table: bool,
@@ -103,6 +121,213 @@ fn render_indent(r: *MD_MARKDOWN) void {
 
 fn render_newline(r: *MD_MARKDOWN) void {
     render_verbatim_lit(r, "\n");
+    r.at_line_start = true;
+    r.line_digits = false;
+    r.last_ch = 0;
+}
+
+// ***********************************
+// ***  Markdown escaping         ***
+// ***********************************
+//
+// This renderer's contract is that its output re-parses to the same document,
+// so every text byte that would otherwise be read back as markup is emitted
+// with a backslash escape. The rules are split three ways:
+//
+//   * unconditional  -- `\`, `` ` ``, `*`, `[`, `]` and `<` open inline markup
+//     from any position, with no flanking rule to fall back on;
+//   * flanking-gated -- `_`, `$` and `~` only become marks when they are not
+//     surrounded by word characters on both sides (see the mark collector in
+//     `parser/inlines.zig`), so intra-word ones are left alone; `&` is escaped
+//     only when what follows is shaped like an entity;
+//   * position-gated -- `#`, `-`, `+`, `>`, `=`, `:` and `|` are block openers
+//     only at the start of a line, and `.` / `)` are ordered-list markers only
+//     after leading digits.
+//
+// Anything else (`!`, `{`, `}`, `(`, `)`, `"`, `'`) cannot start markup on its
+// own in md4x's dialect -- `![`, `[text]{...}`, `:name[...]` and `[[wiki]]` all
+// need a `[`, which is always escaped -- so escaping them would only add noise.
+
+fn is_ascii_word(ch: u8) bool {
+    return (ch >= '0' and ch <= '9') or ((ch | 0x20) >= 'a' and (ch | 0x20) <= 'z');
+}
+
+// True when the `&` at `off` starts something shaped like an entity reference,
+// i.e. when leaving it bare would let the re-parse fold it (plus whatever text
+// follows) into a single character. When the chunk ends before the shape can be
+// ruled out the answer is "yes": the very next chunk may complete it, which is
+// exactly what happens for a source `&amp;amp;` (entity `&amp;` resolved to a
+// lone `&`, immediately followed by the literal text `amp;`).
+fn looks_like_entity(text: [*]const u8, off: c.MD_SIZE, size: c.MD_SIZE) bool {
+    var i: c.MD_SIZE = off + 1;
+    if (i < size and text[i] == '#') {
+        i += 1;
+        if (i < size and (text[i] == 'x' or text[i] == 'X')) i += 1;
+    }
+    const beg = i;
+    while (i < size) : (i += 1) {
+        if (text[i] == ';') return i > beg;
+        if (!is_ascii_word(text[i])) return false;
+        // Longer than any entity name md4x knows -- it cannot be one.
+        if (i - off > 32) return false;
+    }
+    return true;
+}
+
+fn needs_escape(r: *MD_MARKDOWN, text: [*]const u8, off: c.MD_SIZE, size: c.MD_SIZE) bool {
+    const ch = text[off];
+    const next: u8 = if (off + 1 < size) text[off + 1] else 0;
+
+    if (r.at_line_start) switch (ch) {
+        // Block openers: ATX heading / `#slot`, bullet lists, setext
+        // underlines, thematic breaks, block quotes, `::component`, and the
+        // leading pipe of a table row (which is also what disarms a delimiter
+        // row, and with it the whole table).
+        '#', '-', '+', '>', '=', ':', '|' => return true,
+        else => {},
+    };
+
+    // "1." / "1)" -- only a list marker when nothing but digits precedes it.
+    if (r.line_digits and (ch == '.' or ch == ')')) return true;
+
+    return switch (ch) {
+        '\\', '`', '*', '[', ']', '<' => true,
+        '_', '$', '~' => !(is_ascii_word(r.last_ch) and is_ascii_word(next)),
+        '&' => looks_like_entity(text, off, size),
+        // GFM only treats a pipe as a cell boundary inside a table.
+        '|' => r.in_table,
+        // A trailing `#` run closes an ATX heading, so inside one every `#`
+        // that could start such a run is escaped.
+        '#' => r.in_heading and (r.last_ch == ' ' or r.last_ch == 0),
+        else => false,
+    };
+}
+
+// An `&` cannot be neutralized by a backslash alone in every position, and
+// `&amp;` is both shorter to reason about and what the source most likely said
+// in the first place, so that is the spelling used for it.
+fn render_escape_of(r: *MD_MARKDOWN, ch: u8) void {
+    if (ch == '&')
+        render_verbatim_lit(r, "&amp;")
+    else
+        render_verbatim_lit(r, "\\");
+}
+
+fn render_markdown_escaped(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE) void {
+    var beg: c.MD_SIZE = 0;
+    var off: c.MD_SIZE = 0;
+    while (off < size) : (off += 1) {
+        if (needs_escape(r, text, off, size)) {
+            if (off > beg)
+                render_verbatim(r, text + beg, off - beg);
+            render_escape_of(r, text[off]);
+            // `&amp;` already carries the `&`; a backslash does not carry the
+            // byte it escapes, so that one is re-emitted with the next run.
+            beg = if (text[off] == '&') off + 1 else off;
+        }
+        const ch = text[off];
+        r.line_digits = (r.at_line_start or r.line_digits) and ('0' <= ch and ch <= '9');
+        r.at_line_start = false;
+        r.last_ch = ch;
+    }
+    if (size > beg)
+        render_verbatim(r, text + beg, size - beg);
+}
+
+// Backslash-escape a fixed set of bytes, plus any `&` that could be read back
+// as an entity. Used for the link/image attributes, where the escape set
+// depends on the delimiter rather than on the position in the line.
+fn render_escaped_set(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE, comptime set: []const u8) void {
+    var beg: c.MD_SIZE = 0;
+    var off: c.MD_SIZE = 0;
+    while (off < size) : (off += 1) {
+        const ch = text[off];
+        if (std.mem.indexOfScalar(u8, set, ch) != null or
+            (ch == '&' and looks_like_entity(text, off, size)))
+        {
+            if (off > beg)
+                render_verbatim(r, text + beg, off - beg);
+            render_escape_of(r, ch);
+            beg = if (ch == '&') off + 1 else off;
+        }
+    }
+    if (size > beg)
+        render_verbatim(r, text + beg, size - beg);
+}
+
+// Bare link destination: parentheses have to stay balanced and a `<` or `>`
+// would flip the re-parse into (or out of) the angle-bracket form.
+fn render_dest_escaped(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE) void {
+    render_escaped_set(r, text, size, "\\<>()");
+}
+
+// Angle-bracket link destination: only the delimiters themselves are special.
+fn render_dest_angle_escaped(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE) void {
+    render_escaped_set(r, text, size, "\\<>");
+}
+
+// Link/image title, always emitted with `"` delimiters.
+fn render_title_escaped(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE) void {
+    render_escaped_set(r, text, size, "\\\"");
+}
+
+// A bare destination ends at the first whitespace byte and cannot carry a
+// control byte, and neither can be backslash-escaped -- those are the only
+// cases that need the `<…>` form. Everything else a destination can contain
+// (`(`, `)`, `<`, `>`, `\`) is handled by `render_dest_escaped`.
+//
+// The check has to be made on the characters that will actually be emitted, so
+// entity substrings are resolved the same way `render_entity` resolves them.
+fn substr_needs_angle(ty: c.TextType, text: [*]const u8, size: c.MD_SIZE) bool {
+    // A NUL is emitted as U+FFFD, which is safe bare.
+    if (ty == c.TextType.nullchar)
+        return false;
+
+    if (ty == c.TextType.entity) {
+        if (entity_codepoints(text, size)) |cps| {
+            for (cps) |cp| {
+                // Codepoint 0 also comes out as U+FFFD.
+                if (cp != 0 and (cp <= ' ' or cp == 0x7f))
+                    return true;
+            }
+            return false;
+        }
+        // Not a recognized entity: emitted verbatim, so judge its bytes.
+    }
+
+    var i: c.MD_SIZE = 0;
+    while (i < size) : (i += 1) {
+        if (text[i] <= ' ' or text[i] == 0x7f)
+            return true;
+    }
+    return false;
+}
+
+fn dest_needs_angle(attr: *const c.Attribute) bool {
+    const total = attr.size();
+    var i: usize = 0;
+    while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) {
+        const off = attr.substr_offsets[i];
+        if (substr_needs_angle(attr.substr_types[i], attr.text.ptr + off, attr.substr_offsets[i + 1] - off))
+            return true;
+    }
+    return false;
+}
+
+fn render_destination(r: *MD_MARKDOWN, attr: *const c.Attribute) void {
+    if (dest_needs_angle(attr)) {
+        render_verbatim_lit(r, "<");
+        render_attribute(r, attr, render_dest_angle_escaped);
+        render_verbatim_lit(r, ">");
+    } else {
+        render_attribute(r, attr, render_dest_escaped);
+    }
+}
+
+fn render_title(r: *MD_MARKDOWN, attr: *const c.Attribute) void {
+    render_verbatim_lit(r, " \"");
+    render_attribute(r, attr, render_title_escaped);
+    render_verbatim_lit(r, "\"");
 }
 
 fn hex_val(ch: u8) c_uint {
@@ -151,7 +376,10 @@ fn render_utf8_codepoint(r: *MD_MARKDOWN, codepoint: c_uint, fn_append: AppendFn
         fn_append(r, &utf8_replacement_char, 3);
 }
 
-fn render_entity(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE, fn_append: AppendFn) void {
+// Decode an entity reference to the codepoints it stands for. A zero second
+// element means the entity is a single codepoint. Null means `text` is not a
+// recognized entity and has to be emitted as-is.
+fn entity_codepoints(text: [*]const u8, size: c.MD_SIZE) ?[2]c_uint {
     if (size > 3 and text[1] == '#') {
         var codepoint: c_uint = 0;
 
@@ -165,17 +393,21 @@ fn render_entity(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE, fn_append:
                 codepoint = 10 *% codepoint +% (text[i] - '0');
         }
 
-        render_utf8_codepoint(r, codepoint, fn_append);
+        return .{ codepoint, 0 };
+    }
+
+    if (entity.entity_lookup(@ptrCast(text), size)) |ent|
+        return .{ ent.codepoints[0], ent.codepoints[1] };
+
+    return null;
+}
+
+fn render_entity(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE, fn_append: AppendFn) void {
+    if (entity_codepoints(text, size)) |cps| {
+        render_utf8_codepoint(r, cps[0], fn_append);
+        if (cps[1] != 0)
+            render_utf8_codepoint(r, cps[1], fn_append);
         return;
-    } else {
-        const ent = entity.entity_lookup(@ptrCast(text), size);
-        if (ent != null) {
-            const cps = ent.?.codepoints;
-            render_utf8_codepoint(r, cps[0], fn_append);
-            if (cps[1] != 0)
-                render_utf8_codepoint(r, cps[1], fn_append);
-            return;
-        }
     }
 
     fn_append(r, text, size);
@@ -196,6 +428,77 @@ fn render_attribute(r: *MD_MARKDOWN, attr: *const c.Attribute, fn_append: Append
             else => fn_append(r, text, size),
         }
     }
+}
+
+// ***********************************
+// ***  Code-span buffering        ***
+// ***********************************
+
+// Shared realloc helper that tracks the old capacity (the c_allocator needs a
+// correctly sized slice back). Returns null on OOM, leaving the old block
+// intact.
+fn buf_realloc(old_ptr: ?[*]u8, old_cap: c_uint, new_cap: c_uint) ?[*]u8 {
+    if (old_ptr) |old| {
+        const p = c_allocator.realloc(old[0..old_cap], new_cap) catch return null;
+        return p.ptr;
+    }
+    const p = c_allocator.alloc(u8, new_cap) catch return null;
+    return p.ptr;
+}
+
+fn code_buf_append(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE) bool {
+    if (r.code_size + size > r.code_cap) {
+        const new_cap: c_uint = r.code_cap + r.code_cap / 2 + size + 64;
+        const p = buf_realloc(r.code_buf, r.code_cap, new_cap) orelse return false;
+        r.code_buf = p;
+        r.code_cap = new_cap;
+    }
+    @memcpy(r.code_buf.?[r.code_size .. r.code_size + size], text[0..size]);
+    r.code_size += size;
+    return true;
+}
+
+// Emit the buffered code-span content with a fence long enough to survive it.
+// Backslash escapes do not exist inside a code span, so the only lever is the
+// fence length plus CommonMark's one-space padding rule.
+fn render_code_span(r: *MD_MARKDOWN) void {
+    const buf: []const u8 = if (r.code_buf) |p| p[0..r.code_size] else &.{};
+
+    // The fence must be longer than the longest backtick run in the content.
+    var fence: usize = 1;
+    var run: usize = 0;
+    var all_spaces = buf.len > 0;
+    for (buf) |ch| {
+        if (ch == '`') {
+            run += 1;
+            if (run >= fence) fence = run + 1;
+        } else {
+            run = 0;
+            if (ch != ' ') all_spaces = false;
+        }
+    }
+
+    // A leading or trailing backtick would merge into the fence, and a content
+    // that both starts and ends with a space would lose one space at each end
+    // to the stripping rule -- unless it is nothing but spaces, which the rule
+    // exempts. One space of padding fixes all three.
+    const pad = buf.len > 0 and !all_spaces and
+        (buf[0] == '`' or buf[buf.len - 1] == '`' or
+            (buf[0] == ' ' and buf[buf.len - 1] == ' '));
+
+    var i: usize = 0;
+    while (i < fence) : (i += 1)
+        render_verbatim_lit(r, "`");
+    if (pad) render_verbatim_lit(r, " ");
+    if (buf.len > 0) render_verbatim(r, buf.ptr, @intCast(buf.len));
+    if (pad) render_verbatim_lit(r, " ");
+    i = 0;
+    while (i < fence) : (i += 1)
+        render_verbatim_lit(r, "`");
+
+    r.at_line_start = false;
+    r.line_digits = false;
+    r.last_ch = 0;
 }
 
 fn render_table_separator(r: *MD_MARKDOWN) void {
@@ -291,6 +594,11 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             while (i < level and i < 6) : (i += 1)
                 render_verbatim_lit(r, "#");
             render_verbatim_lit(r, " ");
+            // Everything past the opening sequence is heading content; no block
+            // opener is recognized there, so only the ATX closing sequence
+            // (handled by `in_heading`) still needs escaping.
+            r.at_line_start = false;
+            r.in_heading = true;
         },
 
         .code => |*code| {
@@ -356,12 +664,14 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
 
         .th => |*td| {
             render_verbatim_lit(r, " ");
+            r.at_line_start = false;
             if (r.current_col < 128)
                 r.col_aligns[@intCast(r.current_col)] = td.@"align";
         },
 
         .td => {
             render_verbatim_lit(r, " ");
+            r.at_line_start = false;
         },
 
         .frontmatter => {
@@ -437,6 +747,7 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .hr => {},
 
         .h => {
+            r.in_heading = false;
             render_newline(r);
             r.need_newline = true;
         },
@@ -517,6 +828,11 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
 fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackResult {
     const r: *MD_MARKDOWN = @ptrCast(@alignCast(userdata.?));
 
+    // Renderer-emitted markup is punctuation as far as the re-parse is
+    // concerned, so it must not be mistaken for the word character that would
+    // exempt a following `_`, `$` or `~` from escaping.
+    r.last_ch = 0;
+
     switch (detail.*) {
         .em => {
             render_verbatim_lit(r, "*");
@@ -536,8 +852,9 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         },
 
         .code => {
-            render_verbatim_lit(r, "`");
+            // The fence is emitted in leave_span, once the content is known.
             r.in_code_span = true;
+            r.code_size = 0;
         },
 
         .del => {
@@ -580,6 +897,9 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
 fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackResult {
     const r: *MD_MARKDOWN = @ptrCast(@alignCast(userdata.?));
 
+    // See enter_span_callback.
+    r.last_ch = 0;
+
     switch (detail.*) {
         .em => {
             render_verbatim_lit(r, "*");
@@ -591,29 +911,23 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
 
         .a => |*a| {
             render_verbatim_lit(r, "](");
-            render_attribute(r, &a.href, render_verbatim);
-            if (a.title.text.len > 0) {
-                render_verbatim_lit(r, " \"");
-                render_attribute(r, &a.title, render_verbatim);
-                render_verbatim_lit(r, "\"");
-            }
+            render_destination(r, &a.href);
+            if (a.title.text.len > 0)
+                render_title(r, &a.title);
             render_verbatim_lit(r, ")");
         },
 
         .img => |*img| {
             render_verbatim_lit(r, "](");
-            render_attribute(r, &img.src, render_verbatim);
-            if (img.title.text.len > 0) {
-                render_verbatim_lit(r, " \"");
-                render_attribute(r, &img.title, render_verbatim);
-                render_verbatim_lit(r, "\"");
-            }
+            render_destination(r, &img.src);
+            if (img.title.text.len > 0)
+                render_title(r, &img.title);
             render_verbatim_lit(r, ")");
             r.image_nesting_level -= 1;
         },
 
         .code => {
-            render_verbatim_lit(r, "`");
+            render_code_span(r);
             r.in_code_span = false;
         },
 
@@ -631,7 +945,7 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
 
         .wikilink => |*wl| {
             render_verbatim_lit(r, "](");
-            render_attribute(r, &wl.target, render_verbatim);
+            render_destination(r, &wl.target);
             render_verbatim_lit(r, ")");
         },
 
@@ -662,7 +976,15 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
 
     switch (text_type) {
         .nullchar => {
-            render_utf8_codepoint(r, 0xFFFD, render_verbatim);
+            // A NUL inside a code span is part of its content, so it has to go
+            // into the buffer rather than ahead of the fence.
+            if (r.in_code_span) {
+                const replacement = [_]u8{ 0xef, 0xbf, 0xbd };
+                if (!code_buf_append(r, &replacement, replacement.len))
+                    return -1;
+            } else {
+                render_utf8_codepoint(r, 0xFFFD, render_markdown_escaped);
+            }
         },
 
         .br => {
@@ -681,7 +1003,10 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
         },
 
         .entity => {
-            render_entity(r, text, size, render_verbatim);
+            // The entity is resolved to its characters, which then need the
+            // same escaping as any other text: `&amp;amp;` must not come back
+            // out as a bare `&amp;`.
+            render_entity(r, text, size, render_markdown_escaped);
         },
 
         .code => {
@@ -696,13 +1021,22 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
                     }
                     render_verbatim(r, text, size);
                 }
+            } else if (r.in_code_span) {
+                if (!code_buf_append(r, text, size))
+                    return -1;
             } else {
                 render_verbatim(r, text, size);
             }
         },
 
-        else => {
+        // LaTeX math is verbatim by definition -- a backslash escape inside
+        // `$…$` is math, not an escape.
+        .latexmath => {
             render_verbatim(r, text, size);
+        },
+
+        .normal => {
+            render_markdown_escaped(r, text, size);
         },
     }
 
@@ -807,6 +1141,9 @@ pub fn md_markdown(
     render.process_output = process_output;
     render.userdata = userdata;
     render.flags = renderer_flags;
+    // Nothing has been emitted yet, so the first byte out is at a line start.
+    render.at_line_start = true;
+    defer if (render.code_buf) |p| c_allocator.free(p[0..render.code_cap]);
 
     // Consider skipping UTF-8 byte order mark (BOM).
     if (renderer_flags & MD_MARKDOWN_FLAG_SKIP_UTF8_BOM != 0 and @sizeOf(c.MD_CHAR) == 1) {

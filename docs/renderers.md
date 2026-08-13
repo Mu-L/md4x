@@ -348,6 +348,18 @@ component props) is dropped or emitted as a tag.
 - Block components: `<name>` / `</name>` on their own lines with a blank line before the content; a component title is emitted as `title="…"`. Inline components: `<name>…</name>`. Props/attributes (`{...}`) are not re-emitted
 - Slots (`template`) and attribute spans (`[text]{...}`) are transparent — children render normally
 - Entities are resolved to UTF-8 characters; NUL characters become U+FFFD
+- Text is re-escaped so it does not come back as markup: ``\ ` * [ ] <`` always;
+  `_`, `$` and `~` unless intra-word; `&` when what follows it is shaped like an
+  entity (spelled `&amp;`, not `\&`); `#`, `-`, `+`, `>`, `=`, `:` and `|` at the
+  start of a line, `.` / `)` after leading digits, `|` inside a table, and `#`
+  inside a heading (it would close the ATX sequence). LaTeX math and code-block
+  content stay verbatim
+- Link/image destinations are wrapped in `<…>` only when they carry whitespace or
+  a control byte; otherwise `\`, `<`, `>` and parentheses are backslash-escaped.
+  Titles are `"`-delimited with `\` and `"` escaped
+- Code spans get a fence longer than the longest backtick run in their content,
+  plus a space of padding when the content starts or ends with a backtick or a
+  space — backslash escapes do not exist inside a code span
 - Uses streaming renderer pattern (like the HTML renderer), no AST construction
 
 ## Heal Utility API (`src/renderers/md4x-heal.zig`)
