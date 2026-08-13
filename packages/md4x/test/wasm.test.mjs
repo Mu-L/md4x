@@ -8,6 +8,7 @@ import {
   renderToMeta,
   parseMeta,
   renderToText,
+  parseYAML,
   heal,
 } from "md4x/wasm";
 import { _setInstance, _getExports } from "../lib/wasm/common.mjs";
@@ -25,6 +26,7 @@ defineSuite({
   renderToMeta,
   parseMeta,
   renderToText,
+  parseYAML,
   heal,
 });
 

@@ -102,6 +102,8 @@ export {
   renderToMeta,
   renderToText,
   renderToMarkdown,
+  parseYAML,
+  yamlToJson,
   heal,
 } from ${JSON.stringify(commonPath)};
 

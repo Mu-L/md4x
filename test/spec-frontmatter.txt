@@ -168,7 +168,7 @@ simply omitted the field). Before the repair these all produced output that
 a: @bad
 ---
 .
-{"nodes":[],"frontmatter":{"a":null},"meta":{}}
+{"nodes":[],"frontmatter":{"a":null},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -181,7 +181,7 @@ title: Hello
 b: @bad
 ---
 .
-{"nodes":[],"frontmatter":{"title":"Hello","b":null},"meta":{}}
+{"nodes":[],"frontmatter":{"title":"Hello","b":null},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -193,7 +193,7 @@ b: @bad
 a: [1
 ---
 .
-{"nodes":[],"frontmatter":{"a":[1]},"meta":{}}
+{"nodes":[],"frontmatter":{"a":[1]},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -205,7 +205,7 @@ a: [1
 a: {x: 1
 ---
 .
-{"nodes":[],"frontmatter":{"a":{"x":1}},"meta":{}}
+{"nodes":[],"frontmatter":{"a":{"x":1}},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -220,7 +220,7 @@ stray event in a sequence used to leave the separating comma dangling.
 a: [1, *x]
 ---
 .
-{"nodes":[],"frontmatter":{"a":[1,null]},"meta":{}}
+{"nodes":[],"frontmatter":{"a":[1,null]},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -233,7 +233,7 @@ a:
   b: @bad
 ---
 .
-{"nodes":[],"frontmatter":{"a":{"b":null}},"meta":{}}
+{"nodes":[],"frontmatter":{"a":{"b":null}},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -246,7 +246,7 @@ a: "x
 b: [
 ---
 .
-{"nodes":[],"frontmatter":{"a":null},"meta":{}}
+{"nodes":[],"frontmatter":{"a":null},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````

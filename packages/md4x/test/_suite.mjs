@@ -54,6 +54,7 @@ export function defineSuite({
   renderToMeta,
   parseMeta,
   renderToText,
+  parseYAML,
   heal,
 }) {
   describe("renderToHtml", () => {
@@ -293,7 +294,7 @@ export function defineSuite({
       // 1022 blockquotes + the paragraph = 1023 element levels, plus the
       // document node itself = the 1024 the renderer allows.
       const tree = JSON.parse(await renderToAST(">".repeat(1022) + " x"));
-      expect(tree.meta).toEqual({});
+      expect(tree.meta).toEqual({ headings: [] });
       expect(deepestChain(tree.nodes)).toEqual({ depth: 1023, text: "x" });
     });
 
@@ -301,7 +302,7 @@ export function defineSuite({
       for (const depth of [1023, 1024, 5000]) {
         const json = await renderToAST(">".repeat(depth) + " x");
         const tree = JSON.parse(json);
-        expect(tree.meta).toEqual({ maxDepthExceeded: true });
+        expect(tree.meta).toEqual({ headings: [], maxDepthExceeded: true });
         // Everything past the cap is flattened into the deepest node kept,
         // text included -- nothing is dropped and nothing nests further.
         expect(deepestChain(tree.nodes)).toEqual({ depth: 1023, text: "x" });
@@ -314,14 +315,19 @@ export function defineSuite({
       const ast = await parseAST("# Hello");
       expect(ast.nodes).toBeInstanceOf(Array);
       expect(ast.frontmatter).toEqual({});
-      expect(ast.meta).toEqual({});
+      // `meta` carries the table of contents, so a consumer building one no
+      // longer has to parse the document a second time through `parseMeta`.
+      expect(ast.meta).toEqual({
+        headings: [{ level: 1, text: "Hello", id: "hello" }],
+        title: "Hello",
+      });
     });
 
     it("parses heading as h1 tuple", async () => {
       const ast = await parseAST("# Hello");
       const h1 = ast.nodes[0];
       expect(h1[0]).toBe("h1");
-      expect(h1[1]).toEqual({});
+      expect(h1[1]).toEqual({ id: "hello" });
       expect(h1[2]).toBe("Hello");
     });
 
@@ -428,27 +434,47 @@ export function defineSuite({
       expect(pre[1].meta).toBeUndefined();
     });
 
+    // A component written on its own line is NOT paragraph-wrapped: it usually
+    // renders block markup, which the browser then hoists out of the `<p>`,
+    // and by AST time nothing else records that it stood alone. Matches
+    // `markdown-it-mdc`. Mid-sentence components keep their paragraph -- see
+    // "keeps the paragraph around a mid-sentence component" below.
     it("parses standalone inline component", async () => {
       const ast = await parseAST(":icon-star");
-      const p = ast.nodes[0];
-      expect(p[0]).toBe("p");
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("icon-star");
       expect(comp[1]).toEqual({});
     });
 
+    it("keeps the paragraph around a mid-sentence component", async () => {
+      const ast = await parseAST("hello :icon-star there");
+      expect(ast.nodes[0]).toEqual([
+        "p",
+        {},
+        "hello ",
+        ["icon-star", {}],
+        " there",
+      ]);
+    });
+
+    it("unwraps several components sharing one line", async () => {
+      const ast = await parseAST(":a{x=1} :b{y=2}");
+      expect(ast.nodes).toEqual([
+        ["a", { x: "1" }],
+        ["b", { y: "2" }],
+      ]);
+    });
+
     it("parses inline component with content", async () => {
       const ast = await parseAST(":badge[New]");
-      const p = ast.nodes[0];
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("badge");
       expect(comp[2]).toBe("New");
     });
 
     it("parses inline component with content and props", async () => {
       const ast = await parseAST(':badge[New]{color="blue"}');
-      const p = ast.nodes[0];
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("badge");
       expect(comp[1].color).toBe("blue");
       expect(comp[2]).toBe("New");
@@ -456,16 +482,14 @@ export function defineSuite({
 
     it("parses inline component with props only", async () => {
       const ast = await parseAST(':tooltip{text="Hover"}');
-      const p = ast.nodes[0];
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("tooltip");
       expect(comp[1].text).toBe("Hover");
     });
 
     it("parses inline component with id and class props", async () => {
       const ast = await parseAST(":badge[Text]{#my-id .highlight}");
-      const p = ast.nodes[0];
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("badge");
       expect(comp[1].id).toBe("my-id");
       expect(comp[1].class).toBe("highlight");
@@ -474,22 +498,55 @@ export function defineSuite({
 
     it("parses inline component with boolean prop", async () => {
       const ast = await parseAST(":alert{dismissible}");
-      const p = ast.nodes[0];
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("alert");
       expect(comp[1][":dismissible"]).toBe("true");
     });
 
     it("inline component with markdown content", async () => {
       const ast = await parseAST(":badge[**bold** text]");
-      const p = ast.nodes[0];
-      const comp = p[2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("badge");
       // First child is strong element
       expect(comp[2][0]).toBe("strong");
       expect(comp[2][2]).toBe("bold");
       // Second child is text
       expect(comp[3]).toBe(" text");
+    });
+
+    it("lowercases the GFM alert type", async () => {
+      // `> [!NOTE]` and `::alert{type=note}` are two spellings of one node and
+      // used to disagree on casing; the HTML renderer already emitted
+      // `alert-note` for both.
+      const gfm = await parseAST("> [!NOTE]\n> hi");
+      const mdc = await parseAST("::alert{type=note}\nhi\n::");
+      expect(gfm.nodes[0][1]).toEqual({ type: "note" });
+      expect(mdc.nodes[0][1]).toEqual({ type: "note" });
+    });
+
+    it("unwraps a slot body that is exactly one paragraph", async () => {
+      // Same rule md4x already applies to a tight list item, which renders as
+      // ["li",{},"one"] rather than ["li",{},["p",{},"one"]].
+      const ast = await parseAST("::card\n#description\nOne line desc\n::");
+      expect(ast.nodes[0]).toEqual([
+        "card",
+        {},
+        ["template", { name: "description" }, "One line desc"],
+      ]);
+    });
+
+    it("keeps the paragraphs of a multi-block slot body", async () => {
+      const ast = await parseAST("::card\n#description\nOne\n\nTwo\n::");
+      expect(ast.nodes[0]).toEqual([
+        "card",
+        {},
+        [
+          "template",
+          { name: "description" },
+          ["p", {}, "One"],
+          ["p", {}, "Two"],
+        ],
+      ]);
     });
 
     it("parses basic image AST", async () => {
@@ -944,7 +1001,7 @@ export function defineSuite({
   describe("component property parsing", () => {
     it("merges multiple classes", async () => {
       const ast = await parseAST(":badge[Text]{.foo .bar .baz}");
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("badge");
       expect(comp[1].class).toBe("foo bar baz");
     });
@@ -958,13 +1015,13 @@ export function defineSuite({
 
     it("handles single-quoted string values", async () => {
       const ast = await parseAST(":badge[Text]{color='blue'}");
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[1].color).toBe("blue");
     });
 
     it("handles mixed props with id, classes, key-value, and boolean", async () => {
       const ast = await parseAST(':badge[T]{#myid .cls1 .cls2 key="val" flag}');
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[1].id).toBe("myid");
       expect(comp[1].class).toBe("cls1 cls2");
       expect(comp[1].key).toBe("val");
@@ -973,7 +1030,7 @@ export function defineSuite({
 
     it("handles empty props object", async () => {
       const ast = await parseAST(":badge[Text]{}");
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("badge");
       expect(comp[1]).toEqual({});
     });
@@ -982,7 +1039,7 @@ export function defineSuite({
       // The bind value is a JSON-escaped *string*, not raw JSON spliced into
       // the stream — see docs/comark-ast.md, "Object/Array Properties".
       const ast = await parseAST(":widget{:data='{\"x\":1}'}");
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("widget");
       expect(comp[1][":data"]).toBe('{"x":1}');
     });
@@ -1003,7 +1060,7 @@ export function defineSuite({
 
     it("does not let a bind value inject sibling props", async () => {
       const ast = await parseAST(':widget{:k=\'1,"injected":"yes"\'}');
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[1]).toEqual({ ":k": '1,"injected":"yes"' });
       expect(comp[1].injected).toBeUndefined();
     });
@@ -1062,7 +1119,7 @@ export function defineSuite({
       // Passed through verbatim as a string; the consumer decides whether to
       // JSON.parse it. See docs/comark-ast.md, "Object/Array Properties".
       const ast = await parseAST(':widget{:items=\'["a","b"]\'}');
-      const comp = ast.nodes[0][2];
+      const comp = ast.nodes[0];
       expect(comp[0]).toBe("widget");
       expect(comp[1][":items"]).toBe('["a","b"]');
     });
@@ -1310,10 +1367,29 @@ export function defineSuite({
       expect(inline[2]).toBe("");
     });
 
-    it("keeps non-comment HTML blocks as html_block", async () => {
+    it("keeps non-comment HTML blocks as a block html node", async () => {
       const ast = await parseAST("<div>hello</div>");
-      const block = ast.nodes[0];
-      expect(block[0]).toBe("html_block");
+      expect(ast.nodes[0]).toEqual([
+        "html",
+        { block: true },
+        "<div>hello</div>\n",
+      ]);
+    });
+
+    it("gives inline raw HTML its own node, one per tag", async () => {
+      // The whole point: `<b>` and a literal `<` used to land in the same
+      // string, indistinguishable, so consumers re-parsed every text node
+      // containing `<` as an HTML fragment to tell them apart.
+      const ast = await parseAST("Text with <b>raw</b> and 3 < 5");
+      expect(ast.nodes[0]).toEqual([
+        "p",
+        {},
+        "Text with ",
+        ["html", {}, "<b>"],
+        "raw",
+        ["html", {}, "</b>"],
+        " and 3 < 5",
+      ]);
     });
   });
 
@@ -1726,19 +1802,43 @@ export function defineSuite({
         "---\ntitle: Hello\ntags: [a, b]\n---\n\n# My Doc\n\n## Section 1",
       );
       expect(meta.title).toBe("Hello");
-      expect(meta.tags).toEqual(["a", "b"]);
+      // Frontmatter is nested, not spread across the top level: a document
+      // whose frontmatter declared its own `headings` key used to have it
+      // overwritten by the parsed heading list.
+      expect(meta.frontmatter).toEqual({ title: "Hello", tags: ["a", "b"] });
       expect(meta.headings).toEqual([
-        { level: 1, text: "My Doc" },
-        { level: 2, text: "Section 1" },
+        { level: 1, text: "My Doc", id: "my-doc" },
+        { level: 2, text: "Section 1", id: "section-1" },
       ]);
+    });
+
+    it("keeps a frontmatter key named `headings`", async () => {
+      const meta = await parseMeta("---\nheadings: [a, b]\n---\n\n# H");
+      expect(meta.frontmatter.headings).toEqual(["a", "b"]);
+      expect(meta.headings).toEqual([{ level: 1, text: "H", id: "h" }]);
+    });
+
+    it("de-duplicates colliding heading ids", async () => {
+      const meta = await parseMeta("## Same\n\n## Same\n\n## Same");
+      expect(meta.headings.map((h) => h.id)).toEqual([
+        "same",
+        "same-1",
+        "same-2",
+      ]);
+    });
+
+    it("agrees with parseAST on every heading id", async () => {
+      const src = "# A &amp; B\n\n## Same\n\n## Same\n\n## a <b>x</b>";
+      const tree = await parseAST(src);
+      expect((await parseMeta(src)).headings).toEqual(tree.meta.headings);
     });
 
     it("falls back to first heading as title", async () => {
       const meta = await parseMeta("# My Doc\n\n## Section 1");
       expect(meta.title).toBe("My Doc");
       expect(meta.headings).toEqual([
-        { level: 1, text: "My Doc" },
-        { level: 2, text: "Section 1" },
+        { level: 1, text: "My Doc", id: "my-doc" },
+        { level: 2, text: "Section 1", id: "section-1" },
       ]);
     });
 
@@ -1751,10 +1851,10 @@ export function defineSuite({
     it("extracts multiple headings at different levels", async () => {
       const meta = await parseMeta("# H1\n\n## H2\n\n### H3\n\n#### H4");
       expect(meta.headings).toEqual([
-        { level: 1, text: "H1" },
-        { level: 2, text: "H2" },
-        { level: 3, text: "H3" },
-        { level: 4, text: "H4" },
+        { level: 1, text: "H1", id: "h1" },
+        { level: 2, text: "H2", id: "h2" },
+        { level: 3, text: "H3", id: "h3" },
+        { level: 4, text: "H4", id: "h4" },
       ]);
     });
 
@@ -1768,10 +1868,10 @@ export function defineSuite({
         "---\ntitle: Hello\nauthor:\n  name: John\ntags:\n  - js\n  - ts\ncount: 42\ndraft: true\n---",
       );
       expect(meta.title).toBe("Hello");
-      expect(meta.author).toEqual({ name: "John" });
-      expect(meta.tags).toEqual(["js", "ts"]);
-      expect(meta.count).toBe(42);
-      expect(meta.draft).toBe(true);
+      expect(meta.frontmatter.author).toEqual({ name: "John" });
+      expect(meta.frontmatter.tags).toEqual(["js", "ts"]);
+      expect(meta.frontmatter.count).toBe(42);
+      expect(meta.frontmatter.draft).toBe(true);
     });
 
     it("keeps output valid JSON for malformed frontmatter", async () => {
@@ -1786,14 +1886,16 @@ export function defineSuite({
         "---\ntitle: Hello\nb: @bad\n---\n\n# Heading",
       );
       expect(meta.title).toBe("Hello");
-      expect(meta.b).toBeNull();
+      expect(meta.frontmatter.b).toBeNull();
       // The repaired props must still be separated from the headings array.
-      expect(meta.headings).toEqual([{ level: 1, text: "Heading" }]);
+      expect(meta.headings).toEqual([
+        { level: 1, text: "Heading", id: "heading" },
+      ]);
     });
 
     it("handles frontmatter without title and heading", async () => {
       const meta = await parseMeta("---\ndraft: true\n---\n\nJust a paragraph");
-      expect(meta.draft).toBe(true);
+      expect(meta.frontmatter.draft).toBe(true);
       expect(meta.title).toBeUndefined();
       expect(meta.headings).toHaveLength(0);
     });
@@ -1829,10 +1931,37 @@ export function defineSuite({
           "::card\n---\ntitle: Stackblitz\nicon: simple-icons:stackblitz\n---\nContent.\n::\n",
       );
       expect(meta.title).toBe("Installation");
-      expect(meta.description).toBe("How to install.");
-      expect(meta.icon).toBeUndefined();
+      expect(meta.frontmatter.description).toBe("How to install.");
+      expect(meta.frontmatter.icon).toBeUndefined();
       expect(meta.headings).toHaveLength(1);
       expect(meta.headings[0].text).toBe("Try it online");
+    });
+  });
+
+  describe("parseYAML", () => {
+    // Reaches the libyaml that frontmatter parsing already links in. Before
+    // it, parsing a plain `.yml` meant wrapping it in `---` fences, running it
+    // through the *markdown* meta renderer, and stripping `headings` back off.
+    it("parses a mapping", async () => {
+      expect(await parseYAML("foo: bar\nlist:\n  - a\n  - 2\n")).toEqual({
+        foo: "bar",
+        list: ["a", 2],
+      });
+    });
+
+    it("accepts a non-mapping root", async () => {
+      expect(await parseYAML("- a\n- b\n")).toEqual(["a", "b"]);
+      expect(await parseYAML("hello")).toBe("hello");
+    });
+
+    it("treats an empty document as null", async () => {
+      expect(await parseYAML("")).toBeNull();
+    });
+
+    it("repairs a truncated document instead of throwing", async () => {
+      // Same forward-repair contract as frontmatter: whatever libyaml managed
+      // to parse is kept, and the JSON stays parseable.
+      expect(await parseYAML("a: [1, 2")).toEqual({ a: [1, 2] });
     });
   });
 

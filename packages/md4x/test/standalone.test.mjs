@@ -10,6 +10,7 @@ import {
   renderToMeta,
   parseMeta,
   renderToText,
+  parseYAML,
   heal,
 } from "md4x/standalone";
 import { defineSuite } from "./_suite.mjs";
@@ -28,6 +29,7 @@ defineSuite({
   renderToMeta,
   parseMeta,
   renderToText,
+  parseYAML,
   heal,
 });
 

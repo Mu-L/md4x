@@ -271,6 +271,10 @@ fn md4x_napi_to_markdown(env: c.napi_env, info: c.napi_callback_info) callconv(.
     return render_impl(env, info, lib.md_markdown);
 }
 
+fn md4x_napi_yaml_to_json(env: c.napi_env, info: c.napi_callback_info) callconv(.c) c.napi_value {
+    return render_impl(env, info, lib.md_yaml);
+}
+
 fn md4x_napi_heal(env: c.napi_env, info: c.napi_callback_info) callconv(.c) c.napi_value {
     var argc: usize = 1;
     var argv: [1]c.napi_value = undefined;
@@ -332,6 +336,7 @@ fn init(env: c.napi_env, exports: c.napi_value) callconv(.c) c.napi_value {
         descriptor("renderToMeta", md4x_napi_to_meta),
         descriptor("renderToText", md4x_napi_to_text),
         descriptor("renderToMarkdown", md4x_napi_to_markdown),
+        descriptor("yamlToJson", md4x_napi_yaml_to_json),
         descriptor("heal", md4x_napi_heal),
     };
     _ = c.napi_define_properties(env, exports, props.len, &props);

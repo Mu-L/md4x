@@ -189,7 +189,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 **b**{:k='hello'}
 .
-{"nodes":[["p",{},["strong",{":k":"hello"},"b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["strong",{":k":"hello"},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -199,7 +199,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 **b**{:k=''}
 .
-{"nodes":[["p",{},["strong",{":k":""},"b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["strong",{":k":""},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -209,7 +209,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 **b**{:k=hello}
 .
-{"nodes":[["p",{},["strong",{":k":"hello"},"b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["strong",{":k":"hello"},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -219,7 +219,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 **b**{:k='a b'}
 .
-{"nodes":[["p",{},["strong",{":k":"a b"},"b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["strong",{":k":"a b"},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -229,7 +229,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 **b**{:k='1,"injected":"yes"'}
 .
-{"nodes":[["p",{},["strong",{":k":"1,\"injected\":\"yes\""},"b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["strong",{":k":"1,\"injected\":\"yes\""},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -239,7 +239,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 [t](u){:k='1,"injected":"yes"'}
 .
-{"nodes":[["p",{},["a",{"href":"u",":k":"1,\"injected\":\"yes\""},"t"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["a",{"href":"u",":k":"1,\"injected\":\"yes\""},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -249,7 +249,7 @@ inject sibling keys into the props object.
 ```````````````````````````````` example [no-normalize]
 [t]{:k='1,"injected":"yes"'}
 .
-{"nodes":[["p",{},["span",{":k":"1,\"injected\":\"yes\""},"t"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["span",{":k":"1,\"injected\":\"yes\""},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -265,7 +265,7 @@ wrote props of its own.
 ```````````````````````````````` example [no-normalize]
 **b**{ }
 .
-{"nodes":[["p",{},["strong",{},"b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["strong",{},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -275,7 +275,7 @@ wrote props of its own.
 ```````````````````````````````` example [no-normalize]
 [t]{=}
 .
-{"nodes":[["p",{},["span",{},"t"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["span",{},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -285,7 +285,7 @@ wrote props of its own.
 ```````````````````````````````` example [no-normalize]
 [t](u "ti"){ }
 .
-{"nodes":[["p",{},["a",{"href":"u","title":"ti"},"t"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["a",{"href":"u","title":"ti"},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -295,7 +295,7 @@ wrote props of its own.
 ```````````````````````````````` example [no-normalize]
 ![a](p "ti"){.}
 .
-{"nodes":[["p",{},["img",{"src":"p","alt":"a","title":"ti"}]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["img",{"src":"p","alt":"a","title":"ti"}]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````

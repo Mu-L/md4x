@@ -85,6 +85,9 @@ const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) 
 
 const json = @import("md4x-json.zig");
 const props = @import("md4x-props.zig");
+// Heading text + GitHub-compatible slugging, shared with the meta renderer so
+// the two never disagree about a heading's id.
+const slug = @import("md4x-slug.zig");
 
 // ---- JSON writer (md4x-json.zig) ----
 const JsonWriter = json.JsonWriter;
@@ -132,7 +135,12 @@ const TagKind = enum {
     code,
     math,
     math_display,
+    // Both spellings of raw HTML carry the source bytes verbatim as their sole
+    // text child; only the block one is marked `"block":true` in props.
     html_block,
+    html_inline,
+    heading,
+    p,
     frontmatter,
     footnote_section,
     footnote_def,
@@ -158,6 +166,10 @@ const Detail = struct {
     ol_delimiter: u8 = 0,
     // ul
     ul_is_tight: bool = false,
+    // h — the slug published as the heading's `id` prop and in `meta.headings`.
+    // Owned by the arena, shared with the `headings` list rather than copied.
+    h_level: c_uint = 0,
+    h_id: ?[]const u8 = null,
     // li
     li_is_task: bool = false,
     li_task_mark: u8 = 0,
@@ -194,6 +206,14 @@ const Detail = struct {
     footnote_label: ?[:0]u8 = null,
 };
 
+// One entry of the document's `meta.headings`. `text` and `id` are arena slices
+// shared with the heading node itself.
+const HeadingMeta = struct {
+    level: c_uint,
+    text: []const u8,
+    id: []const u8,
+};
+
 const JsonNode = struct {
     kind: JsonNodeKind,
     tag: ?[:0]const u8 = null,
@@ -216,6 +236,11 @@ const JsonNode = struct {
     // collapsed. Serialized as `"meta":{"maxDepthExceeded":true}`.
     depth_exceeded: bool = false,
 
+    // Document node only: every heading in document order, published as
+    // `meta.headings`. Parked on the node rather than threaded through
+    // jsonSerializeNode(), which recurses once per level.
+    headings: []const HeadingMeta = &.{},
+
     // Raw inline attributes string from trailing {attrs}, or null.
     raw_attrs: ?[:0]u8 = null,
 };
@@ -237,6 +262,16 @@ const JsonCtx = struct {
     suppressed_depth: usize = 0,
     image_nesting: c_int = 0,
     err: c_int = 0,
+
+    // Heading capture. The text is accumulated from the SAX `text` stream --
+    // NOT walked back out of the built subtree -- because that is the only form
+    // in which entities are resolved and raw HTML is excluded, and it is what
+    // the meta renderer does, so the two produce byte-identical ids.
+    in_heading: bool = false,
+    heading_node: ?*JsonNode = null,
+    heading_text: slug.TextBuf = .empty,
+    slugger: slug.Slugger = .{},
+    headings: std.ArrayListUnmanaged(HeadingMeta) = .empty,
 };
 
 // The active arena allocator. The callbacks receive only a `*JsonCtx` userdata,
@@ -510,7 +545,9 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
             tag = if (d.level >= 1 and d.level <= 6) heading_tags[d.level] else "h1";
         },
         .code => tag = "pre",
-        .html => tag = "html_block",
+        // One tag for both spellings of raw HTML; the block one is told apart
+        // by its `block` prop, not by a different tag (see jsonWriteProps).
+        .html => tag = "html",
         .p => tag = "p",
         .table => tag = "table",
         .thead => tag = "thead",
@@ -540,7 +577,17 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
                 ctx.err = 1;
                 return -1;
             }
-            node.?.detail.alert_type_name = jsonAttrToStr(&d.type_name);
+            // `> [!NOTE]` and `::alert{type=note}` are two spellings of the same
+            // node, and only the first preserved the author's casing -- so the
+            // AST reported `NOTE` for one and `note` for the other. The parser
+            // detail stays verbatim (the markdown renderer round-trips the
+            // original `[!NOTE]`); the normalization is the AST's, and matches
+            // what the HTML renderer already emits as `alert-note`. The parser
+            // accepts only `[a-zA-Z0-9_-]*` here, so ASCII folding is total.
+            if (jsonAttrToStr(&d.type_name)) |type_name| {
+                for (type_name) |*ch| ch.* = std.ascii.toLower(ch.*);
+                node.?.detail.alert_type_name = type_name;
+            }
         },
         .component => |*d| {
             tag = jsonAttrToStr(&d.tag_name);
@@ -596,7 +643,8 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
         .ul => n.tag_kind = .ul,
         .ol => n.tag_kind = .ol,
         .li => n.tag_kind = .li,
-        .h => n.tag_kind = .other,
+        .h => n.tag_kind = .heading,
+        .p => n.tag_kind = .p,
         .code => n.tag_kind = .pre,
         .html => n.tag_kind = .html_block,
         .th => n.tag_kind = .th,
@@ -613,6 +661,12 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
     switch (detail.*) {
         .ul => |*d| {
             n.detail.ul_is_tight = d.is_tight;
+        },
+        .h => |*d| {
+            n.detail.h_level = d.level;
+            ctx.in_heading = true;
+            ctx.heading_node = n;
+            ctx.heading_text.clearRetainingCapacity();
         },
         .ol => |*d| {
             n.detail.ol_is_tight = d.is_tight;
@@ -679,7 +733,33 @@ fn jsonLeaveBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
     if (jsonLeaveSuppressed(ctx))
         return 0;
 
-    // Convert html_block comments to [null, {}, "body"] nodes.
+    // Close out a heading: slug its accumulated text, publish the id on the
+    // node, and record it for `meta.headings`. Both consumers get the SAME
+    // slice, so a TOC built from `meta` and an anchor rendered from the node
+    // cannot drift apart.
+    if (detail.* == .h and ctx.in_heading) {
+        ctx.in_heading = false;
+        const text = dupNts(ctx.heading_text.items) orelse {
+            ctx.err = 1;
+            return -1;
+        };
+        const id = ctx.slugger.slug(ctx.alloc, text) catch {
+            ctx.err = 1;
+            return -1;
+        };
+        if (ctx.heading_node) |h| h.detail.h_id = id;
+        ctx.headings.append(ctx.alloc, .{
+            .level = if (ctx.heading_node) |h| h.detail.h_level else 0,
+            .text = text,
+            .id = id,
+        }) catch {
+            ctx.err = 1;
+            return -1;
+        };
+        ctx.heading_node = null;
+    }
+
+    // Convert raw-HTML block comments to [null, {}, "body"] nodes.
     if (detail.* == .html and ctx.current != null and ctx.current.?.text_value != null) {
         const cur = ctx.current.?;
         if (jsonIsHtmlComment(cur.text_value.?)) |body| {
@@ -863,6 +943,16 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
     }
     const cur = ctx.current.?;
 
+    // Feed the heading accumulator first, and unconditionally: it must see the
+    // same event stream the meta renderer sees, including text inside spans and
+    // inside an image's alt, or the two renderers' ids diverge.
+    if (ctx.in_heading) {
+        slug.appendText(&ctx.heading_text, ctx.alloc, text_type, text) catch {
+            ctx.err = 1;
+            return -1;
+        };
+    }
+
     // Inside an image: accumulate text as alt attribute.
     if (ctx.image_nesting > 0) {
         const src: []const u8 = switch (text_type) {
@@ -945,11 +1035,31 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
                 jsonAppendChild(ctx, cnode.?);
                 return 0;
             }
-            // Non-comment inline HTML: fall through to default text handling.
-            value = dupNts(text) orelse {
+            // Non-comment inline HTML gets its OWN node rather than being
+            // concatenated into the surrounding text.
+            //
+            // As plain text it was indistinguishable from an escaped `<`:
+            // `Text with <b>raw</b> and 3 < 5` collapsed to one string in which
+            // markup and literal content could not be told apart. Consumers
+            // worked around it by re-parsing every string containing `<` as a
+            // *fragment*, which re-triggered block constructs the paragraph had
+            // already ruled out (`**bold** - a <b>x</b>` grew a `<ul>` inside
+            // the `<p>`) and cost an extra render per text node.
+            //
+            // One event, one node: `<b>` and `</b>` arrive separately and stay
+            // separate, so the source bytes round-trip exactly.
+            const hnode = jsonNodeNew("html", .element);
+            if (hnode == null) {
+                ctx.err = 1;
+                return -1;
+            }
+            hnode.?.tag_kind = .html_inline;
+            hnode.?.text_value = dupNts(text) orelse {
                 ctx.err = 1;
                 return -1;
             };
+            jsonAppendChild(ctx, hnode.?);
+            return 0;
         },
 
         else => {
@@ -1136,6 +1246,20 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             }
         }
     } else switch (node.tag_kind) {
+        .heading => {
+            if (node.detail.h_id) |id| {
+                jsonWriteStr(w, "\"id\":");
+                jsonWriteSlice(w, id);
+                has_prop = 1;
+            }
+        },
+        // The only thing separating a raw-HTML block from an inline one. An
+        // empty `<html>` block cannot occur (the parser only opens the block
+        // for source bytes), so the prop is unconditional.
+        .html_block => {
+            jsonWriteStr(w, "\"block\":true");
+            has_prop = 1;
+        },
         .ol => {
             if (node.detail.ol_start != 1) {
                 var buf: [32]u8 = undefined;
@@ -1305,6 +1429,117 @@ fn nonEmpty(s: ?[:0]u8) ?[:0]u8 {
     return if (v.len > 0) v else null;
 }
 
+// *************************************
+// ***  Post-parse tree transforms    ***
+// *************************************
+
+// Markdown wraps loose block content in a paragraph unconditionally, and there
+// are two places where that paragraph describes the source rather than the
+// document -- both of which the tree, not the parser, is the right place to fix:
+// every other renderer emits real markup, where the wrapper is harmless or even
+// required, while an MDC consumer mounts these nodes as components.
+//
+// Note that md4x ALREADY does this for the analogous case: a tight list item
+// renders as `["li",{},"one"]`, not `["li",{},["p",{},"one"]]`. These two are
+// the same rule reaching two containers the parser has no tightness concept for.
+
+fn isWhitespaceText(node: *const JsonNode) bool {
+    if (node.kind != .text) return false;
+    const text = node.text_value orelse return true;
+    for (text) |ch| {
+        if (ch != ' ' and ch != '\t' and ch != '\n' and ch != '\r') return false;
+    }
+    return true;
+}
+
+fn isBareParagraph(node: *const JsonNode) bool {
+    return node.kind == .element and !node.tag_is_dynamic and node.tag_kind == .p;
+}
+
+// A paragraph holding nothing but MDC components and inter-component
+// whitespace, i.e. one written as its own line rather than mid-sentence.
+//
+// `:pm-x{cmd=foo}` on its own line produced `["p",{},["pm-x",{...}]]`, and a
+// component that renders block markup is then hoisted out of the `<p>` by the
+// browser -- an invalid-HTML/hydration-mismatch pair that consumers could only
+// undo with a guessed allowlist of phrasing tags, because by then the tree no
+// longer records that the component stood alone. This is what `markdown-it-mdc`
+// does, and only the parse knows it.
+fn isLoneComponentParagraph(node: *const JsonNode) bool {
+    if (!isBareParagraph(node)) return false;
+    var n_components: usize = 0;
+    var child = node.first_child;
+    while (child) |ch| : (child = ch.next_sibling) {
+        if (ch.kind == .element and ch.tag_is_dynamic) {
+            n_components += 1;
+        } else if (!isWhitespaceText(ch)) {
+            return false;
+        }
+    }
+    return n_components > 0;
+}
+
+// Recursion is bounded by JSON_MAX_DEPTH, the same cap that bounds
+// jsonSerializeNode() -- the two run one after the other, never nested.
+fn jsonTransformTree(node: *JsonNode) void {
+    var child = node.first_child;
+    while (child) |ch| : (child = ch.next_sibling) jsonTransformTree(ch);
+
+    // A named slot whose body is exactly one paragraph: the component decides
+    // what element the slot sits in, so the paragraph is redundant at best and
+    // a `<p>`-inside-`<p>` hydration mismatch at worst. A multi-block body keeps
+    // its paragraphs, exactly as a loose list item does.
+    if (!node.tag_is_dynamic and node.tag_kind == .template) {
+        if (node.first_child) |only| {
+            if (only.next_sibling == null and isBareParagraph(only)) {
+                node.first_child = only.first_child;
+                node.last_child = only.last_child;
+            }
+        }
+    }
+
+    // Splice out lone-component paragraphs, promoting the components to this
+    // node's own child list. Rebuilds the list rather than patching links: the
+    // nodes are singly linked, so there is no predecessor to fix up in place.
+    var needs_unwrap = false;
+    child = node.first_child;
+    while (child) |ch| : (child = ch.next_sibling) {
+        if (isLoneComponentParagraph(ch)) {
+            needs_unwrap = true;
+            break;
+        }
+    }
+    if (!needs_unwrap) return;
+
+    var first: ?*JsonNode = null;
+    var last: ?*JsonNode = null;
+    child = node.first_child;
+    while (child) |ch| {
+        const next = ch.next_sibling;
+        if (isLoneComponentParagraph(ch)) {
+            var grand = ch.first_child;
+            while (grand) |g| {
+                const g_next = g.next_sibling;
+                // The whitespace between two components was only ever the gap
+                // between them on the line; at block level it is noise.
+                if (!isWhitespaceText(g)) {
+                    g.next_sibling = null;
+                    if (last) |l| l.next_sibling = g else first = g;
+                    last = g;
+                }
+                grand = g_next;
+            }
+        } else {
+            ch.next_sibling = null;
+            if (last) |l| l.next_sibling = ch else first = ch;
+            last = ch;
+        }
+        child = next;
+    }
+    node.first_child = first;
+    node.last_child = last;
+}
+
 fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
     switch (node.kind) {
         .document => {
@@ -1342,14 +1577,34 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
             }
 
             // `meta` is the ComarkTree's top-level extension bag
-            // (`Record<string, unknown>`, always emitted, empty until now). The
-            // one thing the renderer has to report about itself goes here:
-            // nesting past JSON_MAX_DEPTH was collapsed, so this tree is
-            // shallower than the source. Emitted only in that case, so ordinary
-            // output stays byte-for-byte what it was.
-            jsonWriteStr(w, "},\"meta\":{");
+            // (`Record<string, unknown>`).
+            //
+            // `headings` is always present, even empty. It exists so that
+            // building a table of contents does not require a SECOND full parse
+            // through the meta renderer -- which was 21% of parse time on a
+            // real docs tree, for information this renderer already had in
+            // hand. Each entry's `id` is the same slice the heading node
+            // carries, so the two cannot disagree.
+            //
+            // `maxDepthExceeded` is the one thing the renderer has to report
+            // about itself: nesting past JSON_MAX_DEPTH was collapsed, so this
+            // tree is shallower than the source. Emitted only in that case.
+            jsonWriteStr(w, "},\"meta\":{\"headings\":[");
+            for (node.headings, 0..) |h, i| {
+                var buf: [16]u8 = undefined;
+                if (i > 0) jsonWrite(w, ",", 1);
+                jsonWriteStr(w, "{\"level\":");
+                _ = sys.snprintf(&buf, buf.len, "%u", h.level);
+                jsonWriteStrZ(w, @ptrCast(&buf));
+                jsonWriteStr(w, ",\"text\":");
+                jsonWriteSlice(w, h.text);
+                jsonWriteStr(w, ",\"id\":");
+                jsonWriteSlice(w, h.id);
+                jsonWrite(w, "}", 1);
+            }
+            jsonWrite(w, "]", 1);
             if (node.depth_exceeded)
-                jsonWriteStr(w, "\"maxDepthExceeded\":true");
+                jsonWriteStr(w, ",\"maxDepthExceeded\":true");
             jsonWriteStr(w, "}}");
         },
 
@@ -1395,9 +1650,10 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
                     jsonWriteStr(w, "\"\"");
                 jsonWrite(w, "]", 1);
             }
-            // html_block and frontmatter: emit literal as text child.
+            // Raw HTML (either spelling) and frontmatter: literal text child.
             else if (!node.tag_is_dynamic and node.text_value != null and
-                (node.tag_kind == .html_block or node.tag_kind == .frontmatter))
+                (node.tag_kind == .html_block or node.tag_kind == .html_inline or
+                    node.tag_kind == .frontmatter))
             {
                 jsonWrite(w, ",", 1);
                 jsonWriteSlice(w, node.text_value.?);
@@ -1553,6 +1809,8 @@ pub fn md_ast(
     writer.process_output = process_output;
     writer.userdata = userdata;
     if (ctx.root) |root| {
+        root.headings = ctx.headings.items;
+        jsonTransformTree(root);
         jsonSerializeNode(&writer, root);
     }
     jsonWrite(&writer, "\n", 1);

@@ -2301,3 +2301,11 @@ const expected_trace =
     \\  -block FOOTNOTE_DEF_SECTION
     \\-block DOC
 ++ "\n";
+
+// `zig build test` compiles this file as its root, so a unit test in a renderer
+// module is only reached if something here imports it. The slug/heading rules
+// (GitHub slug parity, collision numbering, entity resolution) are pure
+// functions with no HTML output to diff, so the .txt suites cannot express them.
+test {
+    _ = @import("renderers/md4x-slug.zig");
+}

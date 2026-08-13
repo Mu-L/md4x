@@ -140,7 +140,15 @@ pub fn md_ast(
 ) c_int;
 ```
 
-Produces `{"nodes":[...],"frontmatter":{...},"meta":{}}` where each node is either a plain JSON string (text) or a tuple array `["tag", {props}, ...children]`. Frontmatter YAML is parsed into the top-level `frontmatter` object (not included in `nodes`). HTML comments are represented as `[null, {}, "comment body"]`. Footnotes take a Comark shape rather than mirroring the HTML renderer's markup: a reference is `["footnote-ref", {id, refId, label}]` and the deferred definitions are `["footnotes", {}, ["footnote", {id, label, refCount}, ...children]]`.
+Produces `{"nodes":[...],"frontmatter":{...},"meta":{"headings":[...]}}` where each node is either a plain JSON string (text) or a tuple array `["tag", {props}, ...children]`. Frontmatter YAML is parsed into the top-level `frontmatter` object (not included in `nodes`). HTML comments are represented as `[null, {}, "comment body"]`. Footnotes take a Comark shape rather than mirroring the HTML renderer's markup: a reference is `["footnote-ref", {id, refId, label}]` and the deferred definitions are `["footnotes", {}, ["footnote", {id, label, refCount}, ...children]]`.
+
+**Raw HTML is a node, not loose text.** An inline run is `["html", {}, "<b>"]` and an HTML block is `["html", { "block": true }, "…"]` — one node per source event, so `<b>` and `</b>` stay separate and the source bytes round-trip. Emitting them as text made them indistinguishable from a literal `<` in prose, which consumers could only resolve by re-parsing every text string containing `<` as an HTML _fragment_ — reviving block constructs the paragraph had already ruled out, and costing an extra render per text node.
+
+**Headings carry an `id`.** A GitHub-compatible slug, de-duplicated within the document with a `-1`/`-2` suffix, published both on the node and in `meta.headings` (`{level, text, id}`) — the same arena slice, so the two cannot drift. `meta.headings` exists so that a table of contents needs no second parse through the meta renderer. Slugging and heading-text accumulation live in `src/renderers/md4x-slug.zig` and are driven from the SAX text stream in **both** renderers, which is the only form in which entities are resolved and raw HTML excluded.
+
+**Two paragraphs the tree drops.** Markdown wraps loose block content in a paragraph unconditionally, and in two places that paragraph describes the source rather than the document. A paragraph holding only MDC components and whitespace is spliced out, so a component written on its own line lands at block level (matching `markdown-it-mdc`) while a mid-sentence one keeps its paragraph; and a `template` slot body that is exactly one paragraph is unwrapped. Both are the rule md4x already applies to a tight list item, which renders as `["li", {}, "one"]`. These live in the AST renderer, not the parser: every other renderer emits real markup, where the wrapper is harmless or required.
+
+**Alert type is lowercased**, so `> [!NOTE]` and `::alert{type=note}` — two spellings of one node — agree. The parser detail keeps the author's casing for the markdown renderer's round-trip.
 
 **Internal architecture:** Unlike the streaming HTML/ANSI renderers, the AST renderer builds an in-memory tree of `JsonNode` structs during parsing, then serializes the tree to JSON. The whole tree is **arena-allocated** (`JsonCtx.arena`) and freed wholesale, so there is no per-node free. Each node carries a **flat `Detail` struct** — one field per variant, not a union — which structurally rules out the type-confusion bug class the C renderer suffered from. Nodes with `tag_is_dynamic = true` are user-defined components. All tag dispatch (`jsonWriteProps`, `jsonSerializeNode`) must still resolve `tag_is_dynamic` / `tag_kind` **first**, so a component whose name collides with a built-in tag reads the right `Detail` field. See `AGENTS.md` for the full rule. On the input side, `jsonEnterBlock` / `jsonEnterSpan` switch on the incoming `abi.BlockDetail` / `abi.SpanDetail` union and resolve the dynamic-component arm before any built-in tag, so the same rule holds where the node is built.
 
@@ -225,6 +233,32 @@ const json = @import("md4x-json.zig");
 - `json_write()` / `json_write_str()` — Raw and string output helpers
 - `json_write_escaped()` / `json_write_string()` — JSON-escaped string output
 - `json_write_yaml_props()` — Parses YAML frontmatter and writes key-value pairs as JSON properties (using libyaml). Returns the number of props actually written, which callers use to place the separating comma before whatever they append next.
+- `md_yaml()` — Standalone YAML-to-JSON entry point (see below).
+
+### YAML Entry Point (`md_yaml`)
+
+```zig
+pub fn md_yaml(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int;
+```
+
+Converts a standalone YAML document — not Markdown frontmatter — to JSON,
+exposed to JS as `parseYAML()` / `yamlToJson()`. Without it, parsing a plain
+`.yml` meant wrapping it in `---` fences, running it through the **markdown**
+meta renderer, and stripping the heading list back off the result.
+
+Unlike `json_write_yaml_props()` it accepts any root node (a sequence or a bare
+scalar as readily as a mapping), and a stream with no document at all converts
+to `null` — YAML's own reading of an empty file. Both flag words are unused; it
+takes the renderer signature so it drops into the existing wasm/napi wrappers
+unchanged. Malformed input follows the same forward-repair contract as
+frontmatter, so the output always parses.
 
 ### Malformed YAML
 
@@ -262,20 +296,24 @@ pub fn md_meta(
 ) c_int;
 ```
 
-Produces a flat JSON object with frontmatter properties spread at the top level plus a `headings` array. No AST construction — uses SAX callbacks to capture only frontmatter text and heading plain text.
+Produces a JSON object with the parsed frontmatter under `frontmatter` and a `headings` array beside it. No AST construction — uses SAX callbacks to capture only frontmatter text and heading plain text.
 
 **Example output:**
 
 ```json
 {
-  "title": "Hello",
-  "tags": ["a", "b"],
+  "frontmatter": { "title": "Hello", "tags": ["a", "b"] },
   "headings": [
-    { "level": 1, "text": "My Doc" },
-    { "level": 2, "text": "Section 1" }
+    { "level": 1, "text": "My Doc", "id": "my-doc" },
+    { "level": 2, "text": "Section 1", "id": "section-1" }
   ]
 }
 ```
+
+Frontmatter is nested rather than spread across the top level: as siblings, a
+document whose frontmatter declared its own `headings` key had it silently
+overwritten by the parsed heading list, and there was no way to ask for the
+frontmatter alone.
 
 ### Renderer Flags (`MD_META_FLAG_*`)
 
@@ -287,10 +325,12 @@ Produces a flat JSON object with frontmatter properties spread at the top level 
 
 ### Rendering Details
 
-- Frontmatter YAML properties are spread as top-level JSON keys (using libyaml for full YAML 1.1 support)
-- Headings are collected as `{"level": N, "text": "..."}` objects in the `headings` array
+- Frontmatter YAML is parsed under the `frontmatter` key (using libyaml for full YAML 1.1 support)
+- Headings are collected as `{"level": N, "text": "...", "id": "..."}` objects in the `headings` array
 - Heading text is extracted as plain text — inline formatting (bold, italic, code, etc.) is stripped
 - HTML entities in headings are resolved to UTF-8 characters
+- Raw HTML inside a heading is **excluded** from its text: `## a <b>x</b>` reads `a x`, which is what the id is slugged from
+- `id` is a GitHub-compatible slug (case-folded, punctuation stripped, spaces to `-`) de-duplicated within the document with a `-1`/`-2` suffix. The slugging lives in `src/renderers/md4x-slug.zig` and is driven from the same SAX text stream in the AST renderer, so the two entry points cannot publish different ids for one heading
 - Footnote blocks and references are ignored — they contribute nothing to frontmatter or the heading list
 - Uses streaming renderer pattern (like HTML renderer), no AST construction
 

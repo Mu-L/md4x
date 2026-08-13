@@ -158,6 +158,16 @@ test "md_markdown" {
     }.one, .{});
 }
 
+// Not a markdown harness: `md_yaml` runs the raw input straight through
+// libyaml. Same signature as the renderers, so it shares the driver.
+test "md_yaml" {
+    try std.testing.fuzz({}, struct {
+        fn one(_: void, smith: *std.testing.Smith) anyerror!void {
+            try fuzzRenderer(lib.md_yaml, smith);
+        }
+    }.one, .{});
+}
+
 test "md_heal" {
     try std.testing.fuzz({}, struct {
         fn one(_: void, smith: *std.testing.Smith) anyerror!void {

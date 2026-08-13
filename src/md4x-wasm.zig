@@ -170,6 +170,10 @@ export fn md4x_to_markdown(input: [*c]const u8, input_size: c_uint, renderer_fla
     return render(lib.md_markdown, input, input_size, renderer_flags);
 }
 
+export fn md4x_yaml_to_json(input: [*c]const u8, input_size: c_uint) callconv(.c) c_int {
+    return render(lib.md_yaml, input, input_size, 0);
+}
+
 export fn md4x_heal(input: [*c]const u8, input_size: c_uint) callconv(.c) c_int {
     var buf = md4x_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
     const ret = lib.md_heal(input, input_size, buf_append, &buf);

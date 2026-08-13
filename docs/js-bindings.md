@@ -196,9 +196,15 @@ All extensions (`MD_DIALECT_ALL`) are enabled by default. No parser/renderer fla
 | `renderToMeta(input: string)` | `string`                                 | `string`                                 |
 | `parseMeta(input: string)`    | `ComarkMeta`                             | `ComarkMeta`                             |
 | `renderToText(input: string)` | `string`                                 | `string`                                 |
+| `yamlToJson(input: string)`   | `string`                                 | `string`                                 |
+| `parseYAML(input: string)`    | `unknown`                                | `unknown`                                |
 | `heal(input: string)`         | `string`                                 | `string`                                 |
 
-`renderToAST` returns the raw JSON string from the AST renderer. `parseAST` calls `renderToAST` and parses the result into a `ComarkTree` object. `renderToMeta` returns the raw JSON string from the meta renderer. `parseMeta` calls `renderToMeta`, parses the result, and falls back to the first heading as `title` if no frontmatter title exists. See `lib/types.d.ts` for types.
+`renderToAST` returns the raw JSON string from the AST renderer. `parseAST` calls `renderToAST` and parses the result into a `ComarkTree` object. `renderToMeta` returns the raw JSON string from the meta renderer. `parseMeta` calls `renderToMeta` and parses the result. Both then fill in `title` — the frontmatter `title` if the document declares one, else the first heading's text — which is the one piece of policy the renderers cannot express, since it spans two of their outputs. See `lib/types.d.ts` for types.
+
+`parseAST` already reports the document's headings in `tree.meta.headings`, so building a table of contents from a tree does **not** need a second pass through `parseMeta`; use `parseMeta` when the AST itself is not wanted.
+
+`parseYAML` converts a standalone YAML document (not Markdown frontmatter) to a JS value, reaching the libyaml the frontmatter path already links in. Any root node is accepted — mapping, sequence or bare scalar — and an empty document yields `null`. `yamlToJson` is the same thing without the `JSON.parse`.
 
 Both `renderToHtml` and `renderToAnsi` accept an optional `highlighter` callback for custom code block highlighting:
 
@@ -218,19 +224,27 @@ When `highlighter` is provided, code blocks are rendered with metadata tracking.
 
 The package exports TypeScript types for the Comark AST:
 
-- `ComarkTree` — Root container: `{ nodes: ComarkNode[], frontmatter: Record<string, unknown>, meta: Record<string, unknown> }`. `meta` is an open bag and is empty for ordinary documents; the renderer sets `maxDepthExceeded: true` there when a document nested deeper than the AST renderer's 1024-level cap and the excess was collapsed (see `docs/renderers.md`)
+- `ComarkTree` — Root container: `{ nodes: ComarkNode[], frontmatter: Record<string, unknown>, meta: Record<string, unknown> }`. `meta` is an open bag that always carries `headings` (and `title`, via `parseAST`); the renderer additionally sets `maxDepthExceeded: true` there when a document nested deeper than the AST renderer's 1024-level cap and the excess was collapsed (see `docs/renderers.md`)
 - `ComarkNode` — Either a `ComarkElement` (tuple array) or `ComarkText` (plain string)
 - `ComarkElement` — Tuple: `[tag: string | null, props: ComarkElementAttributes, ...children: ComarkNode[]]`
 - `ComarkText` — Plain string representing text content
 - `ComarkElementAttributes` — Key-value record: `{ [key: string]: unknown }`
-- `ComarkMeta` — Metadata object: `{ title?: string, headings: ComarkHeading[], [key: string]: unknown }`
-- `ComarkHeading` — Heading entry: `{ level: number, text: string }`
+- `ComarkMeta` — Metadata object: `{ frontmatter: Record<string, unknown>, headings: ComarkHeading[], title?: string }`
+- `ComarkHeading` — Heading entry: `{ level: number, text: string, id: string }`, where `id` is a GitHub-compatible slug de-duplicated within the document (two `## Same` headings yield `same` and `same-1`) and `text` has entities resolved and raw HTML tags excluded
 
 The website playground includes both Vue and React examples that render this AST format (`website/components/ComarkVueRenderer.vue`, `website/components/ComarkReactRenderer.vue`).
 
 ## Comark AST Format
 
-The JSON renderer produces a **Comark AST** — a lightweight, array-based format: `{"nodes":[...],"frontmatter":{...},"meta":{}}`. Each node is either a plain string (text) or an element tuple `[tag, props, ...children]`. Frontmatter YAML is parsed into the top-level `frontmatter` object (not included in `nodes`). HTML comments are represented as `[null, {}, "comment body"]`.
+The JSON renderer produces a **Comark AST** — a lightweight, array-based format: `{"nodes":[...],"frontmatter":{...},"meta":{"headings":[...]}}`. Each node is either a plain string (text) or an element tuple `[tag, props, ...children]`. Frontmatter YAML is parsed into the top-level `frontmatter` object (not included in `nodes`). HTML comments are represented as `[null, {}, "comment body"]`.
+
+**Shapes that differ from a naive tree walk of the source:**
+
+- **Raw HTML is a node, never loose text.** `["html", {}, "<b>"]` for an inline run and `["html", { "block": true }, "…"]` for an HTML block — one node per source event, so `<b>` and `</b>` stay separate and a literal `<` in prose stays a plain text character. Without this the two are indistinguishable inside one string.
+- **Headings carry an `id`** matching `meta.headings[].id`.
+- **A paragraph holding only MDC components is unwrapped.** A component written on its own line (`:pm-x{cmd=foo}`) is emitted at block level; one used mid-sentence keeps its paragraph. Matches `markdown-it-mdc`.
+- **A `template` slot body that is exactly one paragraph is unwrapped**, the same way a tight list item renders as `["li", {}, "one"]`. A multi-block body keeps its paragraphs.
+- **`> [!NOTE]` reports `{"type":"note"}`**, lowercased so the GFM and `::alert{type=note}` spellings of one node agree.
 
 **Property type conventions in AST output:**
 

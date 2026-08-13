@@ -1785,7 +1785,7 @@ x <- 1
 x <- 1
 ```
 .
-{"nodes":[["pre",{"language":"language-r"},["code",{"class":"language-r"},"x <- 1\n"]],["pre",{"language":"r"},["code",{"class":"language-r"},"x <- 1\n"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["pre",{"language":"language-r"},["code",{"class":"language-r"},"x <- 1\n"]],["pre",{"language":"r"},["code",{"class":"language-r"},"x <- 1\n"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 -t json
 ````````````````````````````````
@@ -2059,7 +2059,7 @@ A wiki-link target, which is emitted both as a prop and as the link text:
 ```````````````````````````````` example [no-normalize]
 [[a b]]
 .
-{"nodes":[["p",{},["wikilink",{"target":"a�b"},"a�b"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["wikilink",{"target":"a�b"},"a�b"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -2078,7 +2078,7 @@ a raw NUL inside the destination):
 ```````````````````````````````` example [no-normalize]
 [t](<a b> "x y")
 .
-{"nodes":[["p",{},["a",{"href":"a�b","title":"x�y"},"t"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["a",{"href":"a�b","title":"x�y"},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -2088,7 +2088,7 @@ An image's `src`, `alt` and `title`:
 ```````````````````````````````` example [no-normalize]
 ![a t](<s rc> "x y")
 .
-{"nodes":[["p",{},["img",{"src":"s�rc","alt":"a�t","title":"x�y"}]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},["img",{"src":"s�rc","alt":"a�t","title":"x�y"}]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -2103,7 +2103,7 @@ which is valid JSON and round-trips through `JSON.parse`:
 c
 ```
 .
-{"nodes":[["pre",{"language":"j�s","filename":"f�n.js","meta":"m\u0000eta"},["code",{"class":"language-j�s"},"c\n"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["pre",{"language":"j�s","filename":"f�n.js","meta":"m\u0000eta"},["code",{"class":"language-j�s"},"c\n"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -2116,7 +2116,7 @@ entirely, because the emptiness test was "first byte is not NUL":
 c
 ```
 .
-{"nodes":[["pre",{"language":"�js"},["code",{"class":"language-�js"},"c\n"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["pre",{"language":"�js"},["code",{"class":"language-�js"},"c\n"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -2128,7 +2128,7 @@ a[^n 1]
 
 [^n 1]: def
 .
-{"nodes":[["p",{},"a",["footnote-ref",{"id":1,"refId":1,"label":"n�1"}]],["footnotes",{},["footnote",{"id":1,"label":"n�1","refCount":1},"def"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["p",{},"a",["footnote-ref",{"id":1,"refId":1,"label":"n�1"}]],["footnotes",{},["footnote",{"id":1,"label":"n�1","refCount":1},"def"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -2140,7 +2140,7 @@ Raw `{...}` prop strings are raw source too, so they also keep the byte:
 x
 :::
 .
-{"nodes":[["card",{"title":"Ti\u0000tle","k":"v\u0000w"},["p",{},"x"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["card",{"title":"Ti\u0000tle","k":"v\u0000w"},["p",{},"x"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````

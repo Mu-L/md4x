@@ -22,6 +22,8 @@ export {
   parseMeta,
   renderToText,
   renderToMarkdown,
+  parseYAML,
+  yamlToJson,
   heal,
 } from "./wasm/index.mjs";
 

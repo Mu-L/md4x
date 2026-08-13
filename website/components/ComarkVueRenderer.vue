@@ -81,6 +81,20 @@ function renderComarkNode(
     );
   }
 
+  // Raw HTML arrives as its own node — `["html", {}, "<b>"]` inline,
+  // `["html", { block: true }, "…"]` for a block. Rendering it as an element
+  // named "html" would literally mount an <html> tag, so the source bytes go
+  // through innerHTML on a neutral host instead.
+  if (tag === "html") {
+    const raw = children
+      .filter((c): c is string => typeof c === "string")
+      .join("");
+    return h(nodeProps?.block ? "div" : "span", {
+      key,
+      innerHTML: raw,
+    });
+  }
+
   const normalizedProps = normalizeComarkProps(nodeProps || {});
   if (key !== undefined) normalizedProps.key = key;
 

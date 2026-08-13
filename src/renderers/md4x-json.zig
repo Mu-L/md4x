@@ -401,3 +401,65 @@ pub fn json_write_yaml_props(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE)
     sys.yaml_parser_delete(&yp);
     return n_written;
 }
+
+// ---- Standalone YAML entry point ----
+
+/// Convert a YAML document to JSON.
+///
+/// libyaml is already linked for frontmatter, and consumers had no way to reach
+/// it: parsing a plain `.yml` file meant wrapping it in `---` fences, running it
+/// through the *markdown* meta renderer, and stripping the heading list back off
+/// the result.
+///
+/// Unlike `json_write_yaml_props`, this accepts any root node — a sequence or a
+/// bare scalar as readily as a mapping — and a stream with no document at all
+/// converts to `null`, YAML's own reading of an empty file. It takes the
+/// renderer signature (both trailing flag words unused) so it drops straight
+/// into the existing wasm/napi wrappers.
+pub fn md_yaml(
+    input: [*c]const c.MD_CHAR,
+    input_size: c.MD_SIZE,
+    process_output: ProcessOutputFn,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+) c_int {
+    _ = parser_flags;
+    _ = renderer_flags;
+
+    var w: JsonWriter = .{ .process_output = process_output, .userdata = userdata };
+    var yp: sys.yaml_parser_t = undefined;
+    var event: sys.yaml_event_t = undefined;
+
+    if (sys.yaml_parser_initialize(&yp) == 0)
+        return -1;
+    defer sys.yaml_parser_delete(&yp);
+
+    sys.yaml_parser_set_input_string(&yp, @ptrCast(input), input_size);
+
+    // Walk to the root node of the first document. Anything other than the
+    // expected event -- including a syntax error and including a stream that
+    // ends immediately -- means there is no value to convert.
+    for ([_]c_uint{ sys.YAML_STREAM_START_EVENT, sys.YAML_DOCUMENT_START_EVENT }) |expected| {
+        if (sys.yaml_parser_parse(&yp, &event) == 0) {
+            json_write_str(&w, "null\n");
+            return 0;
+        }
+        const actual = event.type;
+        sys.yaml_event_delete(&event);
+        if (actual != expected) {
+            json_write_str(&w, "null\n");
+            return 0;
+        }
+    }
+
+    if (sys.yaml_parser_parse(&yp, &event) == 0) {
+        json_write_str(&w, "null\n");
+        return 0;
+    }
+    // Emits a balanced value whatever the outcome (see the malformed-YAML
+    // contract above), so a truncated document still yields parseable JSON.
+    _ = json_write_yaml_event(&w, &yp, &event);
+    json_write_str(&w, "\n");
+    return 0;
+}

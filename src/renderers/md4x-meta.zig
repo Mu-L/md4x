@@ -32,8 +32,10 @@ const c = @import("abi");
 // Sibling units are imported directly (one Zig module per artifact), not
 // resolved through link-time C-ABI symbols. `abi` holds types only.
 const md4x = @import("../md4x.zig");
-const entity = @import("../entity.zig");
 const heal = @import("md4x-heal.zig");
+// Heading text + GitHub-compatible slugging, shared with the AST renderer so
+// the two never disagree about a heading's id.
+const slug = @import("md4x-slug.zig");
 const sys = @cImport({
     @cInclude("stdio.h");
 });
@@ -53,10 +55,12 @@ const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) 
 // ***  Internal data types  ***
 // *****************************
 
+// `text` and `id` are arena slices; `id` is also a key in the slugger's
+// occurrence table, so neither is freed individually.
 const META_HEADING = struct {
     level: c_uint,
-    text: ?[*]u8,
-    text_size: c.MD_SIZE,
+    text: []const u8,
+    id: []const u8,
 };
 
 const META_CTX = struct {
@@ -66,17 +70,18 @@ const META_CTX = struct {
     fm_cap: c.MD_SIZE = 0,
     in_frontmatter: bool = false,
 
-    // Headings array.
-    headings: ?[*]META_HEADING = null,
-    heading_count: c_int = 0,
-    heading_cap: c_int = 0,
+    // Heading list + the strings it points at. One arena for the lot: they all
+    // live exactly as long as the render, and slugs are additionally referenced
+    // by the slugger's hash table.
+    arena: std.heap.ArenaAllocator,
+    alloc: std.mem.Allocator = undefined,
+    headings: std.ArrayListUnmanaged(META_HEADING) = .empty,
+    slugger: slug.Slugger = .{},
 
     // Current heading accumulator.
     in_heading: bool = false,
     heading_level: c_uint = 0,
-    heading_buf: ?[*]u8 = null,
-    heading_buf_size: c.MD_SIZE = 0,
-    heading_buf_cap: c.MD_SIZE = 0,
+    heading_text: slug.TextBuf = .empty,
 
     // Component nesting depth (to ignore component frontmatter).
     comp_depth: c_int = 0,
@@ -114,85 +119,6 @@ fn meta_buf_append(
     return 0;
 }
 
-fn hex_val(ch: u8) c_uint {
-    if (ch >= '0' and ch <= '9') return ch - '0';
-    if (ch >= 'a' and ch <= 'f') return ch - 'a' + 10;
-    if (ch >= 'A' and ch <= 'F') return ch - 'A' + 10;
-    return 0;
-}
-
-// Encode a Unicode codepoint as UTF-8 into a buffer. Returns bytes written.
-fn encode_utf8(codepoint: c_uint, out: [*]u8) c.MD_SIZE {
-    // U+0000, the surrogate range (U+D800..U+DFFF) and anything above U+10FFFF
-    // are not Unicode scalar values; CommonMark requires them to render as
-    // U+FFFD, matching the .nullchar text-type path below.
-    if (codepoint == 0 or codepoint > 0x10ffff or
-        (0xd800 <= codepoint and codepoint <= 0xdfff))
-    {
-        // U+FFFD replacement character
-        out[0] = 0xef;
-        out[1] = 0xbf;
-        out[2] = 0xbd;
-        return 3;
-    }
-
-    if (codepoint <= 0x7f) {
-        out[0] = @truncate(codepoint);
-        return 1;
-    } else if (codepoint <= 0x7ff) {
-        out[0] = @intCast(0xc0 | ((codepoint >> 6) & 0x1f));
-        out[1] = @intCast(0x80 | (codepoint & 0x3f));
-        return 2;
-    } else if (codepoint <= 0xffff) {
-        out[0] = @intCast(0xe0 | ((codepoint >> 12) & 0xf));
-        out[1] = @intCast(0x80 | ((codepoint >> 6) & 0x3f));
-        out[2] = @intCast(0x80 | (codepoint & 0x3f));
-        return 3;
-    }
-    out[0] = @intCast(0xf0 | ((codepoint >> 18) & 0x7));
-    out[1] = @intCast(0x80 | ((codepoint >> 12) & 0x3f));
-    out[2] = @intCast(0x80 | ((codepoint >> 6) & 0x3f));
-    out[3] = @intCast(0x80 | (codepoint & 0x3f));
-    return 4;
-}
-
-// Resolve an HTML entity to UTF-8 and append to the heading buffer.
-fn meta_append_entity(ctx: *META_CTX, text: [*]const u8, size: c.MD_SIZE) c_int {
-    var utf8: [8]u8 = undefined;
-    var n: c.MD_SIZE = undefined;
-
-    if (size > 3 and text[1] == '#') {
-        var codepoint: c_uint = 0;
-        if (text[2] == 'x' or text[2] == 'X') {
-            var i: c.MD_SIZE = 3;
-            while (i < size - 1) : (i += 1)
-                codepoint = 16 *% codepoint +% hex_val(text[i]);
-        } else {
-            var i: c.MD_SIZE = 2;
-            while (i < size - 1) : (i += 1)
-                codepoint = 10 *% codepoint +% (text[i] - '0');
-        }
-        n = encode_utf8(codepoint, &utf8);
-        return meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, &utf8, n);
-    } else {
-        const ent = entity.entity_lookup(@ptrCast(text), size);
-        if (ent != null) {
-            const cps = ent.?.codepoints;
-            n = encode_utf8(cps[0], &utf8);
-            if (meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, &utf8, n) != 0)
-                return -1;
-            if (cps[1] != 0) {
-                n = encode_utf8(cps[1], &utf8);
-                return meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, &utf8, n);
-            }
-            return 0;
-        }
-    }
-
-    // Unknown entity: pass through as-is.
-    return meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, text, size);
-}
-
 // **********************************
 // ***  md_parse() callbacks       ***
 // **********************************
@@ -209,7 +135,7 @@ fn meta_enter_block(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callb
         .h => |*d| {
             ctx.in_heading = true;
             ctx.heading_level = d.level;
-            ctx.heading_buf_size = 0;
+            ctx.heading_text.clearRetainingCapacity();
         },
         else => {},
     }
@@ -226,47 +152,24 @@ fn meta_leave_block(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callb
     } else if (block_type == c.BlockType.frontmatter) {
         ctx.in_frontmatter = false;
     } else if (block_type == c.BlockType.h) {
-        // Store the completed heading.
-        if (ctx.heading_count >= ctx.heading_cap) {
-            const new_cap: c_int = if (ctx.heading_cap == 0) 8 else ctx.heading_cap * 2;
-            const new_n: usize = @intCast(new_cap);
-            if (ctx.headings) |old| {
-                const old_n: usize = @intCast(ctx.heading_cap);
-                const p = c_allocator.realloc(old[0..old_n], new_n) catch {
-                    ctx.err = 1;
-                    return -1;
-                };
-                ctx.headings = p.ptr;
-            } else {
-                const p = c_allocator.alloc(META_HEADING, new_n) catch {
-                    ctx.err = 1;
-                    return -1;
-                };
-                ctx.headings = p.ptr;
-            }
-            ctx.heading_cap = new_cap;
-        }
-
-        const idx: usize = @intCast(ctx.heading_count);
-        ctx.headings.?[idx].level = ctx.heading_level;
-
-        // Copy accumulated text.
-        if (ctx.heading_buf_size > 0) {
-            const text = c_allocator.alloc(u8, ctx.heading_buf_size + 1) catch {
-                ctx.err = 1;
-                return -1;
-            };
-            @memcpy(text[0..ctx.heading_buf_size], ctx.heading_buf.?[0..ctx.heading_buf_size]);
-            text[ctx.heading_buf_size] = 0;
-            ctx.headings.?[idx].text = text.ptr;
-            ctx.headings.?[idx].text_size = ctx.heading_buf_size;
-        } else {
-            ctx.headings.?[idx].text = null;
-            ctx.headings.?[idx].text_size = 0;
-        }
-
-        ctx.heading_count += 1;
+        // Store the completed heading, with the GitHub-compatible id consumers
+        // used to have to derive (and de-duplicate) themselves.
         ctx.in_heading = false;
+        const store = struct {
+            fn run(cx: *META_CTX) !void {
+                const text = try cx.alloc.dupe(u8, cx.heading_text.items);
+                const id = try cx.slugger.slug(cx.alloc, text);
+                try cx.headings.append(cx.alloc, .{
+                    .level = cx.heading_level,
+                    .text = text,
+                    .id = id,
+                });
+            }
+        };
+        store.run(ctx) catch {
+            ctx.err = 1;
+            return -1;
+        };
     }
 
     return 0;
@@ -298,36 +201,10 @@ fn meta_text(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*a
     }
 
     if (ctx.in_heading) {
-        switch (text_type) {
-            .softbr, .br => {
-                if (meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, " ", 1) != 0) {
-                    ctx.err = 1;
-                    return -1;
-                }
-            },
-
-            .nullchar => {
-                const buf = [_]u8{ 0xEF, 0xBF, 0xBD };
-                if (meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, &buf, 3) != 0) {
-                    ctx.err = 1;
-                    return -1;
-                }
-            },
-
-            .entity => {
-                if (meta_append_entity(ctx, text, size) != 0) {
-                    ctx.err = 1;
-                    return -1;
-                }
-            },
-
-            else => {
-                if (meta_buf_append(&ctx.heading_buf, &ctx.heading_buf_size, &ctx.heading_buf_cap, text, size) != 0) {
-                    ctx.err = 1;
-                    return -1;
-                }
-            },
-        }
+        slug.appendText(&ctx.heading_text, ctx.alloc, text_type, text_slice) catch {
+            ctx.err = 1;
+            return -1;
+        };
     }
 
     return 0;
@@ -356,37 +233,35 @@ const json_write_str = json.json_write_strz;
 const json_write_string = json.json_write_string;
 const json_write_yaml_props = json.json_write_yaml_props;
 
+// Frontmatter lives under its own key rather than being spread across the top
+// level beside `headings`.
+//
+// The flat shape silently DESTROYED data: a document whose frontmatter declared
+// a `headings:` key had it overwritten by the parsed heading list, since both
+// were emitted as siblings and the later one wins through JSON.parse. It also
+// left no way to ask for "just the frontmatter" -- consumers parsing a plain
+// YAML file through this renderer had to strip `headings` back off afterwards.
 fn meta_serialize(w: *JSON_WRITER, ctx: *META_CTX) void {
-    var has_prop: c_int = 0;
-
-    json_write(w, "{", 1);
-
-    // Write frontmatter YAML as top-level JSON props.
+    json_write_str(w, "{\"frontmatter\":{");
     if (ctx.fm_text != null and ctx.fm_size > 0) {
-        has_prop = @intFromBool(json_write_yaml_props(w, ctx.fm_text.?, ctx.fm_size) > 0);
+        _ = json_write_yaml_props(w, ctx.fm_text.?, ctx.fm_size);
     }
 
-    // Write headings array.
-    if (has_prop != 0) json_write(w, ",", 1);
-    json_write_str(w, "\"headings\":[");
-
-    var i: c_int = 0;
-    while (i < ctx.heading_count) : (i += 1) {
+    json_write_str(w, "},\"headings\":[");
+    for (ctx.headings.items, 0..) |h, i| {
         var buf: [16]u8 = undefined;
-        const idx: usize = @intCast(i);
 
         if (i > 0) json_write(w, ",", 1);
 
         json_write_str(w, "{\"level\":");
-        _ = sys.snprintf(&buf, buf.len, "%u", ctx.headings.?[idx].level);
+        _ = sys.snprintf(&buf, buf.len, "%u", h.level);
         json_write_str(w, @ptrCast(&buf));
 
         json_write_str(w, ",\"text\":");
-        if (ctx.headings.?[idx].text) |t| {
-            json_write_string(w, t, ctx.headings.?[idx].text_size);
-        } else {
-            json_write_str(w, "\"\"");
-        }
+        json_write_string(w, h.text.ptr, @intCast(h.text.len));
+
+        json_write_str(w, ",\"id\":");
+        json_write_string(w, h.id.ptr, @intCast(h.id.len));
 
         json_write(w, "}", 1);
     }
@@ -396,17 +271,8 @@ fn meta_serialize(w: *JSON_WRITER, ctx: *META_CTX) void {
 
 fn meta_free(ctx: *META_CTX) void {
     if (ctx.fm_text) |p| c_allocator.free(p[0..ctx.fm_cap]);
-    if (ctx.heading_buf) |p| c_allocator.free(p[0..ctx.heading_buf_cap]);
-
-    if (ctx.headings) |hs| {
-        var i: c_int = 0;
-        while (i < ctx.heading_count) : (i += 1) {
-            const idx: usize = @intCast(i);
-            if (hs[idx].text) |t| c_allocator.free(t[0 .. hs[idx].text_size + 1]);
-        }
-        const n: usize = @intCast(ctx.heading_cap);
-        c_allocator.free(hs[0..n]);
-    }
+    // Heading text, slugs and the slugger's table all live in the arena.
+    ctx.arena.deinit();
 }
 
 // **************************************
@@ -495,7 +361,8 @@ pub fn md_meta(
         .debug_log = if (renderer_flags & MD_META_FLAG_DEBUG != 0) meta_debug_log else null,
     };
 
-    var ctx: META_CTX = .{};
+    var ctx: META_CTX = .{ .arena = std.heap.ArenaAllocator.init(c_allocator) };
+    ctx.alloc = ctx.arena.allocator();
 
     // Skip UTF-8 BOM. (MD4X_USE_ASCII is never defined for this build.)
     if (renderer_flags & MD_META_FLAG_SKIP_UTF8_BOM != 0 and @sizeOf(c.MD_CHAR) == 1) {

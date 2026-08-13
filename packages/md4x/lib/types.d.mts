@@ -2,13 +2,19 @@ export type ComarkTree = {
   nodes: ComarkNode[];
   frontmatter: Record<string, unknown>;
   /**
-   * Open bag, empty for ordinary documents.
+   * Open bag. `headings` is always present — building a table of contents from
+   * a tree needs no second parse through {@link parseMeta}.
    *
    * `maxDepthExceeded: true` means the document nested deeper than the AST
    * renderer's 1024-level cap: the content past it is preserved but flattened
    * into the deepest node that fit, so the tree is shallower than the source.
    */
-  meta: Record<string, unknown> & { maxDepthExceeded?: true };
+  meta: Record<string, unknown> & {
+    headings: ComarkHeading[];
+    /** Frontmatter `title`, else the first heading's text. */
+    title?: string;
+    maxDepthExceeded?: true;
+  };
 };
 
 export type ComarkNode = ComarkElement | ComarkText;
@@ -27,13 +33,21 @@ export type ComarkElementAttributes = {
 
 export type ComarkHeading = {
   level: number;
+  /** Rendered text: entities resolved, raw HTML tags excluded. */
   text: string;
+  /**
+   * GitHub-compatible anchor slug, de-duplicated within the document — two
+   * `## Same` headings get `same` and `same-1`. The same string the heading
+   * node carries as its `id` prop.
+   */
+  id: string;
 };
 
 export type ComarkMeta = {
-  title?: string;
+  frontmatter: Record<string, unknown>;
   headings: ComarkHeading[];
-  [key: string]: unknown;
+  /** Frontmatter `title`, else the first heading's text. */
+  title?: string;
 };
 
 export interface RenderOptions {

@@ -64,4 +64,14 @@ export declare function renderToMarkdown(
   input: string,
   opts?: RenderOptions,
 ): string;
+/**
+ * Parse a standalone YAML document (not Markdown frontmatter) to a JS value.
+ * Any root node is accepted — mapping, sequence or bare scalar — and an empty
+ * document yields `null`.
+ */
+export declare function parseYAML(input: string): unknown;
+
+/** {@link parseYAML} without the `JSON.parse`. */
+export declare function yamlToJson(input: string): string;
+
 export declare function heal(input: string): string;

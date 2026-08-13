@@ -807,7 +807,7 @@ Content
 ```````````````````````````````` example [no-normalize]
 :widget{:data='{"x":1}'}
 .
-{"nodes":[["p",{},["widget",{":data":"{\"x\":1}"}]]],"frontmatter":{},"meta":{}}
+{"nodes":[["widget",{":data":"{\"x\":1}"}]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -817,7 +817,7 @@ Content
 ```````````````````````````````` example [no-normalize]
 :widget{:count="5"}
 .
-{"nodes":[["p",{},["widget",{":count":"5"}]]],"frontmatter":{},"meta":{}}
+{"nodes":[["widget",{":count":"5"}]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -829,7 +829,7 @@ Content
 body
 ::
 .
-{"nodes":[["alert",{":k":"1,\"injected\":\"yes\""},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["alert",{":k":"1,\"injected\":\"yes\""},["p",{},"body"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -854,7 +854,7 @@ icon: @bad
 body
 ::
 .
-{"nodes":[["card",{"icon":null},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["card",{"icon":null},["p",{},"body"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -871,7 +871,7 @@ icon: @bad
 body
 :::
 .
-{"nodes":[["card",{"icon":null,"title":"My Title"},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["card",{"icon":null,"title":"My Title"},["p",{},"body"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -888,7 +888,7 @@ icon: @bad
 body
 ::
 .
-{"nodes":[["card",{"icon":null,"color":"red"},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["card",{"icon":null,"color":"red"},["p",{},"body"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -909,7 +909,7 @@ separator is now emitted only once the parse says something will follow it.
 z
 :::
 .
-{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -921,7 +921,7 @@ z
 z
 :::
 .
-{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -933,7 +933,7 @@ z
 z
 :::
 .
-{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -945,7 +945,7 @@ z
 z
 :::
 .
-{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["foo",{"title":"T"},["p",{},"z"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -962,7 +962,7 @@ a: 1
 z
 ::
 .
-{"nodes":[["card",{"a":1},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["card",{"a":1},["p",{},"z"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -974,7 +974,7 @@ z
 z
 :::
 .
-{"nodes":[["foo",{"title":"T","class":"c"},["p",{},"z"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["foo",{"title":"T","class":"c"},["p",{},"z"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -984,7 +984,7 @@ z
 ```````````````````````````````` example [no-normalize]
 :badge[x]{ }
 .
-{"nodes":[["p",{},["badge",{},"x"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["badge",{},"x"]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
@@ -1132,7 +1132,7 @@ x onload=alert(1)//: y
 body
 ::
 .
-{"nodes":[["card",{"x onload=alert(1)//":"y","a/b":"c"},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+{"nodes":[["card",{"x onload=alert(1)//":"y","a/b":"c"},["p",{},"body"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````

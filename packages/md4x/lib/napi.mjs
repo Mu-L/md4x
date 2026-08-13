@@ -1,4 +1,5 @@
 import {
+  applyTitle,
   parseHtmlWithHighlighting,
   parseAnsiWithHighlighting,
 } from "./_shared.mjs";
@@ -61,7 +62,9 @@ export function renderToAST(input, opts) {
 }
 
 export function parseAST(input, opts) {
-  return JSON.parse(renderToAST(input, opts));
+  const tree = JSON.parse(renderToAST(input, opts));
+  applyTitle(tree.meta, tree.frontmatter);
+  return tree;
 }
 
 export function renderToAnsi(input, opts) {
@@ -96,10 +99,16 @@ export function renderToMarkdown(input, opts) {
 
 export function parseMeta(input, opts) {
   const meta = JSON.parse(renderToMeta(input, opts));
-  if (!meta.title && meta.headings?.[0]) {
-    meta.title = meta.headings[0].text;
-  }
+  applyTitle(meta, meta.frontmatter);
   return meta;
+}
+
+export function yamlToJson(input) {
+  return getBinding().yamlToJson(str(input));
+}
+
+export function parseYAML(input) {
+  return JSON.parse(yamlToJson(input));
 }
 
 export function heal(input) {

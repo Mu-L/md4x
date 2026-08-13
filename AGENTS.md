@@ -50,8 +50,9 @@ src/
   fuzz.zig            # Zig-native coverage-instrumented fuzz harness
   renderers/
     md4x-props.zig    # Shared component property parser
-    md4x-json.zig     # Shared JSON writer + YAML-to-JSON helpers
+    md4x-json.zig     # Shared JSON writer + YAML-to-JSON + md_yaml entry point
     md4x-diag.zig     # Shared debug-sink stderr write (the only portable `stderr`)
+    md4x-slug.zig     # Shared heading text + GitHub-compatible heading slugs
     md4x-{html,ast,ansi,meta,text,markdown}.zig
     md4x-heal.zig     # Markdown heal/completion utility (no parser dependency)
   cli/

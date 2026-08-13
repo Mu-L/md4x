@@ -32,6 +32,7 @@ const text = @import("renderers/md4x-text.zig");
 const meta = @import("renderers/md4x-meta.zig");
 const markdown = @import("renderers/md4x-markdown.zig");
 const heal = @import("renderers/md4x-heal.zig");
+const json = @import("renderers/md4x-json.zig");
 
 /// Shared MD_* types, enums, and flags.
 pub const abi = @import("abi");
@@ -50,6 +51,9 @@ pub const md_text = text.md_text;
 pub const md_meta = meta.md_meta;
 pub const md_markdown = markdown.md_markdown;
 pub const md_heal = heal.md_heal;
+// Not a markdown renderer: converts a standalone YAML document to JSON, exposing
+// the libyaml that frontmatter parsing already links in.
+pub const md_yaml = json.md_yaml;
 
 comptime {
     // Force the symbols into the artifact even when a consumer references only
@@ -64,4 +68,5 @@ comptime {
     _ = meta;
     _ = markdown;
     _ = heal;
+    _ = json;
 }
