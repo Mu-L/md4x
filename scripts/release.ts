@@ -9,16 +9,13 @@ const selfPath = dirname(fileURLToPath(import.meta.url));
 const projectDir = resolve(selfPath, "..");
 const pkgJsonPath = resolve(projectDir, "packages/md4x/package.json");
 const zigZonPath = resolve(projectDir, "build.zig.zon");
-const changelogPath = resolve(projectDir, "CHANGELOG.md");
 
 const args = process.argv.slice(2);
 const noTag = args.includes("--no-tag");
 const yes =
   args.includes("-y") || args.includes("--yes") || !process.stdin.isTTY;
 const bump = (args.find((a) => !a.startsWith("-")) || "patch") as
-  | "major"
-  | "minor"
-  | "patch";
+  "major" | "minor" | "patch";
 if (!["major", "minor", "patch"].includes(bump)) {
   console.error(
     `Usage: bun scripts/release.ts [major|minor|patch] [--no-tag] [-y|--yes]`,
@@ -68,14 +65,6 @@ if (updatedZigZon === zigZon) {
 writeFileSync(zigZonPath, updatedZigZon);
 console.log(`Updated build.zig.zon`);
 
-// Update CHANGELOG.md — replace "## Next" with "## v{next}"
-const changelog = readFileSync(changelogPath, "utf8");
-const updatedChangelog = changelog.replace("## Next", `## v${next}`);
-if (updatedChangelog !== changelog) {
-  writeFileSync(changelogPath, updatedChangelog);
-  console.log(`Updated CHANGELOG.md`);
-}
-
 if (!noTag) {
   if (!yes) {
     const rl = createInterface({
@@ -93,7 +82,7 @@ if (!noTag) {
   }
 
   // Git commit and tag
-  execSync(`git add "${pkgJsonPath}" "${zigZonPath}" "${changelogPath}"`, {
+  execSync(`git add "${pkgJsonPath}" "${zigZonPath}"`, {
     cwd: projectDir,
     stdio: "inherit",
   });
