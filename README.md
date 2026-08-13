@@ -9,7 +9,7 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 
 ## Features
 
-- **Fast** — Written in C, **~6x** faster than markdown-it
+- **Fast** — **~9x** faster than markdown-it
 - **CLI** — Render local files, remote URLs, GitHub repos, npm packages
 - **Small** — **~100KB** gzip WASM binary works in Node.js and Browser
 - **Multi-format output** — HTML, JSON AST, ANSI terminal, plain text, markdown, metadata
@@ -142,43 +142,35 @@ This is also what `md4x` and `md4x/wasm` resolve to under the **`browser`** expo
 
 ```
 bun packages/md4x/bench/index.mjs
-clk: ~5.54 GHz
-cpu: AMD Ryzen 9 9950X3D 16-Core Processor
-runtime: bun 1.3.9 (x64-linux)
+cpu: Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz
+runtime: bun 1.3.14 (x64-linux)
 
-benchmark                      avg (min … max) p75 / p99    (min … top 1%)
-md4x-napi                         3.32 µs/iter   3.34 µs   3.40 µs ▂▃▅█▅▂█▂▃▂▂
-md4x-wasm                         5.76 µs/iter   5.82 µs   9.46 µs █▇▄▂▁▁▁▁▁▁▁
-md4w                              5.77 µs/iter   5.77 µs   9.82 µs ▃█▄▂▁▁▁▁▁▁▁
-markdown-it                      21.41 µs/iter  20.98 µs  41.88 µs ▁█▃▁▁▁▁▁▁▁▁
-markdown-exit                    23.59 µs/iter  23.65 µs  41.84 µs ▁▄█▃▁▁▁▁▁▁▁
-
-summary
-  md4x-napi
-   1.74x faster than md4x-wasm
-   1.74x faster than md4w
-   6.45x faster than markdown-it
-   7.11x faster than markdown-exit
-
-md4x (napi) ast (medium)          6.91 µs/iter   6.94 µs   6.96 µs ▂▄█▄▄▂▂▄▅▁▂
-md4x (wasm) ast (medium)          8.28 µs/iter   8.36 µs   8.40 µs ▆▃█▁▁█▆▃▃▆▃
+benchmark                        avg (min … max) p75 / p99    (min … top 1%)
+md4x.napi (renderToHtml)            6.61 µs/iter   6.68 µs   6.69 µs ▄▁▂▁▂▂▂▅█▅█
+md4x.wasm (renderToHtml)           14.70 µs/iter  15.15 µs  28.74 µs █▅▃▂▂▁▁▁▁▁▁
+md4w (renderToHtml)                18.56 µs/iter  19.82 µs  37.28 µs ▇█▆▃▃▂▂▁▁▁▁
+markdown-it (renderToHtml)         59.43 µs/iter  57.07 µs 171.51 µs █▃▂▂▁▁▁▁▁▁▁
+markdown-exit (renderToHtml)       56.74 µs/iter  55.75 µs 112.25 µs ▂█▃▁▁▁▂▁▁▁▁
 
 summary
-  md4x (napi) ast (medium)
-   1.2x faster than md4x (wasm) ast (medium)
+  md4x.napi (renderToHtml)
+   2.22x faster than md4x.wasm (renderToHtml)
+   2.81x faster than md4w (renderToHtml)
+   8.59x faster than markdown-exit (renderToHtml)
+   8.99x faster than markdown-it (renderToHtml)
 
-md4x (napi) parseAST (medium)    11.42 µs/iter  11.39 µs  11.77 µs ▅▃█▅▁▁▁▁▁▁▅
-md4x (wasm) parseAST (medium)    12.64 µs/iter  12.71 µs  12.74 µs ▃▁▃▁▁▁▁▁██▃
-md4w parseAST (medium)           11.79 µs/iter  11.94 µs  11.99 µs █▅▅▅▁▁▁▁██▅
-markdown-it parseAST (medium)    15.96 µs/iter  16.01 µs  16.19 µs ▅▅▅█▅▅▁▁█▅▅
-markdown-exit parseAST (medium)  18.42 µs/iter  18.62 µs  19.26 µs ▂▂▁█▂▁▂▁▂▁▂
+md4x.napi (parseAST) (medium)      21.98 µs/iter  22.31 µs  22.43 µs ▅▁█▁▅▅█▁▁██
+md4x.wasm (parseAST) (medium)      36.79 µs/iter  37.58 µs  66.48 µs ▅█▆▃▂▁▁▁▁▁▁
+md4w (parseAST) (medium)           29.55 µs/iter  30.64 µs  50.68 µs ▇█▇▃▂▁▁▁▁▁▁
+markdown-it (parseAST) (medium)    35.81 µs/iter  35.64 µs  37.76 µs ▂▁█▂▄▁▁▁▁▂▂
+markdown-exit (parseAST) (medium)  35.33 µs/iter  35.67 µs  36.35 µs ▆▁▁▆▃▃▃█▁▁▃
 
 summary
-  md4x (napi) parseAST (medium)
-   1.03x faster than md4w parseAST (medium)
-   1.11x faster than md4x (wasm) parseAST (medium)
-   1.4x faster than markdown-it parseAST (medium)
-   1.61x faster than markdown-exit parseAST (medium)
+  md4x.napi (parseAST) (medium)
+   1.34x faster than md4w (parseAST) (medium)
+   1.61x faster than markdown-exit (parseAST) (medium)
+   1.63x faster than markdown-it (parseAST) (medium)
+   1.67x faster than md4x.wasm (parseAST) (medium)
 ```
 
 Note: markdown-it parser returns an array of tokens while md4x returns nested comark AST.
@@ -258,34 +250,36 @@ renderToHtml("# Hello **world", { heal: true, full: true });
 
 ```
 bun packages/md4x/bench/heal.mjs
+cpu: Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz
+runtime: bun 1.3.14 (x64-linux)
 
-benchmark                      avg (min … max) p75 / p99    (min … top 1%)
-md4x-napi heal (small)          702.85 ns/iter
-md4x-wasm heal (small)            1.57 µs/iter
-remend heal (small)                3.71 µs/iter
+benchmark                   avg (min … max) p75 / p99    (min … top 1%)
+md4x-napi heal (small)         1.28 µs/iter   1.32 µs   1.81 µs ▃█▂▂▁▂▁▁▁▂▁
+md4x-wasm heal (small)         3.34 µs/iter   3.08 µs   9.29 µs █▃▁▂▁▁▁▁▁▁▁
+remend heal (small)            9.09 µs/iter   9.77 µs  22.17 µs ██▅▃▂▂▁▁▁▁▁
 
 summary
   md4x-napi heal (small)
-   2.23x faster than md4x-wasm heal (small)
-   5.28x faster than remend heal (small)
+   2.61x faster than md4x-wasm heal (small)
+   7.12x faster than remend heal (small)
 
-md4x-napi heal (medium)          2.13 µs/iter
-md4x-wasm heal (medium)          3.23 µs/iter
-remend heal (medium)             24.59 µs/iter
+md4x-napi heal (medium)        3.21 µs/iter   3.24 µs   3.39 µs ▄█▆▄▃▂▂▂▄▂▂
+md4x-wasm heal (medium)        4.40 µs/iter   4.45 µs   4.93 µs █▅█▅▅▃▁▂▁▁▂
+remend heal (medium)          53.67 µs/iter  57.84 µs  78.92 µs █▅▂▃▃▂▁▁▁▁▁
 
 summary
   md4x-napi heal (medium)
-   1.52x faster than md4x-wasm heal (medium)
-   11.55x faster than remend heal (medium)
+   1.37x faster than md4x-wasm heal (medium)
+   16.71x faster than remend heal (medium)
 
-md4x-napi heal (large)          95.09 µs/iter
-md4x-wasm heal (large)         137.68 µs/iter
-remend heal (large)             10.95 ms/iter
+md4x-napi heal (large)       147.94 µs/iter 148.21 µs 229.58 µs ▅█▃▁▁▁▁▁▁▁▁
+md4x-wasm heal (large)       175.43 µs/iter 177.00 µs 292.66 µs ▄█▂▁▁▁▁▁▁▁▁
+remend heal (large)           18.63 ms/iter  18.79 ms  19.46 ms ▅▂▅█▂▄▂▂▁▁▂
 
 summary
   md4x-napi heal (large)
-   1.45x faster than md4x-wasm heal (large)
-   115.18x faster than remend heal (large)
+   1.19x faster than md4x-wasm heal (large)
+   125.91x faster than remend heal (large)
 ```
 
 </details>
