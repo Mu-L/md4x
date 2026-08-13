@@ -510,6 +510,28 @@ snake_case and file~name and cost$s
 -t markdown
 ````````````````````````````````
 
+A `=` is markup only in a run of two (`==highlight==`), and that run is
+whitespace-flanked rather than word-flanked, so every `=` next to another `=`
+is escaped while a lone one is left alone.
+
+```````````````````````````````` example [no-normalize]
+a = b and 2 ==2 and x \=\= y
+.
+a = b and 2 \=\=2 and x =\= y
+.
+-t markdown
+````````````````````````````````
+
+A real highlight span is re-emitted as `==`.
+
+```````````````````````````````` example [no-normalize]
+a ==hi== and b==c==d
+.
+a ==hi== and b==c==d
+.
+-t markdown
+````````````````````````````````
+
 An entity is resolved to its character, which then needs escaping of its own:
 `&amp;amp;` must not come back out as a bare `&amp;`.
 

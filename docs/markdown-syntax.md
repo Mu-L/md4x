@@ -30,6 +30,15 @@
 
 `~text~` or `~~text~~`. Opener/closer must match length. Follows same flanking rules as emphasis.
 
+## Extension: Highlight (`MD_FLAG_HIGHLIGHT`)
+
+`==text==` renders as `<mark>text</mark>`. Exactly two `=` on each side — `=x=`,
+`===x===` and longer runs stay literal. Unlike emphasis and strikethrough the
+delimiter is gated on **whitespace adjacency only**, not on the flanking rules:
+it cannot open when followed by whitespace and cannot close when preceded by
+whitespace, but an intra-word `a==b==c` is a highlight. Setext underlines are
+block-level and are unaffected.
+
 ## Extension: Permissive Autolinks
 
 - **URL** (`MD_FLAG_PERMISSIVEURLAUTOLINKS`): `https://example.com`
@@ -209,6 +218,7 @@ Attributes can be added to inline elements using `{...}` syntax immediately afte
 *italic*{#myid}            → <em id="myid">italic</em>
 `code`{.lang}              → <code class="lang">code</code>
 ~~del~~{.red}              → <del class="red">del</del>
+==mark=={.hit}             → <mark class="hit">mark</mark>
 _underline_{.accent}       → <u class="accent">underline</u>
 [Link](url){target="_blank"} → <a href="url" target="_blank">Link</a>
 ![img](pic.png){.responsive} → <img src="pic.png" alt="img" class="responsive">
@@ -227,7 +237,7 @@ Constraints:
 
 - `{...}` must immediately follow the closing delimiter (no space)
 - Only applies to resolved inline elements (not plain text — `hello{.class}` is literal)
-- Spans with `MD_FLAG_ATTRIBUTES`: em/strong/code/del/u pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
+- Spans with `MD_FLAG_ATTRIBUTES`: em/strong/code/del/u/mark pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
 - `MD_SPAN_SPAN` is emitted for `[text]{attrs}` with `MD_SPAN_SPAN_DETAIL`
 
 HTML renderer: attributes rendered on opening tags. JSON renderer: attrs merged into node props. ANSI renderer: transparent (ignores attrs).

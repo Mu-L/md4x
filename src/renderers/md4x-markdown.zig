@@ -140,6 +140,12 @@ fn render_newline(r: *MD_MARKDOWN) void {
 //     surrounded by word characters on both sides (see the mark collector in
 //     `parser/inlines.zig`), so intra-word ones are left alone; `&` is escaped
 //     only when what follows is shaped like an entity;
+//   * run-gated      -- a `=` is markup only as part of a run of two (`==x==`),
+//     and that run is whitespace-flanked, not word-flanked, so an intra-word
+//     `a==b==c` highlights too. Every `=` adjacent to another `=` is therefore
+//     escaped; a lone `=` mid-line can never open a highlight and is left
+//     alone. Escaping only the first of a run would not be enough: `\===`
+//     re-parses with a live `==` at offset 2;
 //   * position-gated -- `#`, `-`, `+`, `>`, `=`, `:` and `|` are block openers
 //     only at the start of a line, and `.` / `)` are ordered-list markers only
 //     after leading digits.
@@ -193,6 +199,7 @@ fn needs_escape(r: *MD_MARKDOWN, text: [*]const u8, off: c.MD_SIZE, size: c.MD_S
     return switch (ch) {
         '\\', '`', '*', '[', ']', '<' => true,
         '_', '$', '~' => !(is_ascii_word(r.last_ch) and is_ascii_word(next)),
+        '=' => next == '=' or r.last_ch == '=',
         '&' => looks_like_entity(text, off, size),
         // GFM only treats a pipe as a cell boundary inside a table.
         '|' => r.in_table,
@@ -861,6 +868,10 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
             render_verbatim_lit(r, "~~");
         },
 
+        .mark => {
+            render_verbatim_lit(r, "==");
+        },
+
         .latexmath => {
             render_verbatim_lit(r, "$");
         },
@@ -933,6 +944,10 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
 
         .del => {
             render_verbatim_lit(r, "~~");
+        },
+
+        .mark => {
+            render_verbatim_lit(r, "==");
         },
 
         .latexmath => {

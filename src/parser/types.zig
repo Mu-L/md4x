@@ -377,7 +377,8 @@ pub const MD_CTX = struct {
     //   13   TILDE_OPENERS_2
     //   14   BRACKET_OPENERS
     //   15   DOLLAR_OPENERS
-    opener_stacks: [16]MD_MARKSTACK = [_]MD_MARKSTACK{.{}} ** 16,
+    //   16   EQUAL_OPENERS
+    opener_stacks: [17]MD_MARKSTACK = [_]MD_MARKSTACK{.{}} ** 17,
 
     // Stack of dummies which need to call free() for pointers stored in them.
     ptr_stack: MD_MARKSTACK = .{},

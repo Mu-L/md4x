@@ -14,7 +14,8 @@ through `md4x` and compares normalized output.
 Suites: `spec.txt`, `spec-tables.txt`, `spec-strikethrough.txt`, `spec-tasklists.txt`,
 `spec-wiki-links.txt`, `spec-latex-math.txt`, `spec-permissive-autolinks.txt`,
 `spec-hard-soft-breaks.txt`, `spec-underline.txt`, `spec-frontmatter.txt`, `spec-components.txt`,
-`spec-attributes.txt`, `spec-alerts.txt`, `spec-markdown.txt`, `regressions.txt`, `coverage.txt`.
+`spec-attributes.txt`, `spec-alerts.txt`, `spec-highlight.txt`, `spec-markdown.txt`,
+`regressions.txt`, `coverage.txt`.
 
 Both `bun scripts/run-tests.ts` and `.github/workflows/ci.yml` run the Zig unit tests on every PR.
 

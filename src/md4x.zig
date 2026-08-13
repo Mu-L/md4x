@@ -1673,6 +1673,7 @@ const TraceProbe = struct {
             c.SpanType.img => "IMG",
             c.SpanType.code => "CODE",
             c.SpanType.del => "DEL",
+            c.SpanType.mark => "MARK",
             c.SpanType.latexmath => "LATEXMATH",
             c.SpanType.latexmath_display => "LATEXMATH_DISPLAY",
             c.SpanType.wikilink => "WIKILINK",
@@ -1781,9 +1782,9 @@ const TraceProbe = struct {
             c.SpanType.span => |x| {
                 self.rawStr("attrs", x.raw_attrs);
             },
-            // em/strong/code/del/u carry SpanAttrsDetail; an empty raw_attrs is
+            // em/strong/code/del/u/mark carry SpanAttrsDetail; an empty raw_attrs is
             // the old "NULL detail" case.
-            c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.u => |x| {
+            c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.u, c.SpanType.mark => |x| {
                 if (x.raw_attrs.len == 0) self.raw(" <no-detail>", .{}) else self.rawStr("attrs", x.raw_attrs);
             },
         }
@@ -1855,7 +1856,7 @@ const trace_doc =
     \\Setext
     \\======
     \\
-    \\Para **strong**, *em*, `code`, ~~del~~, _u_, &amp; ent, &#65; num.
+    \\Para **strong**, *em*, `code`, ~~del~~, _u_, ==mark==, &amp; ent, &#65; num.
     \\
     \\Link [text](/url "the title") and auto <https://a.example/> and
     \\bare https://b.example/ and mail@c.example and www.d.example.
@@ -1864,7 +1865,7 @@ const trace_doc =
     \\
     \\Math $x^2$ and $$y_1$$ and [[Wiki Target]].
     \\
-    \\Attrs: **bold**{.hi} *it*{#id} `cs`{.l} ~~d~~{.r} _uu_{.a} [sp]{.cls}
+    \\Attrs: **bold**{.hi} *it*{#id} `cs`{.l} ~~d~~{.r} _uu_{.a} ==hl=={.m} [sp]{.cls}
     \\
     \\Hard break\
     \\after break, soft
@@ -1986,6 +1987,10 @@ const expected_trace =
     \\      text NORMAL "u"
     \\    -span U
     \\    text NORMAL ", "
+    \\    +span MARK <no-detail>
+    \\      text NORMAL "mark"
+    \\    -span MARK
+    \\    text NORMAL ", "
     \\    text ENTITY "&amp;"
     \\    text NORMAL " ent, "
     \\    text ENTITY "&#65;"
@@ -2058,6 +2063,10 @@ const expected_trace =
     \\      text NORMAL "uu"
     \\    -span U
     \\    text NORMAL " "
+    \\    +span MARK attrs=".m"
+    \\      text NORMAL "hl"
+    \\    -span MARK
+    \\    text NORMAL " "
     \\    +span SPAN attrs=".cls"
     \\      text NORMAL "sp"
     \\    -span SPAN
@@ -2080,10 +2089,10 @@ const expected_trace =
     \\    -block P
     \\  -block ALERT
     \\  +block UL is_tight=1 mark='-'
-    \\    +block LI is_task=1 task_mark=' ' off=502
+    \\    +block LI is_task=1 task_mark=' ' off=523
     \\      text NORMAL "todo"
     \\    -block LI
-    \\    +block LI is_task=1 task_mark='x' off=513
+    \\    +block LI is_task=1 task_mark='x' off=534
     \\      text NORMAL "done"
     \\    -block LI
     \\    +block LI is_task=0 task_mark='-' off=0

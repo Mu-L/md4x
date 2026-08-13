@@ -600,6 +600,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .img => tag = "img",
             .code => tag = "code",
             .del => tag = "del",
+            .mark => tag = "mark",
             .latexmath => tag = "math",
             .latexmath_display => tag = "math-display",
             .wikilink => tag = "wikilink",
@@ -661,7 +662,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
                     }
                 }
             },
-            .em, .strong, .code, .del, .u => |*d| {
+            .em, .strong, .code, .del, .u, .mark => |*d| {
                 // These spans may carry trailing {attrs}; an empty raw_attrs
                 // means there were none.
                 if (d.raw_attrs.len > 0) {

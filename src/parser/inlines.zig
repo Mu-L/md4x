@@ -219,6 +219,7 @@ pub const TILDE_OPENERS_1: usize = 12;
 pub const TILDE_OPENERS_2: usize = 13;
 pub const BRACKET_OPENERS: usize = 14;
 pub const DOLLAR_OPENERS: usize = 15;
+pub const EQUAL_OPENERS: usize = 16;
 
 // md4x.c ~2609. Returns the base index into ctx.opener_stacks for the given
 // emphasis char + flags (applying the EMPH_OC offset of +3 and the mod3 offset).
@@ -387,6 +388,7 @@ pub fn md_build_mark_char_map(ctx: *MD_CTX) void {
     const flags = ctx.parser.flags;
     if (flags & c.MD_FLAG_STRIKETHROUGH != 0) ctx.mark_char_map['~'] = 1;
     if (flags & c.MD_FLAG_LATEXMATHSPANS != 0) ctx.mark_char_map['$'] = 1;
+    if (flags & c.MD_FLAG_HIGHLIGHT != 0) ctx.mark_char_map['='] = 1;
     if (flags & c.MD_FLAG_PERMISSIVEEMAILAUTOLINKS != 0) ctx.mark_char_map['@'] = 1;
     if (flags & (c.MD_FLAG_PERMISSIVEURLAUTOLINKS | c.MD_FLAG_COMPONENTS) != 0) ctx.mark_char_map[':'] = 1;
     if (flags & c.MD_FLAG_PERMISSIVEWWWAUTOLINKS != 0) ctx.mark_char_map['.'] = 1;
@@ -942,6 +944,38 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                     return ret;
                 }
                 off += 1;
+                continue :scan;
+            }
+
+            // Potential highlight start/end: `==text==`. Gated by the flag
+            // because `=` is otherwise an ordinary character (setext
+            // underlines are block-level and never reach the mark collector,
+            // and `key=value` in attributes/props uses a single `=`).
+            if (ch == '=' and ctx.parser.flags & c.MD_FLAG_HIGHLIGHT != 0) {
+                var tmp: OFF = off + 1;
+                while (tmp < line.*.end and ctx.ch(tmp) == '=') tmp += 1;
+
+                // Only a run of exactly two is a delimiter; `===` and longer
+                // stay literal.
+                if (tmp - off == 2) {
+                    var flags: u8 = MarkFlags.potential_opener | MarkFlags.potential_closer;
+
+                    // Cannot open before whitespace; cannot close after it.
+                    // (Whitespace-adjacency only — NOT the emphasis flanking
+                    // rules, so `a==b==c` highlights, matching md4c.)
+                    if (tmp >= line.*.end or ctx.isUnicodeWhitespace(tmp))
+                        flags &= ~MarkFlags.potential_opener;
+                    if (off == line.*.beg or ctx.isUnicodeWhitespaceBefore(off))
+                        flags &= ~MarkFlags.potential_closer;
+                    if (flags != 0) {
+                        if (addMark(ctx, ch, off, tmp, flags) == null) {
+                            ret = -1;
+                            return ret;
+                        }
+                    }
+                }
+
+                off = tmp;
                 continue :scan;
             }
 
@@ -1536,6 +1570,29 @@ pub fn md_analyze_tilde(ctx: *MD_CTX, mark_index: c_int) void {
         md_mark_stack_push(ctx, stack, mark_index);
 }
 
+// md4c d2a08e5 (post-fork-point). A plain LIFO resolver: `==` carries no
+// flanking rules beyond the whitespace adjacency the collector already applied,
+// and opener and closer are always the same length. `md_rollback` with
+// MD_ROLLBACK_CROSSING is upstream's `md_pop_openers` — it pops every stack
+// down past the opener without dummying the marks in between.
+pub fn md_analyze_highlight(ctx: *MD_CTX, mark_index: c_int) void {
+    const mark = &ctx.marks.items[@intCast(mark_index)];
+    const stack = &ctx.opener_stacks[EQUAL_OPENERS];
+
+    // Defensive: the collector only ever emits runs of exactly two.
+    if (mark.end - mark.beg != 2) return;
+
+    if ((mark.flags & MarkFlags.potential_closer != 0) and stack.top >= 0) {
+        const opener_index = stack.top;
+        md_rollback(ctx, opener_index, mark_index, MD_ROLLBACK_CROSSING);
+        md_resolve_range(ctx, opener_index, mark_index);
+        return;
+    }
+
+    if (mark.flags & MarkFlags.potential_opener != 0)
+        md_mark_stack_push(ctx, stack, mark_index);
+}
+
 // md4x.c ~4131.
 pub fn md_analyze_dollar(ctx: *MD_CTX, mark_index: c_int) void {
     const mark = &ctx.marks.items[@intCast(mark_index)];
@@ -1776,7 +1833,7 @@ pub fn md_analyze_marks(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, m
 
         if (mark.flags & MarkFlags.resolved != 0) {
             if ((mark.flags & MarkFlags.opener != 0) and mark.ch != 'C' and
-                !((flags & MD_ANALYZE_NOSKIP_EMPH != 0) and ISANYOF_(mark.ch, "*_~")))
+                !((flags & MD_ANALYZE_NOSKIP_EMPH != 0) and ISANYOF_(mark.ch, "*_~=")))
             {
                 i = mark.next + 1;
             } else {
@@ -1802,6 +1859,7 @@ pub fn md_analyze_marks(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, m
             '_', '*' => md_analyze_emph(ctx, i),
             '~' => md_analyze_tilde(ctx, i),
             '$' => md_analyze_dollar(ctx, i),
+            '=' => md_analyze_highlight(ctx, i),
             '.', ':', '@' => md_analyze_permissive_autolink(ctx, i),
             else => {},
         }
@@ -1858,7 +1916,7 @@ pub fn md_resolve_attrs(ctx: *MD_CTX) c_int {
         if (mark.flags & MarkFlags.closer == 0) continue;
         if (mark.ch == 'C') continue;
         if (mark.ch == 'D') continue;
-        if (mark.ch != '*' and mark.ch != '_' and mark.ch != '`' and mark.ch != '~' and mark.ch != ']') continue;
+        if (mark.ch != '*' and mark.ch != '_' and mark.ch != '`' and mark.ch != '~' and mark.ch != '=' and mark.ch != ']') continue;
 
         if (mark.ch == ']') {
             const opener_index = mark.prev;
@@ -1919,7 +1977,9 @@ pub fn md_analyze_inlines(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool
 // md4x.c ~4574.
 pub fn md_analyze_link_contents(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, mark_end: c_int) void {
     md_analyze_marks(ctx, lines, mark_beg, mark_end, "&", 0);
-    md_analyze_marks(ctx, lines, mark_beg, mark_end, "*_~$", 0);
+    // `=` marks only exist when MD_FLAG_HIGHLIGHT is on, so the char can be
+    // listed unconditionally (md4c builds the string from the flags instead).
+    md_analyze_marks(ctx, lines, mark_beg, mark_end, "*_~$=", 0);
 
     if (ctx.parser.flags & c.MD_FLAG_PERMISSIVEAUTOLINKS != 0) {
         md_analyze_marks(ctx, lines, mark_beg, mark_end, "@:.", MD_ANALYZE_NOSKIP_EMPH);
@@ -2189,6 +2249,29 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                         _ = md_find_inline_attr(ctx, @intCast((@intFromPtr(mark) - @intFromPtr(ctx.marks.items.ptr)) / @sizeOf(MD_MARK)), &raw_a, &raw_a_sz, null);
 
                     const det: c.SpanDetail = .{ .del = attrsDetail(raw_a, raw_a_sz) };
+                    if (mark.*.flags & MarkFlags.opener != 0) {
+                        ret = mdEnterSpan(ctx, &det);
+                    } else {
+                        ret = mdLeaveSpan(ctx, &det);
+                    }
+                    if (ret != 0) return ret;
+                },
+
+                // Highlight (`==x==`). Unlike md4c this span carries a
+                // SpanAttrsDetail so `==x=={.cls}` composes with ATTRIBUTES;
+                // md_resolve_attrs has already stretched the closer's `end`
+                // over the `{...}`, which is also why there is no
+                // `end - beg == 2` guard here (md4c has one, and it is
+                // unreachable there: the collector only emits runs of two).
+                '=' => {
+                    var raw_a: [*c]const CHAR = null;
+                    var raw_a_sz: SZ = 0;
+                    if (mark.*.flags & MarkFlags.opener != 0)
+                        _ = md_find_inline_attr(ctx, mark.*.next, &raw_a, &raw_a_sz, null)
+                    else
+                        _ = md_find_inline_attr(ctx, @intCast((@intFromPtr(mark) - @intFromPtr(ctx.marks.items.ptr)) / @sizeOf(MD_MARK)), &raw_a, &raw_a_sz, null);
+
+                    const det: c.SpanDetail = .{ .mark = attrsDetail(raw_a, raw_a_sz) };
                     if (mark.*.flags & MarkFlags.opener != 0) {
                         ret = mdEnterSpan(ctx, &det);
                     } else {

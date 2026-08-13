@@ -72,6 +72,10 @@ const ANSI_UNDERLINE = "\x1b[4m";
 const ANSI_UNDERLINE_OFF = "\x1b[24m";
 const ANSI_STRIKETHROUGH = "\x1b[9m";
 const ANSI_STRIKE_OFF = "\x1b[29m";
+// Highlight (`==x==`). Reverse video rather than a background colour: it is the
+// only spelling that stays legible on both light and dark terminal themes.
+const ANSI_REVERSE = "\x1b[7m";
+const ANSI_REVERSE_OFF = "\x1b[27m";
 
 const ANSI_COLOR_BLUE = "\x1b[34m";
 const ANSI_COLOR_CYAN = "\x1b[36m";
@@ -941,6 +945,7 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         },
         .code => render_ansi(r, ANSI_COLOR_CYAN),
         .del => render_ansi(r, ANSI_STRIKETHROUGH),
+        .mark => render_ansi(r, ANSI_REVERSE),
         .latexmath => render_ansi(r, ANSI_COLOR_YELLOW),
         .latexmath_display => render_ansi(r, ANSI_COLOR_YELLOW),
         .wikilink => render_ansi(r, ANSI_LINK),
@@ -981,6 +986,7 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .img => {},
         .code => render_ansi(r, ANSI_COLOR_DEFAULT),
         .del => render_ansi(r, ANSI_STRIKE_OFF),
+        .mark => render_ansi(r, ANSI_REVERSE_OFF),
         .latexmath => render_ansi(r, ANSI_COLOR_DEFAULT),
         .latexmath_display => render_ansi(r, ANSI_COLOR_DEFAULT),
         .wikilink => render_ansi(r, ANSI_RESET),

@@ -85,6 +85,7 @@ pub const SpanDetail = union(SpanType) {
     code: SpanAttrsDetail,   del: SpanAttrsDetail,    latexmath: void,
     latexmath_display: void, wikilink: SpanWikilinkDetail,             u: SpanAttrsDetail,
     component: SpanComponentDetail,                    span: SpanSpanDetail,
+    mark: SpanAttrsDetail,
 };
 ```
 
@@ -190,8 +191,9 @@ MD4X assumes UTF-8. Unicode matters for: word boundary classification (emphasis)
 | `.u`                 | `<u>`            | `SpanAttrsDetail`     |
 | `.component`         | _(dynamic tag)_  | `SpanComponentDetail` |
 | `.span`              | `<span>`         | `SpanSpanDetail`      |
+| `.mark`              | `<mark>`         | `SpanAttrsDetail`     |
 
-The five `SpanAttrsDetail` spans used to receive _either_ a detail or a `null`
+The `SpanAttrsDetail` spans used to receive _either_ a detail or a `null`
 pointer, depending on whether a trailing `{...}` was present. That distinction
 is gone: they always carry a `SpanAttrsDetail`, and an **empty** `raw_attrs`
 means "no attributes". No consumer ever told the two apart (every guard was
@@ -349,27 +351,28 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 
 ## Parser Flags
 
-| Flag                               | Value     | Description                                                                       |
-| ---------------------------------- | --------- | --------------------------------------------------------------------------------- |
-| `MD_FLAG_COLLAPSEWHITESPACE`       | `0x0001`  | Collapse non-trivial whitespace to single space                                   |
-| `MD_FLAG_PERMISSIVEATXHEADERS`     | `0x0002`  | Allow ATX headers without space (`###header`)                                     |
-| `MD_FLAG_PERMISSIVEURLAUTOLINKS`   | `0x0004`  | Recognize URLs as autolinks without `<>`                                          |
-| `MD_FLAG_PERMISSIVEEMAILAUTOLINKS` | `0x0008`  | Recognize emails as autolinks without `<>` and `mailto:`                          |
-| `MD_FLAG_NOINDENTEDCODEBLOCKS`     | `0x0010`  | Disable indented code blocks (fenced only)                                        |
-| `MD_FLAG_NOHTMLBLOCKS`             | `0x0020`  | Disable raw HTML blocks                                                           |
-| `MD_FLAG_NOHTMLSPANS`              | `0x0040`  | Disable inline raw HTML                                                           |
-| `MD_FLAG_TABLES`                   | `0x0100`  | Enable tables extension                                                           |
-| `MD_FLAG_STRIKETHROUGH`            | `0x0200`  | Enable strikethrough extension                                                    |
-| `MD_FLAG_PERMISSIVEWWWAUTOLINKS`   | `0x0400`  | Enable `www.` autolinks                                                           |
-| `MD_FLAG_TASKLISTS`                | `0x0800`  | Enable task list extension                                                        |
-| `MD_FLAG_LATEXMATHSPANS`           | `0x1000`  | Enable `$` / `$$` LaTeX math                                                      |
-| `MD_FLAG_WIKILINKS`                | `0x2000`  | Enable `[[wiki links]]`                                                           |
-| `MD_FLAG_UNDERLINE`                | `0x4000`  | Enable underline (disables `_` emphasis)                                          |
-| `MD_FLAG_HARD_SOFT_BREAKS`         | `0x8000`  | Force all soft breaks to act as hard breaks                                       |
-| `MD_FLAG_FRONTMATTER`              | `0x10000` | Enable frontmatter extension                                                      |
-| `MD_FLAG_COMPONENTS`               | `0x20000` | Enable components (inline `:name[content]{props}` and block `::name{props}...::`) |
-| `MD_FLAG_ATTRIBUTES`               | `0x40000` | Enable `{...}` attributes on inline elements and `[text]{.class}` spans           |
-| `MD_FLAG_ALERTS`                   | `0x80000` | Enable `> [!TYPE]` alert/admonition syntax                                        |
+| Flag                               | Value      | Description                                                                       |
+| ---------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| `MD_FLAG_COLLAPSEWHITESPACE`       | `0x0001`   | Collapse non-trivial whitespace to single space                                   |
+| `MD_FLAG_PERMISSIVEATXHEADERS`     | `0x0002`   | Allow ATX headers without space (`###header`)                                     |
+| `MD_FLAG_PERMISSIVEURLAUTOLINKS`   | `0x0004`   | Recognize URLs as autolinks without `<>`                                          |
+| `MD_FLAG_PERMISSIVEEMAILAUTOLINKS` | `0x0008`   | Recognize emails as autolinks without `<>` and `mailto:`                          |
+| `MD_FLAG_NOINDENTEDCODEBLOCKS`     | `0x0010`   | Disable indented code blocks (fenced only)                                        |
+| `MD_FLAG_NOHTMLBLOCKS`             | `0x0020`   | Disable raw HTML blocks                                                           |
+| `MD_FLAG_NOHTMLSPANS`              | `0x0040`   | Disable inline raw HTML                                                           |
+| `MD_FLAG_TABLES`                   | `0x0100`   | Enable tables extension                                                           |
+| `MD_FLAG_STRIKETHROUGH`            | `0x0200`   | Enable strikethrough extension                                                    |
+| `MD_FLAG_PERMISSIVEWWWAUTOLINKS`   | `0x0400`   | Enable `www.` autolinks                                                           |
+| `MD_FLAG_TASKLISTS`                | `0x0800`   | Enable task list extension                                                        |
+| `MD_FLAG_LATEXMATHSPANS`           | `0x1000`   | Enable `$` / `$$` LaTeX math                                                      |
+| `MD_FLAG_WIKILINKS`                | `0x2000`   | Enable `[[wiki links]]`                                                           |
+| `MD_FLAG_UNDERLINE`                | `0x4000`   | Enable underline (disables `_` emphasis)                                          |
+| `MD_FLAG_HARD_SOFT_BREAKS`         | `0x8000`   | Force all soft breaks to act as hard breaks                                       |
+| `MD_FLAG_FRONTMATTER`              | `0x10000`  | Enable frontmatter extension                                                      |
+| `MD_FLAG_COMPONENTS`               | `0x20000`  | Enable components (inline `:name[content]{props}` and block `::name{props}...::`) |
+| `MD_FLAG_ATTRIBUTES`               | `0x40000`  | Enable `{...}` attributes on inline elements and `[text]{.class}` spans           |
+| `MD_FLAG_ALERTS`                   | `0x80000`  | Enable `> [!TYPE]` alert/admonition syntax                                        |
+| `MD_FLAG_HIGHLIGHT`                | `0x100000` | Enable `==highlight==` spans                                                      |
 
 **Compound flags:**
 
@@ -377,4 +380,4 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 - `MD_FLAG_NOHTML` = no HTML blocks + no HTML spans
 - `MD_DIALECT_COMMONMARK` = `0` (strict CommonMark)
 - `MD_DIALECT_GITHUB` = permissive autolinks + tables + strikethrough + task lists + alerts
-- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + underline + frontmatter + components + attributes + alerts)
+- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + underline + frontmatter + components + attributes + alerts + highlight)

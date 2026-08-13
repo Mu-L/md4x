@@ -67,6 +67,13 @@ export function defineSuite({
       expect(await renderToHtml("~~strike~~")).toContain("<del>strike</del>");
     });
 
+    it("supports highlight", async () => {
+      expect(await renderToHtml("==hit==")).toContain("<mark>hit</mark>");
+      expect(await renderToHtml("==hit=={.warn}")).toContain(
+        '<mark class="warn">hit</mark>',
+      );
+    });
+
     it("supports task lists", async () => {
       expect(await renderToHtml("- [x] done\n- [ ] todo")).toContain(
         'type="checkbox"',

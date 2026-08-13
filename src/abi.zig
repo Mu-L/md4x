@@ -88,6 +88,7 @@ pub const SpanType = enum(c_uint) {
     u,
     component,
     span,
+    mark,
 };
 
 /// Text-run types. Ordinals are the values of the former C `MD_TEXTTYPE`.
@@ -235,7 +236,7 @@ pub const SpanComponentDetail = struct {
     raw_props: []const MD_CHAR = &.{},
 };
 
-/// Trailing `{...}` attributes on em/strong/code/del/u. An **empty**
+/// Trailing `{...}` attributes on em/strong/code/del/u/mark. An **empty**
 /// `raw_attrs` means "no attributes" — before Phase 4c step 3 the parser
 /// signalled that by handing the callback a null detail pointer instead, but
 /// no consumer ever distinguished the two (every guard was
@@ -298,6 +299,7 @@ pub const SpanDetail = union(SpanType) {
     u: SpanAttrsDetail,
     component: SpanComponentDetail,
     span: SpanSpanDetail,
+    mark: SpanAttrsDetail,
 };
 
 /// Local `std.meta.TagPayload` / default-value helpers. Spelled out here so
@@ -379,11 +381,12 @@ pub const MD_FLAG_FRONTMATTER = __helpers.promoteIntLiteral(c_int, 0x10000, .hex
 pub const MD_FLAG_COMPONENTS = __helpers.promoteIntLiteral(c_int, 0x20000, .hex);
 pub const MD_FLAG_ATTRIBUTES = __helpers.promoteIntLiteral(c_int, 0x40000, .hex);
 pub const MD_FLAG_ALERTS = __helpers.promoteIntLiteral(c_int, 0x80000, .hex);
+pub const MD_FLAG_HIGHLIGHT = __helpers.promoteIntLiteral(c_int, 0x100000, .hex);
 pub const MD_FLAG_PERMISSIVEAUTOLINKS = (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_FLAG_PERMISSIVEURLAUTOLINKS) | MD_FLAG_PERMISSIVEWWWAUTOLINKS;
 pub const MD_FLAG_NOHTML = MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS;
 pub const MD_DIALECT_COMMONMARK = @as(c_int, 0);
 pub const MD_DIALECT_GITHUB = (((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_ALERTS;
-pub const MD_DIALECT_ALL = (((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_UNDERLINE) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS;
+pub const MD_DIALECT_ALL = ((((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_UNDERLINE) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT;
 
 // ---------------------------------------------------------------------------
 // Renderer ABI types + flag values (formerly the md4x-*.h headers). The entry
