@@ -149,7 +149,7 @@ leave_block(.doc)
 
 ## Encoding
 
-MD4X assumes UTF-8. Unicode matters for: word boundary classification (emphasis), case-insensitive link reference matching (case-folding), entity translation (left to renderer). The tables live in the generated `src/unicode_tables.zig` (Unicode 15.1).
+MD4X assumes UTF-8. Unicode matters for: word boundary classification (emphasis), case-insensitive link reference matching (case-folding), entity translation (left to renderer). The tables live in the generated `src/unicode_tables.zig` (Unicode 18.0).
 
 ## Block Types (`BlockType` / `BlockDetail`)
 
