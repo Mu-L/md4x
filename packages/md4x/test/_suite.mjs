@@ -1596,6 +1596,31 @@ export function defineSuite({
         const { codes } = await highlighted(md);
         expect(codes).toEqual(["const x=1;\n", "print(2)\n"]);
       });
+
+      // A frontmatter key that is not a valid HTML attribute name is
+      // percent-encoded, so the opening tag GROWS by 2 bytes per encoded byte
+      // relative to the key as written. Those bytes go out through
+      // render_verbatim -> out_buf_append, which is where output_offset counts
+      // them, so the code-block offsets recorded afterwards must still line up.
+      it("percent-encoded frontmatter key keeps offsets aligned", async () => {
+        const md = `::card\n\n---\na b/c: y\n---\n\n${CODE}::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe('<card a%20b%2Fc="y">\n<HL></card>\n');
+        expect(await renderToHtml(md)).toBe(
+          `<card a%20b%2Fc="y">\n${PRE}</card>\n`,
+        );
+      });
+
+      // ...and the empty key is dropped, so the tag SHRINKS by the ` =""` that
+      // used to be emitted. Offsets must follow that direction too.
+      it("dropped empty frontmatter key keeps offsets aligned", async () => {
+        const md = `::card\n\n---\n"": y\nz: w\n---\n\n${CODE}::\n`;
+        const { html, codes } = await highlighted(md);
+        expect(codes).toEqual(["const x=1;\n"]);
+        expect(html).toBe('<card z="w">\n<HL></card>\n');
+        expect(await renderToHtml(md)).toBe(`<card z="w">\n${PRE}</card>\n`);
+      });
     });
   });
 

@@ -300,6 +300,51 @@ fn render_html_escaped(r: *MD_HTML, data: [*]const u8, size: c.MD_SIZE) void {
     }
 }
 
+// Emit `data` as an HTML attribute NAME.
+//
+// `render_html_escaped` neutralizes the bytes that break out of an attribute
+// *value* (`& < > "`). An attribute *name* ends at a different set entirely:
+// per the HTML tokenizer's attribute-name state, whitespace (TAB LF FF CR SP),
+// `/`, `=` and `>` all terminate it. So a name emitted with value escaping only
+// is not guaranteed to stay ONE attribute — a component key of
+// `x onload=alert(1)//` tokenizes into `x` plus a live `onload` handler the
+// document never wrote.
+//
+// Both name-emitting sites (a YAML component-frontmatter key, a `{props}` key)
+// mean the key to be exactly one inert attribute name, so make that structural:
+// percent-encode every byte that is not inert inside a name, and hand the rest
+// to `render_html_escaped` so `& < > "` keep their existing entity spelling.
+// The encoded set is `ch <= 0x20` (every C0 control plus SP, which covers all
+// five HTML whitespace terminators), DEL, `/` and `=`; `>` is already an entity
+// by the time a browser sees it. Bytes >= 0x80 pass through untouched, so a
+// non-ASCII key such as `título` is unaffected.
+//
+// Percent-encoding rather than dropping the pair keeps this renderer in
+// agreement with the AST renderer about which keys are *acceptable* — both
+// still emit every key the YAML/props parser produced, one as an inert
+// attribute name and one as a JSON string. See the commit that added this.
+fn render_html_attr_name(r: *MD_HTML, data: [*]const u8, size: c.MD_SIZE) void {
+    const hex_chars = "0123456789ABCDEF";
+    var beg: c.MD_OFFSET = 0;
+    var off: c.MD_OFFSET = 0;
+
+    while (off < size) : (off += 1) {
+        const ch = data[off];
+        if (!(ch <= 0x20 or ch == 0x7f or ch == '/' or ch == '='))
+            continue;
+
+        if (off > beg)
+            render_html_escaped(r, data + beg, off - beg);
+
+        const esc = [3]u8{ '%', hex_chars[ch >> 4], hex_chars[ch & 0xf] };
+        render_verbatim(r, &esc, 3);
+        beg = off + 1;
+    }
+
+    if (off > beg)
+        render_html_escaped(r, data + beg, off - beg);
+}
+
 fn render_url_escaped(r: *MD_HTML, data: [*]const u8, size: c.MD_SIZE) void {
     const hex_chars = "0123456789ABCDEF";
     var beg: c.MD_OFFSET = 0;
@@ -581,7 +626,7 @@ fn render_html_component_props(r: *MD_HTML, raw: [*]const u8, size: c.MD_SIZE) v
         const p = &parsed.props[i];
 
         render_verbatim_lit(r, " ");
-        render_html_escaped(r, p.key, p.key_size);
+        render_html_attr_name(r, p.key, p.key_size);
 
         switch (p.type) {
             .string, .bind => {
@@ -727,11 +772,19 @@ fn comp_fm_flush_tag(r: *MD_HTML) void {
                             // Read value.
                             if (sys.yaml_parser_parse(&yp, &event) == 0) break;
                             if (event.type == sys.YAML_SCALAR_EVENT) {
-                                render_verbatim_lit(r, " ");
-                                render_html_escaped(r, &key_buf, @intCast(key_len));
-                                render_verbatim_lit(r, "=\"");
-                                render_html_escaped(r, @ptrCast(event.data.scalar.value), @intCast(event.data.scalar.length));
-                                render_verbatim_lit(r, "\"");
+                                // An EMPTY key (`"": v`) is the one key HTML has
+                                // no spelling for — there is no encoding of a
+                                // zero-length attribute name — so drop the pair
+                                // rather than emit the malformed ` ="v"`, which
+                                // a browser recovers from by inventing an
+                                // attribute literally named `="v"`.
+                                if (key_len > 0) {
+                                    render_verbatim_lit(r, " ");
+                                    render_html_attr_name(r, &key_buf, @intCast(key_len));
+                                    render_verbatim_lit(r, "=\"");
+                                    render_html_escaped(r, @ptrCast(event.data.scalar.value), @intCast(event.data.scalar.length));
+                                    render_verbatim_lit(r, "\"");
+                                }
                             } else if (event.type == sys.YAML_MAPPING_START_EVENT or event.type == sys.YAML_SEQUENCE_START_EVENT) {
                                 // Skip nested structures.
                                 var depth: c_int = 1;
@@ -770,17 +823,27 @@ fn render_open_block_component(r: *MD_HTML, det: *const c.BlockComponentDetail) 
     r.comp_fm_text_size = 0;
     _ = comp_fm_tag_append(r, "<", 1);
 
-    // Append tag name.
+    // Append tag name, through render_attribute(..., render_html_escaped) with
+    // the capture callback swapped in — the same route the title takes below,
+    // and symmetric with render_close_block_component's `</name>`. This site
+    // used to memcpy the attribute's raw substring bytes, escaping nothing and
+    // decoding no `.entity` substring.
+    //
+    // Currently that is unreachable rather than exploitable: the parser bounds a
+    // component name to `[a-zA-Z][a-zA-Z0-9-]*` (`md_is_block_component_opener`
+    // in blocks.zig), so a name carries exactly one `.normal` substring with no
+    // `& < > "` in it and both spellings emit identical bytes — verified by
+    // scripts/diff-corpus.sh. It is changed defensively because the asymmetry is
+    // a trap if that charset ever widens: the opener is the half where a name
+    // would break out of the tag it is opening.
     {
-        const attr = &det.tag_name;
-        const total = attr.size();
-        var i: usize = 0;
-        while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) {
-            const off = attr.substr_offsets[i];
-            const next = if (attr.substr_offsets[i + 1] < total) attr.substr_offsets[i + 1] else total;
-            const len = next - off;
-            _ = comp_fm_tag_append(r, attr.text.ptr + off, len);
-        }
+        const saved_output = r.process_output;
+        const saved_ud = r.userdata;
+        r.process_output = comp_fm_tag_capture;
+        r.userdata = r;
+        render_attribute(r, &det.tag_name, render_html_escaped);
+        r.process_output = saved_output;
+        r.userdata = saved_ud;
     }
 
     // Append title as attribute if present.

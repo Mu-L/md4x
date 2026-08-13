@@ -84,6 +84,7 @@ flag cleared. It is what the CLI's `--heal` option sets for HTML output.
 - Task lists render with `<input type="checkbox">` elements
 - Table cells get `align` attribute when alignment is specified
 - URL attributes are percent-encoded; HTML content is entity-escaped
+- Attribute **names** synthesized from a component key — a `{props}` key or a component-frontmatter YAML key — are emitted through `render_html_attr_name`, not the value escaper. An attribute name ends at whitespace, `/`, `=` or `>`, none of which entity-escaping covers, so a key like `x onload=alert(1)//` would otherwise tokenize into several attributes. Bytes `<= 0x20`, DEL, `/` and `=` are percent-encoded (`a b` → `a%20b`); `& < > "` keep their entity spelling; bytes `>= 0x80` pass through, so non-ASCII keys are unaffected. An **empty** key is dropped — HTML has no spelling for a zero-length attribute name. The AST renderer keeps every such key verbatim (it is a JSON string there), so the two renderers agree on which keys are acceptable; only the spelling differs
 - Alerts render as `<blockquote class="alert alert-{type}">` (type lowercased in class)
 - Footnote references render as `<sup><a href="#fn-N" id="fnref-N-K">N</a></sup>`; the deferred definitions render as `<section class="footnotes"><ol><li id="fn-N">…</li></ol></section>`, each `<li>` ending in one `&#8617;` back-reference anchor per reference
 

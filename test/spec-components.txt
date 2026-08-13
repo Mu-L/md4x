@@ -988,3 +988,151 @@ z
 .
 --format=json
 ````````````````````````````````
+
+# Attribute Names Synthesized From Component Keys
+
+A component key becomes an HTML attribute NAME. `render_html_escaped` covers
+`& < > "`, which is the escape set for an attribute *value*; a *name* instead
+ends at whitespace, `/`, `=` or `>`, so a single key used to be able to
+tokenize into several attributes — including a live event handler the document
+never wrote. Names now percent-encode `<= 0x20`, DEL, `/` and `=`.
+
+## A frontmatter key cannot synthesize a second attribute
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+x onload=alert(1)//: y
+---
+::
+.
+<card x%20onload%3Dalert(1)%2F%2F="y">
+</card>
+````````````````````````````````
+
+## A frontmatter key cannot be split by a slash
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+a/b: y
+---
+::
+.
+<card a%2Fb="y">
+</card>
+````````````````````````````````
+
+## A frontmatter key cannot be split by a tab
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+"a\tb": y
+---
+::
+.
+<card a%09b="y">
+</card>
+````````````````````````````````
+
+## Punctuation inert inside a name keeps its existing spelling
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+"a'b": 1
+"a`b": 2
+"a<b>c": 3
+"a&b": 4
+---
+::
+.
+<card a'b="1" a`b="2" a&lt;b&gt;c="3" a&amp;b="4">
+</card>
+````````````````````````````````
+
+## A non-ASCII frontmatter key is untouched
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+título: y
+---
+::
+.
+<card título="y">
+</card>
+````````````````````````````````
+
+## An empty frontmatter key is dropped, not emitted as `="v"`
+
+```````````````````````````````` example [no-normalize]
+::card
+
+---
+"": y
+z: w
+---
+::
+.
+<card z="w">
+</card>
+````````````````````````````````
+
+## A `{props}` key cannot synthesize a second attribute either
+
+```````````````````````````````` example [no-normalize]
+::card{a/b=c}
+body
+::
+.
+<card a%2Fb="c">
+<p>body</p>
+</card>
+````````````````````````````````
+
+## The same holds for inline components, spans, links and images
+
+```````````````````````````````` example [no-normalize]
+:badge[N]{a/b=c}
+
+**b**{a/b=c}
+
+[t](u){a/b=c}
+
+![i](p){a/b=c}
+.
+<p><badge a%2Fb="c">N</badge></p>
+<p><strong a%2Fb="c">b</strong></p>
+<p><a href="u" a%2Fb="c">t</a></p>
+<p><img src="p" alt="i" a%2Fb="c"></p>
+````````````````````````````````
+
+## The AST renderer keeps the same key verbatim
+
+The two renderers agree on which keys are *acceptable* — every key the YAML /
+props parser produced is still emitted. The HTML side encodes it into an inert
+attribute name; the JSON side is structurally safe already because the key is
+a JSON string. A consumer spreading these props onto a DOM element is what has
+to reject the name, and `setAttribute` does.
+
+```````````````````````````````` example [no-normalize]
+::card{a/b=c}
+
+---
+x onload=alert(1)//: y
+---
+
+body
+::
+.
+{"nodes":[["card",{"x onload=alert(1)//":"y","a/b":"c"},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
