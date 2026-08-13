@@ -56,6 +56,13 @@ Rules that apply across all three:
 - Functions scanning a block's lines take a `[]const MD_LINE` **slice**, not `[*c]const MD_LINE` +
   `n_lines`, so line access is bounds-checked in Debug/ReleaseSafe.
 - Never cache a pointer into a growable buffer across a call that may reallocate.
+- **Renderer-owned strings are sentinel slices, never `[*:0]` + `strlen()`.** The AST renderer's
+  `JsonNode` / `Detail` fields are `?[:0]u8`: the length is the exact byte count, and the NUL
+  terminator survives only for the C-shaped consumers (the props parser, libyaml). A U+0000 is legal
+  document content — the parser reports it as `TextType.nullchar` — so recomputing a length with
+  `strlen()` silently truncates the value. An `Attribute`-derived string substitutes its `.nullchar`
+  substrings with **U+FFFD** (what `render_attribute()` does in every other renderer); a raw-source
+  passthrough keeps the byte and lets the JSON writer escape it.
 
 ## `bool` vs `c_int`
 

@@ -2323,6 +2323,95 @@ export function defineSuite({
     });
   });
 
+  describe("NUL bytes in attribute values", () => {
+    // A U+0000 byte is legal document content: the parser reports it as a
+    // `.nullchar` substring and the renderers fold it onto U+FFFD, the same
+    // way they treat the byte in text flow. The AST renderer used to recompute
+    // each attribute's length with strlen(), truncating the value at the NUL
+    // while the matching text child rendered in full.
+    const NUL = "\u0000";
+    const FFFD = "\uFFFD";
+
+    it("keeps a wiki-link target consistent with its text child", async () => {
+      const ast = await parseAST(`[[a${NUL}b]]`);
+      const wikilink = ast.nodes[0][2];
+      expect(wikilink[1].target).toBe(`a${FFFD}b`);
+      expect(wikilink[2]).toBe(`a${FFFD}b`);
+    });
+
+    it("keeps a link href and title", async () => {
+      const ast = await parseAST(`[t](<a${NUL}b> "x${NUL}y")`);
+      expect(ast.nodes[0][2][1]).toEqual({
+        href: `a${FFFD}b`,
+        title: `x${FFFD}y`,
+      });
+    });
+
+    it("keeps an image src, alt and title", async () => {
+      const ast = await parseAST(`![a${NUL}t](<s${NUL}rc> "x${NUL}y")`);
+      expect(ast.nodes[0][2][1]).toEqual({
+        src: `s${FFFD}rc`,
+        alt: `a${FFFD}t`,
+        title: `x${FFFD}y`,
+      });
+    });
+
+    it("keeps a code block language and filename", async () => {
+      const ast = await parseAST("```j" + NUL + "s [f" + NUL + "n.js]\nc\n```");
+      expect(ast.nodes[0][1].language).toBe(`j${FFFD}s`);
+      expect(ast.nodes[0][1].filename).toBe(`f${FFFD}n.js`);
+    });
+
+    it("keeps a footnote label on both the ref and the definition", async () => {
+      const ast = await parseAST(`a[^n${NUL}1]\n\n[^n${NUL}1]: def`);
+      expect(ast.nodes[0][3][1].label).toBe(`n${FFFD}1`);
+      expect(ast.nodes[1][2][1].label).toBe(`n${FFFD}1`);
+    });
+
+    // Raw source passthroughs (component props/title, the code-block `meta`
+    // remainder, inline `{attrs}`) carry no substring typing, so they keep the
+    // raw byte; json_write_escaped emits it as \u0000, which is valid JSON.
+    it("round-trips a raw NUL through component props and title", async () => {
+      const json = await renderToAST(
+        `:::card Ti${NUL}tle {k="v${NUL}w"}\nx\n:::`,
+      );
+      expect(json).toContain("\\u0000");
+      const ast = JSON.parse(json);
+      expect(ast.nodes[0][1].title).toBe(`Ti${NUL}tle`);
+      expect(ast.nodes[0][1].k).toBe(`v${NUL}w`);
+    });
+
+    it("round-trips a raw NUL through code block meta", async () => {
+      const ast = await parseAST("```js m" + NUL + "eta\nc\n```");
+      expect(ast.nodes[0][1].meta).toBe(`m${NUL}eta`);
+    });
+
+    it("round-trips a raw NUL through inline attributes", async () => {
+      const ast = await parseAST(`**b**{k="v${NUL}w"}`);
+      expect(ast.nodes[0][2][1].k).toBe(`v${NUL}w`);
+    });
+
+    it("emits parseable JSON for every NUL-bearing attribute kind", async () => {
+      const doc = [
+        `[[a${NUL}b]]`,
+        `[t](<a${NUL}b> "x${NUL}y")`,
+        `![a${NUL}t](<s${NUL}rc> "x${NUL}y")`,
+        "```j" + NUL + "s [f" + NUL + "n.js] m" + NUL + "eta\nc\n```",
+        `:::card Ti${NUL}tle {k="v${NUL}w"}\nx\n:::`,
+        `**b**{k="v${NUL}w"}`,
+        `<!-- c${NUL}mt -->`,
+      ].join("\n\n");
+      const json = await renderToAST(doc);
+      expect(() => JSON.parse(json)).not.toThrow();
+    });
+
+    it("matches the HTML renderer, which already substitutes U+FFFD", async () => {
+      expect(await renderToHtml(`[[a${NUL}b]]`)).toBe(
+        `<p><x-wikilink data-target="a${FFFD}b">a${FFFD}b</x-wikilink></p>\n`,
+      );
+    });
+  });
+
   describe("error handling", () => {
     describe("edge-case inputs", () => {
       it("handles only whitespace input", async () => {

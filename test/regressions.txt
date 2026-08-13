@@ -2042,3 +2042,105 @@ Note.<a href="#fnref-1-1" class="footnote-backref">&#8617;</a>
 </ol>
 </section>
 ````````````````````````````````
+
+
+## NUL bytes in attribute values
+
+A U+0000 byte is legal document content: the parser reports it as a
+`.nullchar` substring and every renderer's `render_attribute()` folds it onto
+U+FFFD, exactly as it does for the same byte in text flow. The AST renderer
+recomputed each attribute's length with `strlen()`, so an attribute carrying a
+NUL was silently truncated at it while its own text child rendered in full.
+Attribute values now travel as exact-length slices with the same U+FFFD
+substitution, so the attribute and the text child agree.
+
+A wiki-link target, which is emitted both as a prop and as the link text:
+
+```````````````````````````````` example [no-normalize]
+[[a b]]
+.
+{"nodes":[["p",{},["wikilink",{"target":"a�b"},"a�b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+The HTML renderer already agreed with itself here; this pins that it still does:
+
+```````````````````````````````` example
+[[a b]]
+.
+<p><x-wikilink data-target="a�b">a�b</x-wikilink></p>
+````````````````````````````````
+
+A link destination and title (angle-bracket form, the only spelling that keeps
+a raw NUL inside the destination):
+
+```````````````````````````````` example [no-normalize]
+[t](<a b> "x y")
+.
+{"nodes":[["p",{},["a",{"href":"a�b","title":"x�y"},"t"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+An image's `src`, `alt` and `title`:
+
+```````````````````````````````` example [no-normalize]
+![a t](<s rc> "x y")
+.
+{"nodes":[["p",{},["img",{"src":"s�rc","alt":"a�t","title":"x�y"}]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+A code block's language and `[filename]`. The `meta` remainder is *not* an
+`Attribute` -- the parser hands it over as raw source bytes with no substring
+typing -- so it keeps the byte and the JSON writer escapes it as `\u0000`,
+which is valid JSON and round-trips through `JSON.parse`:
+
+```````````````````````````````` example [no-normalize]
+```j s [f n.js] m eta
+c
+```
+.
+{"nodes":[["pre",{"language":"j�s","filename":"f�n.js","meta":"m\u0000eta"},["code",{"class":"language-j�s"},"c\n"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+A language that *starts* with the NUL used to drop the `language` prop
+entirely, because the emptiness test was "first byte is not NUL":
+
+```````````````````````````````` example [no-normalize]
+``` js
+c
+```
+.
+{"nodes":[["pre",{"language":"�js"},["code",{"class":"language-�js"},"c\n"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+A footnote label, which is emitted on both the reference and the definition:
+
+```````````````````````````````` example [no-normalize]
+a[^n 1]
+
+[^n 1]: def
+.
+{"nodes":[["p",{},"a",["footnote-ref",{"id":1,"refId":1,"label":"n�1"}]],["footnotes",{},["footnote",{"id":1,"label":"n�1","refCount":1},"def"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+Raw `{...}` prop strings are raw source too, so they also keep the byte:
+
+```````````````````````````````` example [no-normalize]
+:::card Ti tle {k="v w"}
+x
+:::
+.
+{"nodes":[["card",{"title":"Ti\u0000tle","k":"v\u0000w"},["p",{},"x"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````

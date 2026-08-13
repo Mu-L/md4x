@@ -118,6 +118,13 @@ const TagKind = enum {
 // avoiding union type-confusion entirely. Dynamic components only ever touch the
 // `component` fields, matching the C contract that they use detail.component
 // exclusively.
+// Every string below is a **sentinel-terminated slice**, never a bare `[*:0]`
+// pointer: the length is the exact byte count the arena buffer holds, and the
+// NUL terminator is retained only for the few C-shaped consumers (snprintf-free
+// props parser, libyaml). Recomputing the length with strlen() silently
+// truncated any value carrying an embedded NUL — a NUL is legal document
+// content, so `[[a<NUL>b]]` used to serialize as `"target":"a"` while its own
+// text child rendered the full string.
 const Detail = struct {
     // ol
     ol_is_tight: bool = false,
@@ -129,44 +136,41 @@ const Detail = struct {
     li_is_task: bool = false,
     li_task_mark: u8 = 0,
     // code
-    code_info: ?[*:0]u8 = null,
-    code_lang: ?[*:0]u8 = null,
+    code_info: ?[:0]u8 = null,
+    code_lang: ?[:0]u8 = null,
     code_fence_char: u8 = 0,
-    code_filename: ?[*:0]u8 = null,
-    code_meta: ?[*:0]u8 = null,
-    code_highlights: ?[*]c_uint = null,
-    code_highlight_count: c_uint = 0,
+    code_filename: ?[:0]u8 = null,
+    code_meta: ?[:0]u8 = null,
+    code_highlights: ?[]c_uint = null,
     // table
     table_col_count: c_uint = 0,
     // td
     td_align: c_int = 0,
     // a
-    a_href: ?[*:0]u8 = null,
-    a_title: ?[*:0]u8 = null,
+    a_href: ?[:0]u8 = null,
+    a_title: ?[:0]u8 = null,
     // img
-    img_src: ?[*:0]u8 = null,
-    img_title: ?[*:0]u8 = null,
+    img_src: ?[:0]u8 = null,
+    img_title: ?[:0]u8 = null,
     // wikilink
-    wikilink_target: ?[*:0]u8 = null,
+    wikilink_target: ?[:0]u8 = null,
     // component
-    component_raw_props: ?[*:0]u8 = null,
-    component_raw_props_size: c.MD_SIZE = 0,
-    component_title: ?[*:0]u8 = null,
-    component_title_size: c.MD_SIZE = 0,
+    component_raw_props: ?[:0]u8 = null,
+    component_title: ?[:0]u8 = null,
     // template
-    tmpl_name: ?[*:0]u8 = null,
+    tmpl_name: ?[:0]u8 = null,
     // alert
-    alert_type_name: ?[*:0]u8 = null,
+    alert_type_name: ?[:0]u8 = null,
     // footnote-def / footnote-ref
     footnote_id: c_uint = 0,
     footnote_ref_id: c_uint = 0,
     footnote_ref_count: c_uint = 0,
-    footnote_label: ?[*:0]u8 = null,
+    footnote_label: ?[:0]u8 = null,
 };
 
 const JsonNode = struct {
     kind: JsonNodeKind,
-    tag: ?[*:0]const u8 = null,
+    tag: ?[:0]const u8 = null,
     // Classification of the built-in tag for switch-based dispatch.
     tag_kind: TagKind = .other,
 
@@ -175,17 +179,15 @@ const JsonNode = struct {
     next_sibling: ?*JsonNode = null,
 
     // Text value for text nodes, or literal content for leaf containers.
-    text_value: ?[*:0]u8 = null,
-    text_size: c.MD_SIZE = 0,
+    text_value: ?[:0]u8 = null,
 
     detail: Detail = .{},
 
     // True if the tag is heap-allocated (dynamic component tag).
     tag_is_dynamic: bool = false,
 
-    // Raw inline attributes string from trailing {attrs}, or NULL.
-    raw_attrs: ?[*:0]u8 = null,
-    raw_attrs_size: c.MD_SIZE = 0,
+    // Raw inline attributes string from trailing {attrs}, or null.
+    raw_attrs: ?[:0]u8 = null,
 };
 
 const JsonCtx = struct {
@@ -203,7 +205,7 @@ const JsonCtx = struct {
 };
 
 // The active arena allocator. The callbacks receive only a `*JsonCtx` userdata,
-// and the helper functions (allocBytes, dupNts, jsonAttrToStr, jsonAppendText,
+// and the helper functions (allocStr, dupNts, jsonAttrToStr, jsonAppendText,
 // the text-merge paths) do not get the ctx threaded through; rather than rewrite
 // every signature, the current ctx's allocator is stashed here for the duration
 // of a single (non-reentrant) md_parse run. md_ast is the only entry point and
@@ -214,20 +216,14 @@ threadlocal var g_alloc: std.mem.Allocator = undefined;
 // ***  Memory management    ***
 // *****************************
 
-// Allocate a buffer of `n` bytes from the arena (no NUL slot added here; callers
-// add one when they want C-string semantics). Returns null on failure.
-fn allocBytes(n: usize) ?[*]u8 {
-    if (n == 0) {
-        // Match malloc(0) behavior loosely: return a 1-byte allocation. The
-        // call sites that pass 0 always also write a NUL terminator at [0].
-        const m = g_alloc.alloc(u8, 1) catch return null;
-        return m.ptr;
-    }
-    const m = g_alloc.alloc(u8, n) catch return null;
-    return m.ptr;
+// Allocate a NUL-terminated arena buffer holding `n` content bytes, returned as
+// a sentinel slice of exactly that length. Returns null on failure.
+fn allocStr(n: usize) ?[:0]u8 {
+    const m = g_alloc.allocSentinel(u8, n, 0) catch return null;
+    return m;
 }
 
-fn jsonNodeNew(tag: ?[*:0]const u8, kind: JsonNodeKind) ?*JsonNode {
+fn jsonNodeNew(tag: ?[:0]const u8, kind: JsonNodeKind) ?*JsonNode {
     const node = g_alloc.create(JsonNode) catch return null;
     node.* = .{ .kind = kind, .tag = tag };
     return node;
@@ -241,29 +237,75 @@ fn jsonNodeFree(node_opt: ?*JsonNode) void {
     _ = node_opt;
 }
 
-// Convert an MD_ATTRIBUTE to an arena-allocated, NUL-terminated string. Returns
-// null for an unset (empty) attribute OR on allocation failure — matching the C
-// version, whose `text == NULL` test was equivalent: md_build_attribute only
-// ever leaves `text` empty when the attribute is unset or was built from zero
-// bytes, and never produces a non-empty pointer with a zero size.
-fn jsonAttrToStr(attr: *const c.Attribute) ?[*:0]u8 {
-    if (attr.text.len == 0)
+// U+FFFD REPLACEMENT CHARACTER in UTF-8.
+const utf8_replacement_char = [_]u8{ 0xEF, 0xBF, 0xBD };
+
+// Convert an MD_ATTRIBUTE to an arena-allocated, NUL-terminated slice whose
+// length is exact. Returns null for an unset (empty) attribute OR on allocation
+// failure — matching the C version, whose `text == NULL` test was equivalent:
+// md_build_attribute only ever leaves `text` empty when the attribute is unset
+// or was built from zero bytes, and never produces a non-empty pointer with a
+// zero size.
+//
+// A `.nullchar` substring is a single U+0000 byte sitting in `attr.text`. It is
+// substituted with U+FFFD here, which is what every other renderer's
+// render_attribute() does (`render_utf8_codepoint(r, 0x0000, ...)` folds
+// codepoint 0 onto the replacement character) and what this renderer's own text
+// path does for a `.nullchar` text event. Emitting the raw byte instead left the
+// attribute disagreeing with its own text child — `[[a<NUL>b]]` rendered
+// `"target":"a\u0000b"` beside the child `"a<U+FFFD>b"` — and, before the
+// length became exact, silently truncated the value at the NUL.
+fn jsonAttrToStr(attr: *const c.Attribute) ?[:0]u8 {
+    const total = attr.text.len;
+    if (total == 0)
         return null;
 
-    const size = attr.text.len;
-    const buf = allocBytes(size + 1) orelse return null;
-    @memcpy(buf[0..size], attr.text);
-    buf[size] = 0;
-    return @ptrCast(buf);
+    // Count the NUL substrings first: each grows the value by 2 bytes.
+    var extra: usize = 0;
+    var i: usize = 0;
+    while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) {
+        if (attr.substr_types[i] == c.TextType.nullchar)
+            extra += utf8_replacement_char.len - 1;
+    }
+
+    const buf = allocStr(total + extra) orelse return null;
+    if (extra == 0) {
+        // Overwhelmingly the common case: no substitution, one copy.
+        @memcpy(buf[0..total], attr.text);
+        return buf;
+    }
+
+    var w: usize = 0;
+    var copied: usize = 0;
+    i = 0;
+    while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) {
+        const off: usize = attr.substr_offsets[i];
+        const end: usize = attr.substr_offsets[i + 1];
+        if (attr.substr_types[i] == c.TextType.nullchar) {
+            @memcpy(buf[w..][0..utf8_replacement_char.len], &utf8_replacement_char);
+            w += utf8_replacement_char.len;
+        } else {
+            @memcpy(buf[w..][0 .. end - off], attr.text[off..end]);
+            w += end - off;
+        }
+        copied = end;
+    }
+    // The substring table is contiguous and ends at `total`, but the walk is
+    // bounded rather than terminator-driven; copy any tail it did not cover.
+    if (copied < total) {
+        @memcpy(buf[w..][0 .. total - copied], attr.text[copied..total]);
+        w += total - copied;
+    }
+    if (w < buf.len)
+        buf[w] = 0;
+    return buf[0..w :0];
 }
 
-// Duplicate `len` bytes from `src` into a NUL-terminated arena string.
-fn dupNts(src: [*]const u8, len: usize) ?[*:0]u8 {
-    const buf = allocBytes(len + 1) orelse return null;
-    if (len > 0)
-        @memcpy(buf[0..len], src[0..len]);
-    buf[len] = 0;
-    return @ptrCast(buf);
+// Duplicate `src` into a NUL-terminated arena slice of the same length.
+fn dupNts(src: []const u8) ?[:0]u8 {
+    const buf = allocStr(src.len) orelse return null;
+    @memcpy(buf[0..src.len], src);
+    return buf;
 }
 
 // ***********************************
@@ -304,26 +346,22 @@ fn jsonPop(ctx: *JsonCtx) void {
 }
 
 // Append text to a node's text_value buffer. Returns 0 on success, -1 on OOM.
-fn jsonAppendText(node: *JsonNode, src: [*]const u8, src_size: c.MD_SIZE) c_int {
+fn jsonAppendText(node: *JsonNode, src: []const u8) c_int {
     if (node.text_value == null) {
-        const buf = allocBytes(@as(usize, src_size) + 1) orelse return -1;
-        if (src_size > 0)
-            @memcpy(buf[0..src_size], src[0..src_size]);
-        buf[src_size] = 0;
-        node.text_value = @ptrCast(buf);
-        node.text_size = src_size;
+        node.text_value = dupNts(src) orelse return -1;
     } else {
-        const old_size = node.text_size;
-        const old = node.text_value.?;
-        const old_slice = @as([*]u8, @ptrCast(old))[0 .. @as(usize, old_size) + 1];
-        const merged = g_alloc.realloc(old_slice, @as(usize, old_size) + @as(usize, src_size) + 1) catch return -1;
-        if (src_size > 0)
-            @memcpy(merged[old_size .. old_size + src_size], src[0..src_size]);
-        node.text_size = old_size + src_size;
-        merged[node.text_size] = 0;
-        node.text_value = @ptrCast(merged.ptr);
+        node.text_value = appendToStr(node.text_value.?, src) orelse return -1;
     }
     return 0;
+}
+
+// Grow a NUL-terminated arena slice by `src`, returning the new slice (the old
+// buffer is either reused in place or abandoned to the arena). Null on OOM.
+fn appendToStr(old: [:0]u8, src: []const u8) ?[:0]u8 {
+    const merged = g_alloc.realloc(old[0 .. old.len + 1], old.len + src.len + 1) catch return null;
+    @memcpy(merged[old.len .. old.len + src.len], src);
+    merged[old.len + src.len] = 0;
+    return merged[0 .. old.len + src.len :0];
 }
 
 // *************************************
@@ -331,11 +369,11 @@ fn jsonAppendText(node: *JsonNode, src: [*]const u8, src_size: c.MD_SIZE) c_int 
 // *************************************
 
 // Check if a string is an HTML comment (<!-- ... -->), possibly with
-// surrounding whitespace. On match, set body.* / body_size.* to the comment
-// body (between <!-- and -->). Returns 1 on match, 0 otherwise.
-fn jsonIsHtmlComment(text: [*]const u8, size: c.MD_SIZE, body: *[*]const u8, body_size: *c.MD_SIZE) c_int {
+// surrounding whitespace. On match, returns the comment body (between <!-- and
+// -->) as a subslice of `text`; null otherwise.
+fn jsonIsHtmlComment(text: []const u8) ?[]const u8 {
     var p: usize = 0;
-    const end: usize = size;
+    const end: usize = text.len;
 
     // Skip leading whitespace.
     while (p < end and (text[p] == ' ' or text[p] == '\t' or text[p] == '\n' or text[p] == '\r'))
@@ -343,9 +381,9 @@ fn jsonIsHtmlComment(text: [*]const u8, size: c.MD_SIZE, body: *[*]const u8, bod
 
     // Must start with <!--
     if (end - p < 7) // at minimum <!-- -->
-        return 0;
+        return null;
     if (text[p] != '<' or text[p + 1] != '!' or text[p + 2] != '-' or text[p + 3] != '-')
-        return 0;
+        return null;
 
     // Find --> from the end, skipping trailing whitespace.
     var q: usize = end;
@@ -353,26 +391,24 @@ fn jsonIsHtmlComment(text: [*]const u8, size: c.MD_SIZE, body: *[*]const u8, bod
         q -= 1;
 
     if (q - p < 7)
-        return 0;
+        return null;
     if (text[q - 1] != '>' or text[q - 2] != '-' or text[q - 3] != '-')
-        return 0;
+        return null;
 
-    body.* = text + p + 4; // after <!--
-    body_size.* = @intCast((q - 3) - (p + 4)); // before -->
-    return 1;
+    return text[p + 4 .. q - 3]; // between <!-- and -->
 }
 
 // ***********************************
 // ***  md_parse() callbacks       ***
 // ***********************************
 
-const heading_tags = [_][*:0]const u8{ "h0", "h1", "h2", "h3", "h4", "h5", "h6" };
+const heading_tags = [_][:0]const u8{ "h0", "h1", "h2", "h3", "h4", "h5", "h6" };
 
 fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.CallbackResult {
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
     const block_type = std.meta.activeTag(detail.*);
     var node: ?*JsonNode = null;
-    var tag: ?[*:0]const u8 = null;
+    var tag: ?[:0]const u8 = null;
 
     switch (detail.*) {
         .doc => tag = null,
@@ -430,23 +466,21 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
             }
             node.?.tag_is_dynamic = true;
             if (d.raw_props.len > 0) {
-                const dup = dupNts(d.raw_props.ptr, d.raw_props.len);
+                const dup = dupNts(d.raw_props);
                 if (dup == null) {
                     ctx.err = 1;
                     return -1;
                 }
                 node.?.detail.component_raw_props = dup;
-                node.?.detail.component_raw_props_size = @intCast(d.raw_props.len);
             }
             if (d.title.len > 0) {
-                const dup = dupNts(d.title.ptr, d.title.len);
+                const dup = dupNts(d.title);
                 if (dup == null) {
                     jsonNodeFree(node);
                     ctx.err = 1;
                     return -1;
                 }
                 node.?.detail.component_title = dup;
-                node.?.detail.component_title_size = @intCast(d.title.len);
             }
         },
         .template => |*d| {
@@ -507,15 +541,14 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
             n.detail.code_filename = jsonAttrToStr(&d.filename);
             if (d.meta.len > 0) {
                 // Note: C ignores OOM here (best-effort) — match that.
-                if (dupNts(d.meta.ptr, d.meta.len)) |dup|
+                if (dupNts(d.meta)) |dup|
                     n.detail.code_meta = dup;
             }
             if (d.highlights.len > 0) {
                 const m = g_alloc.alloc(c_uint, d.highlights.len) catch null;
                 if (m) |arr| {
                     @memcpy(arr, d.highlights);
-                    n.detail.code_highlights = arr.ptr;
-                    n.detail.code_highlight_count = @intCast(d.highlights.len);
+                    n.detail.code_highlights = arr;
                 }
             }
         },
@@ -554,17 +587,14 @@ fn jsonLeaveBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
     // Convert html_block comments to [null, {}, "body"] nodes.
     if (detail.* == .html and ctx.current != null and ctx.current.?.text_value != null) {
         const cur = ctx.current.?;
-        var body: [*]const u8 = undefined;
-        var body_size: c.MD_SIZE = undefined;
-        if (jsonIsHtmlComment(@ptrCast(cur.text_value.?), cur.text_size, &body, &body_size) != 0) {
-            // Replace tag with NULL (comment node).
+        if (jsonIsHtmlComment(cur.text_value.?)) |body| {
+            // Replace tag with null (comment node).
             cur.tag = null;
             // Replace text_value with just the comment body. The old buffer is
             // abandoned to the arena (freed wholesale at deinit).
-            if (dupNts(body, body_size)) |new_text| {
+            if (dupNts(body)) |new_text| {
                 cur.tag_kind = .comment;
                 cur.text_value = new_text;
-                cur.text_size = body_size;
             }
         }
     }
@@ -577,7 +607,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
     const span_type = std.meta.activeTag(detail.*);
     var node: ?*JsonNode = null;
-    var tag: ?[*:0]const u8 = null;
+    var tag: ?[:0]const u8 = null;
 
     // Inside an image: suppress nested spans, just accumulate alt text.
     if (ctx.image_nesting > 0) {
@@ -604,13 +634,12 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
         node.?.tag_is_dynamic = true;
         node.?.tag_kind = .dynamic;
         if (d.raw_props.len > 0) {
-            const dup = dupNts(d.raw_props.ptr, d.raw_props.len);
+            const dup = dupNts(d.raw_props);
             if (dup == null) {
                 ctx.err = 1;
                 return -1;
             }
             node.?.detail.component_raw_props = dup;
-            node.?.detail.component_raw_props_size = @intCast(d.raw_props.len);
         }
     } else {
         switch (detail.*) {
@@ -656,20 +685,16 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
                 n.detail.a_href = jsonAttrToStr(&d.href);
                 n.detail.a_title = jsonAttrToStr(&d.title);
                 if (d.raw_attrs.len > 0) {
-                    if (dupNts(d.raw_attrs.ptr, d.raw_attrs.len)) |dup| {
+                    if (dupNts(d.raw_attrs)) |dup|
                         n.raw_attrs = dup;
-                        n.raw_attrs_size = @intCast(d.raw_attrs.len);
-                    }
                 }
             },
             .img => |*d| {
                 n.detail.img_src = jsonAttrToStr(&d.src);
                 n.detail.img_title = jsonAttrToStr(&d.title);
                 if (d.raw_attrs.len > 0) {
-                    if (dupNts(d.raw_attrs.ptr, d.raw_attrs.len)) |dup| {
+                    if (dupNts(d.raw_attrs)) |dup|
                         n.raw_attrs = dup;
-                        n.raw_attrs_size = @intCast(d.raw_attrs.len);
-                    }
                 }
                 ctx.image_nesting = 1;
             },
@@ -678,20 +703,16 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             },
             .span => |*d| {
                 if (d.raw_attrs.len > 0) {
-                    if (dupNts(d.raw_attrs.ptr, d.raw_attrs.len)) |dup| {
+                    if (dupNts(d.raw_attrs)) |dup|
                         n.raw_attrs = dup;
-                        n.raw_attrs_size = @intCast(d.raw_attrs.len);
-                    }
                 }
             },
             .em, .strong, .code, .del, .u, .mark => |*d| {
                 // These spans may carry trailing {attrs}; an empty raw_attrs
                 // means there were none.
                 if (d.raw_attrs.len > 0) {
-                    if (dupNts(d.raw_attrs.ptr, d.raw_attrs.len)) |dup| {
+                    if (dupNts(d.raw_attrs)) |dup|
                         n.raw_attrs = dup;
-                        n.raw_attrs_size = @intCast(d.raw_attrs.len);
-                    }
                 }
             },
             .latexmath, .latexmath_display => {},
@@ -724,12 +745,9 @@ fn jsonLeaveSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
     return 0;
 }
 
-fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*anyopaque) c.CallbackResult {
+fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaque) c.CallbackResult {
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
-    const text: [*]const u8 = text_slice.ptr;
-    const size: c.MD_SIZE = @intCast(text_slice.len);
-    var value: ?[*:0]u8 = null;
-    var value_size: c.MD_SIZE = 0;
+    var value: ?[:0]u8 = null;
 
     // Guard against unbalanced callbacks causing NULL current.
     if (ctx.current == null) {
@@ -742,22 +760,14 @@ fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*an
 
     // Inside an image: accumulate text as alt attribute.
     if (ctx.image_nesting > 0) {
-        if (text_type == c.TextType.softbr) {
-            if (jsonAppendText(cur, " ", 1) != 0) {
-                ctx.err = 1;
-                return -1;
-            }
-        } else if (text_type == c.TextType.nullchar) {
-            const buf = [_]u8{ 0xEF, 0xBF, 0xBD };
-            if (jsonAppendText(cur, &buf, 3) != 0) {
-                ctx.err = 1;
-                return -1;
-            }
-        } else {
-            if (jsonAppendText(cur, text, size) != 0) {
-                ctx.err = 1;
-                return -1;
-            }
+        const src: []const u8 = switch (text_type) {
+            .softbr => " ",
+            .nullchar => &utf8_replacement_char,
+            else => text,
+        };
+        if (jsonAppendText(cur, src) != 0) {
+            ctx.err = 1;
+            return -1;
         }
         return 0;
     }
@@ -766,16 +776,8 @@ fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*an
     // Dynamic components (tag_is_dynamic) must never match here, even if their
     // name collides with a built-in tag (e.g. ::pre, ::code).
     if (!cur.tag_is_dynamic and cur.tag != null and isLeafContainer(cur.tag_kind)) {
-        var src: [*]const u8 = text;
-        var src_size: c.MD_SIZE = size;
-        const nullchar_buf = [_]u8{ 0xEF, 0xBF, 0xBD };
-
-        if (text_type == c.TextType.nullchar) {
-            src = &nullchar_buf;
-            src_size = 3;
-        }
-
-        if (jsonAppendText(cur, src, src_size) != 0) {
+        const src: []const u8 = if (text_type == c.TextType.nullchar) &utf8_replacement_char else text;
+        if (jsonAppendText(cur, src) != 0) {
             ctx.err = 1;
             return -1;
         }
@@ -796,35 +798,22 @@ fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*an
 
         .softbr => {
             // Softbreak → "\n" text.
-            const buf = allocBytes(2) orelse {
+            value = dupNts("\n") orelse {
                 ctx.err = 1;
                 return -1;
             };
-            buf[0] = '\n';
-            buf[1] = 0;
-            value = @ptrCast(buf);
-            value_size = 1;
         },
 
         .nullchar => {
-            const buf = allocBytes(4) orelse {
+            value = dupNts(&utf8_replacement_char) orelse {
                 ctx.err = 1;
                 return -1;
             };
-            // U+FFFD in UTF-8
-            buf[0] = 0xEF;
-            buf[1] = 0xBF;
-            buf[2] = 0xBD;
-            buf[3] = 0;
-            value = @ptrCast(buf);
-            value_size = 3;
         },
 
         .html => {
             // Inline HTML: check for comment <!-- ... -->
-            var cbody: [*]const u8 = undefined;
-            var cbody_size: c.MD_SIZE = undefined;
-            if (jsonIsHtmlComment(text, size, &cbody, &cbody_size) != 0) {
+            if (jsonIsHtmlComment(text)) |cbody| {
                 // Emit [null, {}, "comment body"] element.
                 const cnode = jsonNodeNew(null, .element);
                 if (cnode == null) {
@@ -832,36 +821,31 @@ fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*an
                     return -1;
                 }
                 cnode.?.tag_kind = .comment;
-                if (cbody_size > 0) {
-                    const dup = dupNts(cbody, cbody_size);
+                if (cbody.len > 0) {
+                    const dup = dupNts(cbody);
                     if (dup == null) {
                         jsonNodeFree(cnode);
                         ctx.err = 1;
                         return -1;
                     }
                     cnode.?.text_value = dup;
-                    cnode.?.text_size = cbody_size;
                 }
                 jsonAppendChild(ctx, cnode.?);
                 return 0;
             }
             // Non-comment inline HTML: fall through to default text handling.
-            const dup = dupNts(text, size) orelse {
+            value = dupNts(text) orelse {
                 ctx.err = 1;
                 return -1;
             };
-            value = dup;
-            value_size = size;
         },
 
         else => {
             // Normal text, entity, code, latexmath.
-            const dup = dupNts(text, size) orelse {
+            value = dupNts(text) orelse {
                 ctx.err = 1;
                 return -1;
             };
-            value = dup;
-            value_size = size;
         },
     }
 
@@ -869,17 +853,10 @@ fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*an
     const prev_opt = cur.last_child;
     if (prev_opt != null and prev_opt.?.kind == .text and prev_opt.?.text_value != null and value != null) {
         const prev = prev_opt.?;
-        const old_size = prev.text_size;
-        const old_slice = @as([*]u8, @ptrCast(prev.text_value.?))[0 .. @as(usize, old_size) + 1];
-        const merged = g_alloc.realloc(old_slice, @as(usize, old_size) + @as(usize, value_size) + 1) catch {
+        prev.text_value = appendToStr(prev.text_value.?, value.?) orelse {
             ctx.err = 1;
             return -1;
         };
-        if (value_size > 0)
-            @memcpy(merged[old_size .. old_size + value_size], @as([*]const u8, @ptrCast(value.?))[0..value_size]);
-        prev.text_size = old_size + value_size;
-        merged[prev.text_size] = 0;
-        prev.text_value = @ptrCast(merged.ptr);
         // `value` is abandoned to the arena.
         return 0;
     }
@@ -891,7 +868,6 @@ fn jsonText(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*an
         return -1;
     }
     node.?.text_value = value;
-    node.?.text_size = value_size;
 
     jsonAppendChild(ctx, node.?);
     return 0;
@@ -909,7 +885,7 @@ fn jsonDebugLog(msg: []const u8, userdata: ?*anyopaque) void {
     _ = sys.fprintf(sys.stderr, "MD4X: %.*s\n", @as(c_int, @intCast(msg.len)), msg.ptr);
 }
 
-fn jsonAlignStr(align_v: c_int) ?[*:0]const u8 {
+fn jsonAlignStr(align_v: c_int) ?[:0]const u8 {
     return switch (align_v) {
         @intFromEnum(c.Align.left) => "left",
         @intFromEnum(c.Align.center) => "center",
@@ -991,8 +967,15 @@ fn jsonWriteParsedProps(w: *JsonWriter, parsed: *const ParsedProps) c_int {
     return n_written;
 }
 
-fn strlenZ(s: [*:0]const u8) c.MD_SIZE {
-    return @intCast(sys.strlen(@ptrCast(s)));
+// Write `s` as a quoted, JSON-escaped string using its **exact** length. Every
+// string in the node tree is a sentinel slice so this can never fall back to
+// strlen(): a NUL is legal document content (the parser reports it as
+// `TextType.nullchar`), and recomputing the length truncated the value there.
+// `json_write_escaped` renders any control byte, U+0000 included, as `\u00xx`,
+// so the raw-byte strings (component props/title, code `meta`, inline `{attrs}`)
+// stay valid JSON and round-trip through JSON.parse().
+fn jsonWriteSlice(w: *JsonWriter, s: []const u8) void {
+    jsonWriteString(w, s.ptr, @intCast(s.len));
 }
 
 // Write the props object for an element node.
@@ -1009,30 +992,35 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
         if (node.first_child != null and node.first_child.?.kind == .element and
             node.first_child.?.tag != null and !node.first_child.?.tag_is_dynamic and
             node.first_child.?.tag_kind == .frontmatter and
-            node.first_child.?.text_value != null and node.first_child.?.text_size > 0)
+            node.first_child.?.text_value != null and node.first_child.?.text_value.?.len > 0)
         {
-            has_prop = @intFromBool(jsonWriteYamlProps(w, @ptrCast(node.first_child.?.text_value.?), node.first_child.?.text_size) > 0);
+            const fm = node.first_child.?.text_value.?;
+            has_prop = @intFromBool(jsonWriteYamlProps(w, fm.ptr, @intCast(fm.len)) > 0);
         }
         // Component title (e.g. :::danger STOP → "title":"STOP").
-        if (node.detail.component_title != null and node.detail.component_title_size > 0) {
-            if (has_prop != 0) jsonWrite(w, ",", 1);
-            jsonWriteStr(w, "\"title\":");
-            jsonWriteString(w, @ptrCast(node.detail.component_title.?), node.detail.component_title_size);
-            has_prop = 1;
+        if (node.detail.component_title) |title| {
+            if (title.len > 0) {
+                if (has_prop != 0) jsonWrite(w, ",", 1);
+                jsonWriteStr(w, "\"title\":");
+                jsonWriteSlice(w, title);
+                has_prop = 1;
+            }
         }
         // Component: parse raw props string. A non-empty raw string can still
         // yield zero props (`{ }`, `{=}`, `{.}`, `{#}`), so the separating comma
         // is emitted only once the parse says something will follow it.
-        if (node.detail.component_raw_props != null and node.detail.component_raw_props_size > 0) {
-            // Declared inside the branch: ParsedProps is ~1.5 KB and Debug /
-            // ReleaseSafe fill `undefined` with 0xaa, so hoisting it would cost
-            // that memset on every element node, prop string or not.
-            var parsed: ParsedProps = undefined;
-            mdParseProps(@ptrCast(node.detail.component_raw_props.?), node.detail.component_raw_props_size, &parsed);
-            if (!parsedPropsAreEmpty(&parsed)) {
-                if (has_prop != 0) jsonWrite(w, ",", 1);
-                _ = jsonWriteParsedProps(w, &parsed);
-                has_prop = 1;
+        if (node.detail.component_raw_props) |raw| {
+            if (raw.len > 0) {
+                // Declared inside the branch: ParsedProps is ~1.5 KB and Debug /
+                // ReleaseSafe fill `undefined` with 0xaa, so hoisting it would cost
+                // that memset on every element node, prop string or not.
+                var parsed: ParsedProps = undefined;
+                mdParseProps(raw.ptr, @intCast(raw.len), &parsed);
+                if (!parsedPropsAreEmpty(&parsed)) {
+                    if (has_prop != 0) jsonWrite(w, ",", 1);
+                    _ = jsonWriteParsedProps(w, &parsed);
+                    has_prop = 1;
+                }
             }
         }
     } else switch (node.tag_kind) {
@@ -1052,34 +1040,35 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             }
         },
         .pre => {
-            if (node.detail.code_lang != null and node.detail.code_lang.?[0] != 0) {
+            if (nonEmpty(node.detail.code_lang)) |lang| {
                 jsonWriteStr(w, "\"language\":");
-                jsonWriteString(w, @ptrCast(node.detail.code_lang.?), strlenZ(node.detail.code_lang.?));
+                jsonWriteSlice(w, lang);
                 has_prop = 1;
             }
-            if (node.detail.code_filename != null and node.detail.code_filename.?[0] != 0) {
+            if (nonEmpty(node.detail.code_filename)) |filename| {
                 if (has_prop != 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "\"filename\":");
-                jsonWriteString(w, @ptrCast(node.detail.code_filename.?), strlenZ(node.detail.code_filename.?));
+                jsonWriteSlice(w, filename);
                 has_prop = 1;
             }
-            if (node.detail.code_highlights != null and node.detail.code_highlight_count > 0) {
-                var buf: [16]u8 = undefined;
-                if (has_prop != 0) jsonWrite(w, ",", 1);
-                jsonWriteStr(w, "\"highlights\":[");
-                var hi: c_uint = 0;
-                while (hi < node.detail.code_highlight_count) : (hi += 1) {
-                    if (hi > 0) jsonWrite(w, ",", 1);
-                    _ = sys.snprintf(&buf, buf.len, "%u", node.detail.code_highlights.?[hi]);
-                    jsonWriteStrZ(w, @ptrCast(&buf));
+            if (node.detail.code_highlights) |highlights| {
+                if (highlights.len > 0) {
+                    var buf: [16]u8 = undefined;
+                    if (has_prop != 0) jsonWrite(w, ",", 1);
+                    jsonWriteStr(w, "\"highlights\":[");
+                    for (highlights, 0..) |hl, hi| {
+                        if (hi > 0) jsonWrite(w, ",", 1);
+                        _ = sys.snprintf(&buf, buf.len, "%u", hl);
+                        jsonWriteStrZ(w, @ptrCast(&buf));
+                    }
+                    jsonWrite(w, "]", 1);
+                    has_prop = 1;
                 }
-                jsonWrite(w, "]", 1);
-                has_prop = 1;
             }
-            if (node.detail.code_meta != null and node.detail.code_meta.?[0] != 0) {
+            if (nonEmpty(node.detail.code_meta)) |meta| {
                 if (has_prop != 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "\"meta\":");
-                jsonWriteString(w, @ptrCast(node.detail.code_meta.?), strlenZ(node.detail.code_meta.?));
+                jsonWriteSlice(w, meta);
                 has_prop = 1;
             }
         },
@@ -1087,76 +1076,77 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             const align_str = jsonAlignStr(node.detail.td_align);
             if (align_str) |a| {
                 jsonWriteStr(w, "\"align\":\"");
-                jsonWriteStrZ(w, a);
+                jsonWriteStr(w, a);
                 jsonWrite(w, "\"", 1);
                 has_prop = 1;
             }
         },
         .a => {
-            if (node.detail.a_href != null) {
+            if (node.detail.a_href) |href| {
                 jsonWriteStr(w, "\"href\":");
-                jsonWriteString(w, @ptrCast(node.detail.a_href.?), strlenZ(node.detail.a_href.?));
+                jsonWriteSlice(w, href);
                 has_prop = 1;
             }
-            if (node.detail.a_title != null and node.detail.a_title.?[0] != 0) {
+            if (nonEmpty(node.detail.a_title)) |title| {
                 if (has_prop != 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "\"title\":");
-                jsonWriteString(w, @ptrCast(node.detail.a_title.?), strlenZ(node.detail.a_title.?));
+                jsonWriteSlice(w, title);
                 has_prop = 1;
             }
         },
         .img => {
-            if (node.detail.img_src != null) {
+            if (node.detail.img_src) |src| {
                 jsonWriteStr(w, "\"src\":");
-                jsonWriteString(w, @ptrCast(node.detail.img_src.?), strlenZ(node.detail.img_src.?));
+                jsonWriteSlice(w, src);
                 has_prop = 1;
             }
-            if (node.text_value != null) {
+            if (node.text_value) |alt| {
                 if (has_prop != 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "\"alt\":");
-                jsonWriteString(w, @ptrCast(node.text_value.?), node.text_size);
+                jsonWriteSlice(w, alt);
                 has_prop = 1;
             }
-            if (node.detail.img_title != null and node.detail.img_title.?[0] != 0) {
+            if (nonEmpty(node.detail.img_title)) |title| {
                 if (has_prop != 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "\"title\":");
-                jsonWriteString(w, @ptrCast(node.detail.img_title.?), strlenZ(node.detail.img_title.?));
+                jsonWriteSlice(w, title);
                 has_prop = 1;
             }
         },
         .wikilink => {
-            if (node.detail.wikilink_target != null) {
+            if (node.detail.wikilink_target) |target| {
                 jsonWriteStr(w, "\"target\":");
-                jsonWriteString(w, @ptrCast(node.detail.wikilink_target.?), strlenZ(node.detail.wikilink_target.?));
+                jsonWriteSlice(w, target);
                 has_prop = 1;
             }
         },
         .template => {
-            if (node.detail.tmpl_name != null) {
+            if (node.detail.tmpl_name) |name| {
                 jsonWriteStr(w, "\"name\":");
-                jsonWriteString(w, @ptrCast(node.detail.tmpl_name.?), strlenZ(node.detail.tmpl_name.?));
+                jsonWriteSlice(w, name);
                 has_prop = 1;
             }
         },
         .alert => {
-            if (node.detail.alert_type_name != null) {
+            if (node.detail.alert_type_name) |type_name| {
                 jsonWriteStr(w, "\"type\":");
-                jsonWriteString(w, @ptrCast(node.detail.alert_type_name.?), strlenZ(node.detail.alert_type_name.?));
+                jsonWriteSlice(w, type_name);
                 has_prop = 1;
             }
         },
         .frontmatter => {
-            if (node.text_value != null and node.text_size > 0) {
-                has_prop = @intFromBool(jsonWriteYamlProps(w, @ptrCast(node.text_value.?), node.text_size) > 0);
+            if (node.text_value) |fm| {
+                if (fm.len > 0)
+                    has_prop = @intFromBool(jsonWriteYamlProps(w, fm.ptr, @intCast(fm.len)) > 0);
             }
         },
         .footnote_def => {
             var buf: [32]u8 = undefined;
             _ = sys.snprintf(&buf, buf.len, "\"id\":%u", node.detail.footnote_id);
             jsonWriteStrZ(w, @ptrCast(&buf));
-            if (node.detail.footnote_label != null) {
+            if (node.detail.footnote_label) |label| {
                 jsonWriteStr(w, ",\"label\":");
-                jsonWriteString(w, @ptrCast(node.detail.footnote_label.?), strlenZ(node.detail.footnote_label.?));
+                jsonWriteSlice(w, label);
             }
             _ = sys.snprintf(&buf, buf.len, ",\"refCount\":%u", node.detail.footnote_ref_count);
             jsonWriteStrZ(w, @ptrCast(&buf));
@@ -1168,9 +1158,9 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             jsonWriteStrZ(w, @ptrCast(&buf));
             _ = sys.snprintf(&buf, buf.len, ",\"refId\":%u", node.detail.footnote_ref_id);
             jsonWriteStrZ(w, @ptrCast(&buf));
-            if (node.detail.footnote_label != null) {
+            if (node.detail.footnote_label) |label| {
                 jsonWriteStr(w, ",\"label\":");
-                jsonWriteString(w, @ptrCast(node.detail.footnote_label.?), strlenZ(node.detail.footnote_label.?));
+                jsonWriteSlice(w, label);
             }
             has_prop = 1;
         },
@@ -1179,18 +1169,28 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
 
     // Merge inline attributes from trailing {attrs} syntax. Same rule as above:
     // parse once, and only then decide whether a separator is due.
-    if (node.raw_attrs != null and node.raw_attrs_size > 0) {
-        var parsed: ParsedProps = undefined;
-        mdParseProps(@ptrCast(node.raw_attrs.?), node.raw_attrs_size, &parsed);
-        if (!parsedPropsAreEmpty(&parsed)) {
-            if (has_prop != 0) jsonWrite(w, ",", 1);
-            _ = jsonWriteParsedProps(w, &parsed);
-            has_prop = 1;
+    if (node.raw_attrs) |raw| {
+        if (raw.len > 0) {
+            var parsed: ParsedProps = undefined;
+            mdParseProps(raw.ptr, @intCast(raw.len), &parsed);
+            if (!parsedPropsAreEmpty(&parsed)) {
+                if (has_prop != 0) jsonWrite(w, ",", 1);
+                _ = jsonWriteParsedProps(w, &parsed);
+                has_prop = 1;
+            }
         }
     }
 
     // (C had a `(void) has_prop;` here; has_prop is read above, so nothing to do.)
     jsonWrite(w, "}", 1);
+}
+
+// Unwrap an optional string, folding the empty string onto "absent". These
+// props were previously guarded by `s[0] != 0`, i.e. "non-empty as a C string";
+// with exact lengths the same intent is `len > 0`.
+fn nonEmpty(s: ?[:0]u8) ?[:0]u8 {
+    const v = s orelse return null;
+    return if (v.len > 0) v else null;
 }
 
 fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
@@ -1222,31 +1222,34 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
 
             // Emit frontmatter field.
             jsonWriteStr(w, "],\"frontmatter\":{");
-            if (fm_node != null and fm_node.?.text_value != null and fm_node.?.text_size > 0) {
-                _ = jsonWriteYamlProps(w, @ptrCast(fm_node.?.text_value.?), fm_node.?.text_size);
+            if (fm_node) |fm| {
+                if (fm.text_value) |text| {
+                    if (text.len > 0)
+                        _ = jsonWriteYamlProps(w, text.ptr, @intCast(text.len));
+                }
             }
 
             jsonWriteStr(w, "},\"meta\":{}}");
         },
 
         .text => {
-            jsonWriteString(w, @ptrCast(node.text_value.?), node.text_size);
+            jsonWriteSlice(w, node.text_value.?);
         },
 
         .element => {
             // Comment nodes: [null, {}, "body"]
             if (node.tag == null) {
                 jsonWriteStr(w, "[null,{}");
-                if (node.text_value != null) {
+                if (node.text_value) |text| {
                     jsonWrite(w, ",", 1);
-                    jsonWriteString(w, @ptrCast(node.text_value.?), node.text_size);
+                    jsonWriteSlice(w, text);
                 }
                 jsonWrite(w, "]", 1);
                 return;
             }
 
             jsonWriteStr(w, "[\"");
-            jsonWriteStrZ(w, node.tag.?);
+            jsonWriteStr(w, node.tag.?);
             jsonWriteStr(w, "\",");
 
             // Write props.
@@ -1256,19 +1259,17 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
             // Dynamic components always use the regular container path.
             if (!node.tag_is_dynamic and node.tag_kind == .pre) {
                 jsonWriteStr(w, ",[\"code\",{");
-                if (node.detail.code_lang != null and node.detail.code_lang.?[0] != 0) {
-                    const lang = node.detail.code_lang.?;
-                    const lang_size = strlenZ(lang);
+                if (nonEmpty(node.detail.code_lang)) |lang| {
                     jsonWriteStr(w, "\"class\":\"");
                     // Do not repeat the prefix if the info string already carries it.
-                    if (!std.mem.startsWith(u8, lang[0..lang_size], "language-"))
+                    if (!std.mem.startsWith(u8, lang, "language-"))
                         jsonWriteStr(w, "language-");
-                    jsonWriteEscaped(w, @ptrCast(lang), lang_size);
+                    jsonWriteEscaped(w, lang.ptr, @intCast(lang.len));
                     jsonWrite(w, "\"", 1);
                 }
                 jsonWriteStr(w, "},");
-                if (node.text_value != null)
-                    jsonWriteString(w, @ptrCast(node.text_value.?), node.text_size)
+                if (node.text_value) |text|
+                    jsonWriteSlice(w, text)
                 else
                     jsonWriteStr(w, "\"\"");
                 jsonWrite(w, "]", 1);
@@ -1278,14 +1279,14 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
                 (node.tag_kind == .html_block or node.tag_kind == .frontmatter))
             {
                 jsonWrite(w, ",", 1);
-                jsonWriteString(w, @ptrCast(node.text_value.?), node.text_size);
+                jsonWriteSlice(w, node.text_value.?);
             }
             // Inline code, math, math-display: emit literal as text child.
             else if (!node.tag_is_dynamic and node.text_value != null and
                 (node.tag_kind == .code or node.tag_kind == .math or node.tag_kind == .math_display))
             {
                 jsonWrite(w, ",", 1);
-                jsonWriteString(w, @ptrCast(node.text_value.?), node.text_size);
+                jsonWriteSlice(w, node.text_value.?);
             }
             // img: void element, no children (alt is in props).
             else if (!node.tag_is_dynamic and node.tag_kind == .img) {
