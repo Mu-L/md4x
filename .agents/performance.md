@@ -65,6 +65,35 @@ it, and the "skip to the end of the fence line" inner loop can be left unfinishe
 `skipping` flag carries. Both only work if **`text[0..pos]` never changes after being queried** —
 which is why the caller had to stop mutating in place, below.
 
+## Nor may a loop re-ask a monotone question over a growing range
+
+`heal_strikethrough` was the fourth-and-a-half case, and it hid behind the trigger shape rather than
+behind a helper: both of its **descending** loops call `has_meaningful_content` over a range whose
+left edge is the loop index, so the range GROWS as the index falls. `'~~ '*n + '~'` — the trailing
+`~` is what arms the `size >= 4 && text[size-1] == '~'` guard on the first loop; a trailing `x`
+instead drops it to 0.002 s — took 2.09 s at 100 KB, 4.32 s at 200 KB and 31.6 s at 400 KB. The
+simpler `'~'*n` trigger was already linear, which is why this one survived the round of fixes above.
+
+`has_meaningful_content(text, start, end)` is **monotone in `start`** for a fixed `end`, and both
+loops hold `end` fixed. So the whole query family collapses to one number:
+`last_meaningful_index(text, end) >= start`. One hoisted backward scan per loop, O(1) per query,
+O(n) overall — 0.018 s at 1 MB, matching the prose baseline.
+
+That is deliberately a **precomputed index, not a resumable cursor**. The three scanners above exist
+because their predicates carry a state machine that must be advanced in document order, so they are
+exact only for non-decreasing queries; these callers walk **backward**, which a forward cursor cannot
+serve at all. Pick by the shape of the query, not by precedent: stateless predicate + monotone
+argument → hoist one scan; stateful predicate + forward-only queries → resumable cursor.
+
+The general lesson is the **audit rule**, not the fix: any helper called inside a loop whose scan
+range depends on the loop index is a candidate, in either direction. A sweep of the rest of the file
+(`is_escaped`, `in_complete_inline_code`, `count_*`, `match_bold_at_end`'s inner `**` scan,
+`find_matching_open_bracket`, `line_start`/`line_end`, `heal_katex`'s inner newline scan,
+`heal_html_tag`) with 38 purpose-built triggers found no others — all scale 2.0x per doubling out to
+32 MB. **Time the candidate; do not reason about it.** `match_bold_at_end` in particular _looks_
+quadratic and is not: consecutive candidates are each preceded by a `**`, so the inner scans
+telescope.
+
 ## Nor may a healer splice per insertion
 
 `heal_comparison_operators` also `memmove`d the whole tail one byte right for every backslash it

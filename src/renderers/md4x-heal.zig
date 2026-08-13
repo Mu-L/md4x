@@ -658,15 +658,49 @@ fn count_double_dollars(text: [*]const u8, size: u32) u32 {
     return count;
 }
 
+fn is_meaningful_char(c: u8) bool {
+    return c != ' ' and c != '\t' and c != '\n' and c != '\r' and
+        c != '*' and c != '_' and c != '~' and c != '`';
+}
+
 fn has_meaningful_content(text: [*]const u8, start: u32, end: u32) bool {
     var i: u32 = start;
     while (i < end) : (i +%= 1) {
-        const c = text[i];
-        if (c != ' ' and c != '\t' and c != '\n' and c != '\r' and
-            c != '*' and c != '_' and c != '~' and c != '`')
+        if (is_meaningful_char(text[i]))
             return true;
     }
     return false;
+}
+
+// Index of the last meaningful byte in `text[0..end)`, or null when there is
+// none — i.e. the single number that answers `has_meaningful_content(text,
+// start, end)` for **every** `start`, as `last >= start`.
+//
+// The predicate is monotone in `start` for a fixed `end`: widening the range
+// leftward can only add candidates. `heal_strikethrough`'s two descending loops
+// each hold `end` fixed and let `start` fall, so each of them asked the same
+// monotone question over a range that GREW every iteration — O(n^2), and
+// reachable from untrusted input (`heal()` is exported to the JS bindings and
+// `--heal` applies to every renderer). `'~~ '*n + '~'` — the trailing `~` is
+// what arms the first loop's guard — took 2.09 s at 100 KB, 4.32 s at 200 KB
+// and 31.6 s at 400 KB. Hoisting one backward scan out of each loop makes every
+// query a comparison and the whole healer O(n).
+//
+// This is deliberately a precomputed index rather than a resumable cursor like
+// `MathScanner` / `LineContextScanner` / `FenceScanner`. Those exist because
+// their predicates carry a **state machine** that must be advanced in document
+// order, so they are exact only for non-decreasing queries. This one is
+// stateless and its callers walk **backward**, which a forward cursor could not
+// serve at all; a single hoisted scan is both simpler and exact for any query
+// order.
+fn last_meaningful_index(text: [*]const u8, end: u32) ?u32 {
+    var i: u32 = end;
+    while (i > 0) {
+        i -%= 1;
+        if (is_meaningful_char(text[i]))
+            return i;
+    }
+    return null;
 }
 
 fn match_bold_at_end(text: [*]const u8, size: u32) u32 {
@@ -826,10 +860,15 @@ fn heal_strikethrough(buf: *HEAL_BUF) void {
     if (size >= 4 and text[size - 1] == '~' and
         text[size - 2] != '~' and text[size - 2] != '\\')
     {
+        // Every query in this loop is `has_meaningful_content(text, i + 1,
+        // size - 1)` — `end` fixed, `start` falling — so one scan answers all
+        // of them. Hoisted out of the loop rather than computed per iteration:
+        // that is the whole fix.
+        const last = last_meaningful_index(text, size - 1);
         var i: u32 = size - 2;
         while (i > 0) {
             if (text[i] == '~' and i > 0 and text[i - 1] == '~') {
-                if (has_meaningful_content(text, i + 1, size - 1)) {
+                if (last != null and last.? >= i + 1) {
                     buf_append_ch(buf, '~');
                     return;
                 }
@@ -840,11 +879,13 @@ fn heal_strikethrough(buf: *HEAL_BUF) void {
 
     const pairs = count_double_tildes(text, size);
     if (pairs % 2 != 0) {
+        // Same shape, with `end` fixed at `size` this time.
+        const last = last_meaningful_index(text, size);
         // for(i = size; i >= 2; i--)
         var i: u32 = size;
         while (i >= 2) : (i -%= 1) {
             if (text[i - 2] == '~' and text[i - 1] == '~') {
-                if (i < size and has_meaningful_content(text, i, size)) {
+                if (i < size and last != null and last.? >= i) {
                     buf_append(buf, "~~", 2);
                     return;
                 }
