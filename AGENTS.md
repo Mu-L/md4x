@@ -74,5 +74,6 @@ scripts/
   unicode/            # Unicode data files
 website/              # Docs + playground (Vite + Vue) — pages/, components/, samples/
 build.zig, build.zig.zon
-.github/workflows/    # Build + test (Linux/Windows, debug/release, coverage)
+.github/workflows/    # ci.yml: build + test (ubuntu-latest, ReleaseSafe + Debug) + Pages deploy
+                      # release.yml: build + test + npm publish on tags
 ```

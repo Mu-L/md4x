@@ -19,6 +19,8 @@ Suites: `spec.txt`, `spec-tables.txt`, `spec-strikethrough.txt`, `spec-tasklists
 `regressions.txt`, `coverage.txt`.
 
 Both `bun scripts/run-tests.ts` and `.github/workflows/ci.yml` run the Zig unit tests on every PR.
+CI additionally smoke-runs `zig build fuzz-zig` (see [Fuzzing](#fuzzing)); it does **not** run
+`scripts/diff-corpus.sh`, which stays a local gate.
 
 ## The test artifact is pinned to a safe optimize mode
 

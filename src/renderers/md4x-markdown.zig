@@ -1,5 +1,5 @@
 // MD4X: Markdown parser for C
-// (http://github.com/unjs/md4x)
+// (https://github.com/unjs/md4x)
 //
 // Copyright (c) 2026 Pooya Parsa <pooya@pi0.io>
 //
