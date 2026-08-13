@@ -110,7 +110,8 @@ GitHub-style alert/admonition syntax. A blockquote whose first line is `> [!TYPE
 > This is a warning
 ```
 
-- TYPE is any alphanumeric/hyphenated name (`[a-zA-Z][a-zA-Z0-9_-]*`), case-insensitive
+- TYPE is any non-empty ASCII name matching `[a-zA-Z0-9_-]+`, case-insensitive. The charset is applied uniformly from the first character, so a type may also begin with a digit, `-` or `_` (`[!123]`, `[!-x]`, `[!_]` are all alerts). Non-ASCII letters are not accepted
+- The parser reports the type as **source text** (`"NOTE"`); only the HTML renderer lowercases it for the class name, so a consumer matching on the JSON/AST prop must case-fold itself
 - The `[!TYPE]` line must be the **first line** of the blockquote and the **only content** on that line
 - Text after `[!TYPE]` on the same line disqualifies it (treated as normal blockquote)
 - `[!TYPE]` not on the first line is treated as literal text

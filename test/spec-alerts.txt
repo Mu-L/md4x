@@ -228,3 +228,324 @@ Content</p>
 <p>See <a href="http://example.com">example</a> for details</p>
 </blockquote>
 ````````````````````````````````
+
+## Indented tag is an indented code block, not an alert
+
+The recognizer is gated on `line.indent < code_indent_offset`. Five spaces
+after the `>` leave four columns of indent inside the quote, which opens an
+indented code block before the tag is ever considered (md4c #336, `110011e`).
+
+```````````````````````````````` example
+>     [!tip]
+> foo
+.
+<blockquote>
+<pre><code>[!tip]
+</code></pre>
+<p>foo</p>
+</blockquote>
+````````````````````````````````
+
+## Indent boundary: three columns still opens an alert
+
+One space fewer than the case above -- three columns of indent -- is still
+below `code_indent_offset`, so this *is* an alert. The pair pins the exact
+boundary.
+
+```````````````````````````````` example
+>    [!tip]
+> foo
+.
+<blockquote class="alert alert-tip">
+<p>foo</p>
+</blockquote>
+````````````````````````````````
+
+## Paragraph then alert with no blank line between them
+
+A block quote interrupts a paragraph, and the quote it opens is still eligible
+to be an alert -- the tag line is the first line of a container opened on that
+same line (md4c #334, `56eec98`). The `-` then opens an empty list item.
+
+```````````````````````````````` example
+foo
+>[!tip]
+>-
+.
+<p>foo</p>
+<blockquote class="alert alert-tip">
+<ul>
+<li></li>
+</ul>
+</blockquote>
+````````````````````````````````
+
+## Indented code block before an alert
+
+The pivot line is reset when the code block ends, so the quote that follows is
+analyzed fresh and its tag line is recognized (md4c #320, `5f9b246`).
+
+```````````````````````````````` example
+    codeblock
+> [!note]
+> foo
+.
+<pre><code>codeblock
+</code></pre>
+<blockquote class="alert alert-note">
+<p>foo</p>
+</blockquote>
+````````````````````````````````
+
+## Blank `>` line before the tag: not an alert
+
+The tag must be on the line that *opens* the quote container. A bare `>` opens
+it first, so the tag line is ordinary text (md4c #327, `c9e4a7c`).
+
+```````````````````````````````` example
+>
+> [!note]
+> x
+.
+<blockquote>
+<p>[!note]
+x</p>
+</blockquote>
+````````````````````````````````
+
+## Lazy continuation after the tag
+
+The tag line is disposed of as blank, so nothing is left for the following
+unindented line to lazily continue: the alert comes out empty and the text
+becomes a sibling paragraph. Surprising, but it matches md4c and is pinned
+deliberately.
+
+```````````````````````````````` example
+> [!note]
+text
+.
+<blockquote class="alert alert-note">
+</blockquote>
+<p>text</p>
+````````````````````````````````
+
+## Trailing whitespace after the tag
+
+md4x skips blanks before the end-of-line test, so a tag with trailing spaces is
+still an alert. (md4c length-matches the tag exactly instead.) The trailing
+spaces on the input line below are significant.
+
+```````````````````````````````` example
+> [!note]   
+> x
+.
+<blockquote class="alert alert-note">
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+## Alert nested inside an alert
+
+```````````````````````````````` example
+> [!note]
+> > [!tip]
+> > y
+.
+<blockquote class="alert alert-note">
+<blockquote class="alert alert-tip">
+<p>y</p>
+</blockquote>
+</blockquote>
+````````````````````````````````
+
+## Alert inside a list item
+
+```````````````````````````````` example
+- > [!tip]
+  > x
+.
+<ul>
+<li><blockquote class="alert alert-tip">
+<p>x</p>
+</blockquote>
+</li>
+</ul>
+````````````````````````````````
+
+## Not an alert: unclosed bracket
+
+```````````````````````````````` example
+> [!note
+> x
+.
+<blockquote>
+<p>[!note
+x</p>
+</blockquote>
+````````````````````````````````
+
+## Not an alert: extra closing bracket
+
+```````````````````````````````` example
+> [!note]]
+> x
+.
+<blockquote>
+<p>[!note]]
+x</p>
+</blockquote>
+````````````````````````````````
+
+## Not an alert: empty type
+
+```````````````````````````````` example
+> [!]
+> x
+.
+<blockquote>
+<p>[!]
+x</p>
+</blockquote>
+````````````````````````````````
+
+## Colon after the tag: the line becomes a link reference definition
+
+`[!NOTE]: something` is a well-formed link reference definition, and ref-def
+scanning runs before alert detection. The line is consumed and emits nothing at
+all -- neither an alert nor visible text. The label is usable afterwards.
+
+```````````````````````````````` example
+> [!NOTE]: something
+> x
+.
+<blockquote>
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+> [!NOTE]: /url
+> x [!NOTE]
+.
+<blockquote>
+<p>x <a href="/url">!NOTE</a></p>
+</blockquote>
+````````````````````````````````
+
+## Not an alert: attribute block after the tag
+
+```````````````````````````````` example
+> [!NOTE]{.cls}
+> x
+.
+<blockquote>
+<p><span class="cls">!NOTE</span>
+x</p>
+</blockquote>
+````````````````````````````````
+
+## No space after the `>`
+
+```````````````````````````````` example
+>[!note]
+>x
+.
+<blockquote class="alert alert-note">
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+## Not an alert: non-ASCII type
+
+The type charset is ASCII-only, so a non-ASCII letter is not accepted.
+
+```````````````````````````````` example
+> [!ünï]
+> x
+.
+<blockquote>
+<p>[!ünï]
+x</p>
+</blockquote>
+````````````````````````````````
+
+## Type charset: digits, underscore and leading punctuation
+
+`[a-zA-Z0-9_-]+` is applied uniformly from the first character, so a type may
+begin with a digit, a hyphen or an underscore. The name is lowercased into the
+class verbatim, with no separator normalization.
+
+```````````````````````````````` example
+> [!v2_note]
+> x
+.
+<blockquote class="alert alert-v2_note">
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+> [!123]
+> x
+.
+<blockquote class="alert alert-123">
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+> [!-x]
+> x
+.
+<blockquote class="alert alert--x">
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+```````````````````````````````` example
+> [!_]
+> x
+.
+<blockquote class="alert alert-_">
+<p>x</p>
+</blockquote>
+````````````````````````````````
+
+## Unknown type is still an alert
+
+md4c rejects any admonition tag outside its fixed five-name table and renders
+it literally. md4x accepts arbitrary types by design, so this is a deliberate
+divergence from md4c #320.
+
+```````````````````````````````` example
+> [!noteX]
+> foo
+.
+<blockquote class="alert alert-notex">
+<p>foo</p>
+</blockquote>
+````````````````````````````````
+
+## Table as alert content
+
+```````````````````````````````` example
+> [!note]
+> | a |
+> |---|
+> | b |
+.
+<blockquote class="alert alert-note">
+<table>
+<thead>
+<tr>
+<th>a</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+````````````````````````````````

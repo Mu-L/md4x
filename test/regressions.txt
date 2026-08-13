@@ -1492,6 +1492,25 @@ their own copy of the encoder and must agree with the HTML one.
 ````````````````````````````````
 
 
+## [PR 325](https://github.com/mity/md4c/pull/325) (hard line breaks)
+
+Per CommonMark a backslash before a line ending is a recognized escape
+producing a hard line break, and that holds inside a link *title* too. The HTML
+renderer does not distinguish a hard break from an ordinary newline, so this is
+invisible here -- but a custom SAX consumer sees `MD_TEXT_BR` rather than a
+literal backslash followed by content, and the title must not keep the `\`.
+
+```````````````````````````````` example
+[foo]: /url "ti\
+tle"
+
+[foo]
+.
+<p><a href="/url" title="ti
+tle">foo</a></p>
+````````````````````````````````
+
+
 ## [Issue 368](https://github.com/mity/md4c/issues/368)
 
 A CommonMark `<scheme:...>` autolink's scheme must *begin* with an alphanumeric
@@ -1975,6 +1994,20 @@ is emitted at all.
 [^x]:
 [**x*]()
 .
+````````````````````````````````
+
+
+## [Issue 352](https://github.com/mity/md4c/issues/352)
+
+A `[^` footnote-reference opener swallowed by an inline link *destination*.
+The `[^` never becomes a reference, the image resolves with the bracket bytes
+percent-encoded into its `src`, and the remainder stays literal (md4c
+`fb4d03d` / `6ed63d1`).
+
+```````````````````````````````` example
+![]([^)*]()
+.
+<p><img src="%5B%5E" alt="">*]()</p>
 ````````````````````````````````
 
 
