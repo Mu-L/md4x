@@ -39,6 +39,7 @@ const sys = @cImport({
     @cInclude("stdio.h");
     @cInclude("yaml.h");
 });
+const diag = @import("md4x-diag.zig");
 
 const c_allocator = std.heap.c_allocator;
 
@@ -1454,7 +1455,7 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
 fn debug_log_callback(msg: []const u8, userdata: ?*anyopaque) void {
     const r: *MD_HTML = @ptrCast(@alignCast(userdata.?));
     if (r.flags & MD_HTML_FLAG_DEBUG != 0)
-        _ = sys.fprintf(sys.stderr, "MD4X: %.*s\n", @as(c_int, @intCast(msg.len)), msg.ptr);
+        diag.logMessage(msg);
 }
 
 // **************************************

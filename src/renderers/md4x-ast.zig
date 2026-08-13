@@ -38,6 +38,7 @@ const sys = @cImport({
     @cInclude("string.h");
     @cInclude("yaml.h");
 });
+const diag = @import("md4x-diag.zig");
 
 const c_allocator = std.heap.c_allocator;
 
@@ -993,7 +994,7 @@ fn isLeafContainer(kind: TagKind) bool {
 
 fn jsonDebugLog(msg: []const u8, userdata: ?*anyopaque) void {
     _ = userdata;
-    _ = sys.fprintf(sys.stderr, "MD4X: %.*s\n", @as(c_int, @intCast(msg.len)), msg.ptr);
+    diag.logMessage(msg);
 }
 
 fn jsonAlignStr(align_v: c_int) ?[:0]const u8 {

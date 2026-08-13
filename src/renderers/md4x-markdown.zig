@@ -26,17 +26,16 @@
 const std = @import("std");
 
 // MD_* types now come from the Zig-native
-// abi module (replacing md4x.h / entity.h / md4x-heal.h); only genuinely
-// external C headers stay in a @cImport, bound as `sys`.
+// abi module (replacing md4x.h / entity.h / md4x-heal.h); this renderer needs
+// no external C header of its own — the debug sink's stderr write lives in the
+// shared md4x-diag.zig.
 const c = @import("abi");
 // Sibling units are imported directly (one Zig module per artifact), not
 // resolved through link-time C-ABI symbols. `abi` holds types only.
 const md4x = @import("../md4x.zig");
 const entity = @import("../entity.zig");
 const heal = @import("md4x-heal.zig");
-const sys = @cImport({
-    @cInclude("stdio.h");
-});
+const diag = @import("md4x-diag.zig");
 
 const c_allocator = std.heap.c_allocator;
 
@@ -1103,7 +1102,7 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
 fn debug_log_callback(msg: []const u8, userdata: ?*anyopaque) void {
     const r: *MD_MARKDOWN = @ptrCast(@alignCast(userdata.?));
     if (r.flags & MD_MARKDOWN_FLAG_DEBUG != 0)
-        _ = sys.fprintf(sys.stderr, "MD4X: %.*s\n", @as(c_int, @intCast(msg.len)), msg.ptr);
+        diag.logMessage(msg);
 }
 
 // **************************************

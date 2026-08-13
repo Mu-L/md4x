@@ -37,6 +37,7 @@ const heal = @import("md4x-heal.zig");
 const sys = @cImport({
     @cInclude("stdio.h");
 });
+const diag = @import("md4x-diag.zig");
 
 const c_allocator = std.heap.c_allocator;
 
@@ -334,7 +335,7 @@ fn meta_text(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata: ?*a
 
 fn meta_debug_log(msg: []const u8, userdata: ?*anyopaque) void {
     _ = userdata;
-    _ = sys.fprintf(sys.stderr, "MD4X: %.*s\n", @as(c_int, @intCast(msg.len)), msg.ptr);
+    diag.logMessage(msg);
 }
 
 // **************************************
