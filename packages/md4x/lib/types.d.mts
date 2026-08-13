@@ -1,7 +1,14 @@
 export type ComarkTree = {
   nodes: ComarkNode[];
   frontmatter: Record<string, unknown>;
-  meta: Record<string, unknown>;
+  /**
+   * Open bag, empty for ordinary documents.
+   *
+   * `maxDepthExceeded: true` means the document nested deeper than the AST
+   * renderer's 1024-level cap: the content past it is preserved but flattened
+   * into the deepest node that fit, so the tree is shallower than the source.
+   */
+  meta: Record<string, unknown> & { maxDepthExceeded?: true };
 };
 
 export type ComarkNode = ComarkElement | ComarkText;

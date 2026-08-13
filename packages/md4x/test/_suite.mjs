@@ -28,6 +28,24 @@ const MALFORMED_FRONTMATTER = [
   ["complex key", "---\n? [a]\n: b\n---\n\nhi"],
 ];
 
+// Walk the deepest chain of element tuples, iteratively: the trees below are
+// ~1000 levels deep on purpose, and a recursive walk would be measuring the JS
+// engine's own stack instead of the renderer's output. Returns the number of
+// element levels and the text found at the bottom of the chain.
+function deepestChain(nodes) {
+  let node = nodes[0];
+  let depth = 0;
+  let text;
+  while (Array.isArray(node)) {
+    depth++;
+    const children = node.slice(2);
+    const str = children.find((c) => typeof c === "string");
+    if (str !== undefined) text = str;
+    node = children.find((c) => Array.isArray(c));
+  }
+  return { depth, text };
+}
+
 export function defineSuite({
   renderToHtml,
   renderToAST,
@@ -260,6 +278,34 @@ export function defineSuite({
       const json = await renderToAST("");
       const parsed = JSON.parse(json);
       expect(parsed.nodes).toHaveLength(0);
+    });
+
+    // The AST renderer is the only one that materializes a tree, so it is the
+    // only one with a nesting cap (JSON_MAX_DEPTH = 1024 in
+    // src/renderers/md4x-ast.zig -- its serializer recurses once per level).
+    // The parser itself has no such limit, and every streaming renderer emits
+    // arbitrarily deep input, but the AST renderer used to set its error flag
+    // past the cap: md_ast() returned -1 and emitted zero bytes, so this call
+    // threw for the WHOLE document because of one deep blockquote or list.
+    // It now stops nesting instead -- the content survives, the JSON parses,
+    // and the tree's `meta` bag reports the collapse.
+    it("nests the full document up to the depth cap", async () => {
+      // 1022 blockquotes + the paragraph = 1023 element levels, plus the
+      // document node itself = the 1024 the renderer allows.
+      const tree = JSON.parse(await renderToAST(">".repeat(1022) + " x"));
+      expect(tree.meta).toEqual({});
+      expect(deepestChain(tree.nodes)).toEqual({ depth: 1023, text: "x" });
+    });
+
+    it("collapses nesting past the depth cap instead of failing", async () => {
+      for (const depth of [1023, 1024, 5000]) {
+        const json = await renderToAST(">".repeat(depth) + " x");
+        const tree = JSON.parse(json);
+        expect(tree.meta).toEqual({ maxDepthExceeded: true });
+        // Everything past the cap is flattened into the deepest node kept,
+        // text included -- nothing is dropped and nothing nests further.
+        expect(deepestChain(tree.nodes)).toEqual({ depth: 1023, text: "x" });
+      }
     });
   });
 

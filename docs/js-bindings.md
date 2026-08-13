@@ -218,7 +218,7 @@ When `highlighter` is provided, code blocks are rendered with metadata tracking.
 
 The package exports TypeScript types for the Comark AST:
 
-- `ComarkTree` — Root container: `{ nodes: ComarkNode[], frontmatter: Record<string, unknown>, meta: Record<string, unknown> }`
+- `ComarkTree` — Root container: `{ nodes: ComarkNode[], frontmatter: Record<string, unknown>, meta: Record<string, unknown> }`. `meta` is an open bag and is empty for ordinary documents; the renderer sets `maxDepthExceeded: true` there when a document nested deeper than the AST renderer's 1024-level cap and the excess was collapsed (see `docs/renderers.md`)
 - `ComarkNode` — Either a `ComarkElement` (tuple array) or `ComarkText` (plain string)
 - `ComarkElement` — Tuple: `[tag: string | null, props: ComarkElementAttributes, ...children: ComarkNode[]]`
 - `ComarkText` — Plain string representing text content

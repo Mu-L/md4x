@@ -75,6 +75,27 @@ pathological = {
     "deeply nested lists":
             ("".join(map(lambda x: ("  " * x + "* a\n"), range(0,1000))),
             re.compile("<ul>\r?\n(<li>a<ul>\r?\n){999}<li>a</li>\r?\n</ul>\r?\n(</li>\r?\n</ul>\r?\n){999}")),
+    # --format=json cases. The AST renderer is the only one that materializes a
+    # tree, so it is the only one with a nesting limit (JSON_MAX_DEPTH in
+    # src/renderers/md4x-ast.zig -- its serializer recurses once per level).
+    # Every case above proves the PARSER has no such limit, and the streaming
+    # renderers happily emit "> " * 300000, so the AST renderer used to be the
+    # one that fell over: past the limit it set ctx->err, md_ast() returned -1
+    # and emitted ZERO bytes -- one deep blockquote or list anywhere in a
+    # document killed the whole render (a thrown Error through the JS
+    # bindings). It now stops nesting instead, keeping the content and saying
+    # so in the tree's `meta` bag. Both cases therefore assert three things: a
+    # zero exit code, the exact depth the tree stops at, and the flag.
+    "deeply nested block quotes (json)":
+            ((("> " * 50000) + "a"),
+            re.compile(r'^\{"nodes":\[(\["blockquote",\{\},){1023}"a"\]{1023}\],'
+                       r'"frontmatter":\{\},"meta":\{"maxDepthExceeded":true\}\}'),
+            ["--format=json"]),
+    "deeply nested lists (json)":
+            ("".join(map(lambda x: ("  " * x + "* a\n"), range(0,1000))),
+            re.compile(r'^\{"nodes":\[(\["ul",\{\},\["li",\{\},"a",){511}\["ul",\{\},"a{489}"[\]]+,'
+                       r'"frontmatter":\{\},"meta":\{"maxDepthExceeded":true\}\}'),
+            ["--format=json"]),
     "many html openers and closers":
             (("<>" * 50000),
             re.compile("(&lt;&gt;){50000}")),

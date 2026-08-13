@@ -46,7 +46,31 @@ const MD_AST_FLAG_DEBUG: c_uint = 0x0001;
 const MD_AST_FLAG_SKIP_UTF8_BOM: c_uint = 0x0002;
 const MD_AST_FLAG_HEAL: c_uint = 0x0100;
 
-const JSON_MAX_DEPTH: usize = 256;
+// Maximum nesting depth of the built tree. Unlike the streaming renderers, the
+// AST renderer keeps a `current` stack while building and RECURSES once per
+// level in jsonSerializeNode(), so tree depth is bounded by the stack rather
+// than by memory. The parser imposes no container-nesting limit of its own --
+// `'>' * 300000` parses fine and every streaming renderer emits it -- so the
+// bound has to live here.
+//
+// Measured headroom (`'>' * n` binary-searched, temporary build with the cap
+// lifted, so the numbers are where the recursion actually dies):
+//
+//   * native, cost per level is linear -- ~48-53 B in ReleaseFast (what ships),
+//     ~192 B in ReleaseSafe, ~768 B in Debug. ReleaseFast therefore survives
+//     ~173 000 levels on the usual 8 MiB stack and ~9 800 on a 512 KiB one.
+//   * wasm: the 16 MiB shadow stack (`__stack_pointer` starts at 0x1000000,
+//     stack-first, so an overflow traps instead of corrupting the data
+//     segment) is NOT the binding constraint -- the engine spends its own
+//     ~1 MB native stack on the wasm frames and throws
+//     `RangeError: Maximum call stack size exceeded` first: ~11 300 levels on
+//     Node 24 / V8, ~9 000 on Bun / JSC, i.e. ~90-115 B per level.
+//
+// 1024 is therefore ~9x under the tightest engine (Bun) and ~170x under a
+// native 8 MiB stack, while being 4x the old cap and far past any real
+// document. Past the cap the renderer stops nesting instead of failing; see
+// jsonAtMaxDepth().
+const JSON_MAX_DEPTH: usize = 1024;
 
 const ProcessOutputFn = ?*const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
@@ -186,6 +210,10 @@ const JsonNode = struct {
     // True if the tag is heap-allocated (dynamic component tag).
     tag_is_dynamic: bool = false,
 
+    // Document node only: JSON_MAX_DEPTH was reached, so some nesting was
+    // collapsed. Serialized as `"meta":{"maxDepthExceeded":true}`.
+    depth_exceeded: bool = false,
+
     // Raw inline attributes string from trailing {attrs}, or null.
     raw_attrs: ?[:0]u8 = null,
 };
@@ -200,6 +228,11 @@ const JsonCtx = struct {
     current: ?*JsonNode = null,
     stack: [JSON_MAX_DEPTH]?*JsonNode = undefined,
     stack_depth: c_int = 0,
+    // Number of enter_block/enter_span callbacks that were suppressed because
+    // the tree already stands JSON_MAX_DEPTH deep. The matching leave callbacks
+    // consume it, so enter/leave stay balanced. `usize`, and one input byte is
+    // needed per level, so it cannot overflow.
+    suppressed_depth: usize = 0,
     image_nesting: c_int = 0,
     err: c_int = 0,
 };
@@ -328,9 +361,57 @@ fn jsonAppendChild(ctx: *JsonCtx, child: *JsonNode) void {
     }
 }
 
+// Depth guard for the enter callbacks. Once the tree stands JSON_MAX_DEPTH
+// deep, the incoming block/span is NOT turned into a node at all: the callback
+// returns 0 immediately, the suppression is counted so the matching leave stays
+// balanced, and any text inside the suppressed subtree lands in the deepest
+// node that was kept. That is the same shape as the existing image_nesting
+// suppression a few lines below (spans inside an image are dropped and their
+// text accumulated into the alt attribute), and it keeps the serializer's
+// recursion bounded by JSON_MAX_DEPTH for any input. (Exactly one level more,
+// in fact: jsonText() appends `["br",{}]` and `[null,{},"comment"]` element
+// nodes without pushing. Both are leaves, so they add a single frame, never a
+// chain.)
+//
+// This replaces setting `ctx.err`, which made md_ast() return -1 and emit
+// ZERO bytes for the whole document -- a single deep blockquote or list
+// anywhere in a file killed the entire render (through the JS bindings: a
+// thrown "md4x: render failed" / "Markdown parsing failed"), while every other
+// renderer emitted the document happily. Losing the shape of what is already a
+// pathological nesting level beats losing the document.
+//
+// The collapse is reported rather than silent: the document node's flag is
+// serialized as `"meta":{"maxDepthExceeded":true}`, using the existing (and
+// otherwise always-empty) top-level `meta` bag of the ComarkTree contract, so
+// the tuple/props shape every consumer walks is untouched.
+fn jsonAtMaxDepth(ctx: *JsonCtx) bool {
+    if (ctx.stack_depth < @as(c_int, @intCast(JSON_MAX_DEPTH)))
+        return false;
+    ctx.suppressed_depth += 1;
+    if (ctx.root) |root|
+        root.depth_exceeded = true;
+    return true;
+}
+
+// Consumed by the leave callbacks, which must skip everything they would
+// otherwise do to the node the suppressed enter never created -- popping the
+// stack included, since nothing was pushed.
+fn jsonLeaveSuppressed(ctx: *JsonCtx) bool {
+    if (ctx.suppressed_depth == 0)
+        return false;
+    ctx.suppressed_depth -= 1;
+    return true;
+}
+
 fn jsonPush(ctx: *JsonCtx, node: *JsonNode) void {
+    // Unreachable in practice: every caller has already returned via
+    // jsonAtMaxDepth(). Kept as a defensive guard (AGENTS.md: `unreachable` is
+    // UB in the shipping ReleaseFast build). It counts the suppression rather
+    // than just declining to push, so that a future caller that forgets the
+    // check leaves the stack balanced (jsonLeaveSuppressed consumes it) instead
+    // of letting the matching leave pop this node's parent.
     if (ctx.stack_depth >= @as(c_int, @intCast(JSON_MAX_DEPTH))) {
-        ctx.err = 1;
+        ctx.suppressed_depth += 1;
         return;
     }
     ctx.stack[@intCast(ctx.stack_depth)] = ctx.current;
@@ -406,6 +487,12 @@ const heading_tags = [_][:0]const u8{ "h0", "h1", "h2", "h3", "h4", "h5", "h6" }
 
 fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.CallbackResult {
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
+
+    // Too deep to nest any further: drop the block and let its content collapse
+    // into the deepest node kept (see jsonAtMaxDepth).
+    if (jsonAtMaxDepth(ctx))
+        return 0;
+
     const block_type = std.meta.activeTag(detail.*);
     var node: ?*JsonNode = null;
     var tag: ?[:0]const u8 = null;
@@ -584,6 +671,12 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
 fn jsonLeaveBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.CallbackResult {
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
 
+    // The matching enter was depth-suppressed: no node exists, so there is
+    // nothing to convert and nothing to pop. Must come before the comment
+    // conversion below, which would otherwise inspect an unrelated node.
+    if (jsonLeaveSuppressed(ctx))
+        return 0;
+
     // Convert html_block comments to [null, {}, "body"] nodes.
     if (detail.* == .html and ctx.current != null and ctx.current.?.text_value != null) {
         const cur = ctx.current.?;
@@ -610,11 +703,17 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
     var tag: ?[:0]const u8 = null;
 
     // Inside an image: suppress nested spans, just accumulate alt text.
+    // Checked before the depth guard, and in the same order in jsonLeaveSpan,
+    // so a span is only ever counted by one of the two suppressions.
     if (ctx.image_nesting > 0) {
         if (detail.* == .img)
             ctx.image_nesting += 1;
         return 0;
     }
+
+    // Too deep to nest any further (see jsonAtMaxDepth).
+    if (jsonAtMaxDepth(ctx))
+        return 0;
 
     // The dynamic-component arm is resolved from the union tag *before* any
     // built-in tag handling (AGENTS.md's tag_is_dynamic-first rule), so a
@@ -740,6 +839,10 @@ fn jsonLeaveSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             return 0;
         // Leaving the outermost image span: text_value has the accumulated alt text.
     }
+
+    // The matching enter was depth-suppressed (see jsonLeaveBlock).
+    if (jsonLeaveSuppressed(ctx))
+        return 0;
 
     jsonPop(ctx);
     return 0;
@@ -1229,7 +1332,16 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
                 }
             }
 
-            jsonWriteStr(w, "},\"meta\":{}}");
+            // `meta` is the ComarkTree's top-level extension bag
+            // (`Record<string, unknown>`, always emitted, empty until now). The
+            // one thing the renderer has to report about itself goes here:
+            // nesting past JSON_MAX_DEPTH was collapsed, so this tree is
+            // shallower than the source. Emitted only in that case, so ordinary
+            // output stays byte-for-byte what it was.
+            jsonWriteStr(w, "},\"meta\":{");
+            if (node.depth_exceeded)
+                jsonWriteStr(w, "\"maxDepthExceeded\":true");
+            jsonWriteStr(w, "}}");
         },
 
         .text => {
