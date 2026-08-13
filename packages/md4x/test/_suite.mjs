@@ -1777,6 +1777,96 @@ export function defineSuite({
     });
   });
 
+  // Regression (#19): the ANSI renderer captures a code block's line prefix by
+  // pointing `process_output` at a scratch buffer, but `output_offset` -- the
+  // counter MD_ANSI_CODE_META.start/.end snapshot -- kept advancing over those
+  // captured bytes. They never reach the caller, so every block's `end` and
+  // every later block's `start`/`end` drifted by the prefix length, once per
+  // code block: the second block's slice began mid-`ESC[2m` (so the DIM strip
+  // and the prefix strip both missed) and each slice ran past DIM_OFF into the
+  // following paragraph.
+  describe("renderToAnsi with highlighter", () => {
+    const DIM = "\u001b[2m";
+    const DIM_OFF = "\u001b[22m";
+
+    async function collectBlocks(md) {
+      const blocks = [];
+      const ansi = await renderToAnsi(md, {
+        highlighter: (code, block) => {
+          blocks.push({ code, ...block });
+          return undefined; // keep default rendering
+        },
+      });
+      return { ansi, blocks };
+    }
+
+    it("receives code block metadata with correct content", async () => {
+      const { blocks } = await collectBlocks("```js\nconsole.log(1)\n```");
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].lang).toBe("js");
+      expect(blocks[0].code).toBe("console.log(1)");
+      expect(blocks[0].prefix).toBe("  ");
+    });
+
+    it("keeps every block's code clean across four blocks", async () => {
+      const md = ["1", "2", "3", "4"]
+        .map((n) => `Text ${n}.\n\n\`\`\`lua\nlocal a = ${n}\n\`\`\`\n`)
+        .join("\n");
+      const { blocks } = await collectBlocks(md);
+      expect(blocks).toHaveLength(4);
+      expect(blocks.map((b) => b.code)).toEqual([
+        "local a = 1",
+        "local a = 2",
+        "local a = 3",
+        "local a = 4",
+      ]);
+    });
+
+    // The offsets index the un-highlighted ANSI output, so each recorded span
+    // must be exactly the block's own `DIM ... DIM_OFF` region -- no leading
+    // escape-sequence tail, no trailing paragraph text.
+    it("start/end bracket the DIM region of every block", async () => {
+      const md = "```js\na\n```\n\ntext\n\n```py\nb\n```\n";
+      const { ansi, blocks } = await collectBlocks(md);
+      expect(blocks).toHaveLength(2);
+      expect(ansi.slice(blocks[0].start, blocks[0].end)).toBe(
+        `${DIM}  a\n${DIM_OFF}`,
+      );
+      expect(ansi.slice(blocks[1].start, blocks[1].end)).toBe(
+        `${DIM}  b\n${DIM_OFF}`,
+      );
+    });
+
+    // The drift scaled with the prefix, so a blockquote (bar + its own DIM
+    // pair, 12 bytes) and a list item (4 bytes) skewed the *next* block by
+    // more than the 2-byte base indent did.
+    it.each([
+      ["blockquote", "> ```js\n> a\n> ```\n", `${DIM}  │ ${DIM_OFF}  `],
+      ["list item", "- ```js\n  a\n  ```\n", "    "],
+    ])(
+      "long %s prefix leaves the next block aligned",
+      async (_, first, pfx) => {
+        const md = `${first}\ntext\n\n\`\`\`py\nb\n\`\`\`\n`;
+        const { ansi, blocks } = await collectBlocks(md);
+        expect(blocks).toHaveLength(2);
+        expect(blocks.map((b) => b.code)).toEqual(["a", "b"]);
+        expect(blocks[0].prefix).toBe(pfx);
+        expect(ansi.slice(blocks[0].start, blocks[0].end)).toBe(
+          `${DIM}${pfx}a\n${DIM_OFF}`,
+        );
+        expect(ansi.slice(blocks[1].start, blocks[1].end)).toBe(
+          `${DIM}  b\n${DIM_OFF}`,
+        );
+      },
+    );
+
+    it("splices replacements at the block boundaries", async () => {
+      const md = "```js\na\n```\n\ntext\n\n```py\nb\n```\n";
+      const out = await renderToAnsi(md, { highlighter: () => "HL" });
+      expect(out).toBe("  HL\n\ntext\n\n  HL\n");
+    });
+  });
+
   describe("renderToMeta", () => {
     it("returns a string", async () => {
       const json = await renderToMeta("# Hello");

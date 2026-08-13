@@ -153,6 +153,16 @@ const AppendFn = *const fn (*MD_ANSI, [*]const u8, c.MD_SIZE) void;
 // ***  ANSI rendering helper functions  ***
 // *********************************************
 
+// ***  `output_offset` invariant  ***
+//
+// `output_offset` counts the body bytes committed to the caller's output stream;
+// MD_ANSI_CODE_META.start/.end are snapshots of it. render_verbatim is the only
+// sink, so every byte is counted here exactly once -- with one exception: while
+// `process_output` is swapped to a capture callback the bytes go to a scratch
+// buffer, not to the caller, so whoever diverts the output must restore
+// `output_offset` afterwards (see the prefix capture in the `.code` enter path).
+// Skipping that restore made every code block's `end`, and every later block's
+// `start`/`end`, drift by the prefix length -- once per code block.
 fn render_verbatim(r: *MD_ANSI, text: [*]const u8, size: c.MD_SIZE) void {
     r.process_output(@ptrCast(text), size, r.userdata);
     if (r.flags & MD_ANSI_FLAG_CODE_META != 0)
@@ -660,17 +670,22 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
                         }
                     }
                     // Capture the indent prefix by temporarily redirecting output.
+                    // These bytes never reach the caller, so `output_offset` is
+                    // restored along with the sink -- see the invariant above
+                    // render_verbatim.
                     {
                         var pfx_buf: [256]u8 = undefined;
                         var cap = ANSI_CAPTURE_BUF{ .buf = &pfx_buf, .size = 0, .cap = pfx_buf.len };
                         const saved_out = r.process_output;
                         const saved_ud = r.userdata;
+                        const saved_offset = r.output_offset;
                         r.process_output = ansi_capture_append;
                         r.userdata = &cap;
                         render_indent(r);
                         render_verbatim_lit(r, "  ");
                         r.process_output = saved_out;
                         r.userdata = saved_ud;
+                        r.output_offset = saved_offset;
                         if (cap.size <= meta.prefix.len) {
                             @memcpy(meta.prefix[0..cap.size], pfx_buf[0..cap.size]);
                             meta.prefix_size = cap.size;
