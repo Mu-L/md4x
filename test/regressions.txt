@@ -2144,3 +2144,33 @@ x
 .
 --format=json
 ````````````````````````````````
+
+
+## YAML frontmatter nesting must not exhaust the native stack
+
+`json_write_yaml_*` (src/renderers/md4x-json.zig) walks libyaml's event stream
+recursively, so a document's nesting depth was the native recursion depth.
+libyaml imposes no nesting limit of its own -- its parser is a state machine
+over heap-grown stacks -- and the markdown parser hands frontmatter over as
+opaque bytes, so `a: [[[[...` ran until the stack was gone (a SIGSEGV, which
+also skipped the AST renderer's arena teardown and `yaml_parser_delete`).
+`YAML_MAX_DEPTH` now stops at 256 levels: the position that overflowed gets
+`null`, and the walk unwinds without reading another event, closing every
+container it opened. The output is well-formed JSON, and the cost no longer
+depends on how deep the document goes -- which is the other half of the fix,
+since libyaml's flow-collection handling is quadratic in the nesting depth and
+skipping to the end of the offending subtree would still pay all of it. What
+that costs is the tail of the document: `b` below is not emitted, and neither
+is anything else after the value that overflowed. 260 nested flow sequences, of
+which 255 are kept:
+
+```````````````````````````````` example [no-normalize]
+---
+a: [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+b: dropped with the rest of the document
+---
+.
+{"nodes":[],"frontmatter":{"a":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[null]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````

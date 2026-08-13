@@ -280,6 +280,41 @@ truncated or malformed document indistinguishable from one where the author
 simply omitted the field. Aliases are `null` too — libyaml's parser does not
 compose, so anchors are never resolved.
 
+### YAML nesting depth
+
+The `json_write_yaml_*` functions walk libyaml's event stream **recursively**, so
+a document's nesting depth is the native recursion depth — and libyaml imposes no
+nesting limit of its own (its parser is a state machine over heap-grown stacks),
+while the Markdown parser hands frontmatter over as opaque bytes. `YAML_MAX_DEPTH`
+= **256 levels** therefore caps the descent, on all three paths that reach the
+writer (`md_ast`, `md_meta`, `md_yaml`). At the cap the writer **ends the parse**:
+the position that overflowed gets `null`, and the walk unwinds without reading
+another event, closing every container it opened. The output stays well-formed
+JSON; what is lost is the tail of that YAML document — the keys after the
+overflowing value are not emitted. Unlike the AST renderer's cap it is not
+reported in a `meta` bag either: `frontmatter` is a user-data object with no
+reserved key to put a marker in.
+
+Ending the parse rather than skipping to the end of the offending subtree is what
+bounds the CPU as well as the stack. **libyaml's flow-collection handling is
+O(depth²)** — a pre-existing defect, unrelated to this cap and driven by nesting
+depth alone (50 000 flat keys cost 0.03 s, 50 000 _levels_ cost 4.6 s): `a: [` × n
+through `--format=json` measured 1.2 s at n = 25 000, 4.6 s at 50 000, 19.1 s at
+100 000 and 96.3 s at 200 000, on builds with and without the cap alike. Anything
+that keeps reading events past the cap pays that in full; stopping there makes the
+cost independent of the depth (~3 ms at every n above, including 1 000 000).
+
+The cap's number differs from the AST renderer's 1024 because the frame is ~3.5×
+heavier — three frames per level, each holding libyaml's ~104-byte `yaml_event_t`
+by value: ~177 bytes per level in `ReleaseFast` (what ships), ~194 in
+`ReleaseSafe`, ~354 in `Debug`. The two caps therefore cost about the same ~45–50 KB
+of stack. That is ~185× under a native 8 MiB stack, ~11× under a 512 KiB one, and
+still ~2.8× under a musl default 128 KiB thread stack, while a deeply nested real
+frontmatter is ~5 levels. Before the cap, `a: [[[[…` in frontmatter (or in a `.yml`
+through `md_yaml`) ran until the stack was gone — a SIGSEGV natively, which also
+skipped the AST renderer's arena teardown and `yaml_parser_delete`, and a trap
+through the wasm binding, which leaked ~4 MB of linear memory per attempt.
+
 ## Meta Renderer API (`src/renderers/md4x-meta.zig`)
 
 Lightweight metadata extractor that parses frontmatter and headings from Markdown:

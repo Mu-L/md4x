@@ -260,11 +260,90 @@ fn json_write_yaml_scalar(w: *JsonWriter, event: *const sys.yaml_event_t) void {
 // instead would make a truncated document indistinguishable from one where the
 // author simply omitted the field.
 
+// ---- Nesting cap ----
+//
+// The functions below walk libyaml's event stream RECURSIVELY (event -> mapping
+// / sequence -> value -> event), so the document's nesting depth is the native
+// recursion depth. libyaml itself imposes no limit -- its parser is a state
+// machine over heap-grown stacks -- and neither does the markdown parser, which
+// hands frontmatter over as opaque bytes. So `a: [[[[...` in frontmatter (or in
+// a plain `.yml` through md_yaml) used to run until the native stack was gone:
+// a SIGSEGV, which also skipped the AST renderer's `ctx.arena.deinit()` and
+// `yaml_parser_delete` (through the wasm binding it trapped instead, leaking
+// ~4 MB of linear memory per attempt, unreclaimable). Past the cap the writer
+// emits `null` and ENDS the parse; see json_write_yaml_truncate().
+//
+// Ending it, rather than skipping to the end of the offending subtree, is also
+// what bounds the CPU. libyaml's flow-collection handling is O(depth^2) --
+// `a: [` x n through `--format=json` measures 1.2 s at n = 25 000, 4.6 s at
+// 50 000, 19.1 s at 100 000, 96.3 s at 200 000, and the same curve on a build
+// from before this cap existed, so it is a separate pre-existing defect, driven
+// by nesting depth alone (50 000 flat keys cost 0.03 s). Any design that keeps
+// reading events past the cap pays that quadratic in full; stopping at the cap
+// makes the cost of a deep document independent of how deep it is.
+//
+// This is the same mechanism as the AST renderer's JSON_MAX_DEPTH /
+// jsonAtMaxDepth() (src/renderers/md4x-ast.zig), sized for a much heavier
+// frame. Measured headroom (balanced `'[' * n + ']' * n` in frontmatter,
+// binary-searched against the uncapped build under `ulimit -s`, so the numbers
+// are where the recursion actually dies):
+//
+//   * native, linear in the level count -- ~177 B per level in ReleaseFast
+//     (what ships; 47 280 levels on an 8 MiB stack, 2 593 on a 512 KiB one),
+//     ~194 B in ReleaseSafe, ~354 B in Debug. Three frames per level, each
+//     holding libyaml's ~104-byte `yaml_event_t` by value, is what makes this
+//     ~3.5x the AST serializer's ~50 B per level.
+//
+// 256 levels is therefore ~45 KB of stack at the cap -- about the same stack
+// budget as the AST renderer's 1024 levels, which is why the two numbers
+// differ. That is ~185x under a native 8 MiB stack, ~11x under a 512 KiB one,
+// and still ~2.8x under a musl default 128 KiB *thread* stack (Alpine; Node
+// worker threads and some edge runtimes are likewise well under the 8 MiB
+// main-thread default). Real frontmatter is a config document: a deeply nested
+// one is ~5 levels, so 256 is ~50x past anything a human writes.
+//
+// Two things this cap does NOT do, both deliberate. It is not reported in the
+// output the way the AST renderer's is: the frontmatter object is a user-data
+// contract with no reserved key to put a marker in, and the truncation is
+// already visible as a `null` in the position that overflowed. And it does not
+// keep rendering the rest of the document the way the AST renderer's does --
+// see json_write_yaml_truncate() for why the keys after the overflowing one are
+// dropped rather than skipped to.
+const YAML_MAX_DEPTH: usize = 256;
+
+fn yaml_at_max_depth(depth: usize) bool {
+    return depth >= YAML_MAX_DEPTH;
+}
+
+// Give up on the document at the cap: write the value the position demands and
+// report an error, which every caller already knows how to handle -- each one
+// closes what it opened and returns without asking for another event, so the
+// output stays balanced and the walk unwinds without touching the parser again.
+// `json_write_yaml_props` / `md_yaml` then run their normal `yaml_parser_delete`
+// teardown, which frees libyaml's buffers, its token queue (deleting each queued
+// token) and its indent/simple-key/state/mark stacks whatever state the parse was
+// left in. No event is owned here either -- the START event was deleted by the
+// caller before the check -- so abandoning mid-stream leaks nothing.
+//
+// **Stopping is the point, not a shortcut.** Consuming the rest of the subtree
+// (walking to its matching END so the siblings after it could still be emitted)
+// keeps the output prettier but makes libyaml scan the whole nesting anyway --
+// and its flow-collection handling is O(depth^2) (see the note above
+// YAML_MAX_DEPTH), so a 200 KB document still burned ~96 s of one core. Ending
+// the parse bounds the work at the cap instead: what is dropped is the tail of a
+// document already established to be pathological.
+fn json_write_yaml_truncate(w: *JsonWriter) c_int {
+    json_write_str(w, "null");
+    return -1;
+}
+
 // Write a YAML mapping as JSON object key-value pairs (without outer braces).
-// Assumes MAPPING_START consumed. Returns 0 on success, -1 on error; `n_written`
-// is incremented once per pair actually emitted (including a pair whose value
-// had to be repaired to `null`, since its key bytes are already on the wire).
-fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t, n_written: *c_int) c_int {
+// Assumes MAPPING_START consumed. `depth` is the nesting depth of the VALUES in
+// this mapping (the number of collections enclosing them). Returns 0 on
+// success, -1 on error; `n_written` is incremented once per pair actually
+// emitted (including a pair whose value had to be repaired to `null`, since its
+// key bytes are already on the wire).
+fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t, n_written: *c_int, depth: usize) c_int {
     var event: sys.yaml_event_t = undefined;
 
     while (true) {
@@ -297,7 +376,7 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t, n_written: *c
         // Write value (recursive). Past this point the key is committed, so the
         // pair counts as written whatever happens: `json_write_yaml_value`
         // guarantees it emitted *some* value at this position.
-        const ret = json_write_yaml_value(w, yp);
+        const ret = json_write_yaml_value(w, yp, depth);
         n_written.* += 1;
         if (ret < 0)
             return -1;
@@ -306,8 +385,9 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *sys.yaml_parser_t, n_written: *c
 }
 
 // Write a YAML sequence as a JSON array.
-// Assumes SEQUENCE_START consumed. Returns 0 on success, -1 on error.
-fn json_write_yaml_sequence(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
+// Assumes SEQUENCE_START consumed. `depth` is the nesting depth of this
+// sequence's ELEMENTS. Returns 0 on success, -1 on error.
+fn json_write_yaml_sequence(w: *JsonWriter, yp: *sys.yaml_parser_t, depth: usize) c_int {
     var event: sys.yaml_event_t = undefined;
     var n: c_int = 0;
     var ret: c_int = 0;
@@ -331,7 +411,7 @@ fn json_write_yaml_sequence(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
         if (n > 0)
             json_write(w, ",", 1);
 
-        if (json_write_yaml_event(w, yp, &event) < 0) {
+        if (json_write_yaml_event(w, yp, &event, depth) < 0) {
             ret = -1;
             break;
         }
@@ -344,9 +424,10 @@ fn json_write_yaml_sequence(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
 }
 
 // Write the value denoted by an already-parsed `event` as JSON. Takes ownership
-// of `event` and deletes it. Returns 0 on success, -1 on error; the output is
-// balanced either way (see the malformed-YAML contract above).
-fn json_write_yaml_event(w: *JsonWriter, yp: *sys.yaml_parser_t, event: *sys.yaml_event_t) c_int {
+// of `event` and deletes it. `depth` is the nesting depth of this value itself
+// (0 for a document's root node). Returns 0 on success, -1 on error; the output
+// is balanced either way (see the malformed-YAML contract above).
+fn json_write_yaml_event(w: *JsonWriter, yp: *sys.yaml_parser_t, event: *sys.yaml_event_t, depth: usize) c_int {
     if (event.type == sys.YAML_SCALAR_EVENT) {
         json_write_yaml_scalar(w, event);
         sys.yaml_event_delete(event);
@@ -354,15 +435,21 @@ fn json_write_yaml_event(w: *JsonWriter, yp: *sys.yaml_parser_t, event: *sys.yam
     }
     if (event.type == sys.YAML_MAPPING_START_EVENT) {
         sys.yaml_event_delete(event);
+        // Too deep to nest any further (see YAML_MAX_DEPTH): the position gets
+        // `null` and the walk unwinds.
+        if (yaml_at_max_depth(depth))
+            return json_write_yaml_truncate(w);
         json_write(w, "{", 1);
         var n: c_int = 0;
-        const ret = json_write_yaml_mapping(w, yp, &n);
+        const ret = json_write_yaml_mapping(w, yp, &n, depth + 1);
         json_write(w, "}", 1);
         return ret;
     }
     if (event.type == sys.YAML_SEQUENCE_START_EVENT) {
         sys.yaml_event_delete(event);
-        return json_write_yaml_sequence(w, yp);
+        if (yaml_at_max_depth(depth))
+            return json_write_yaml_truncate(w);
+        return json_write_yaml_sequence(w, yp, depth + 1);
     }
     if (event.type == sys.YAML_ALIAS_EVENT) {
         // libyaml's parser does not compose, so anchors are never resolved; an
@@ -379,9 +466,10 @@ fn json_write_yaml_event(w: *JsonWriter, yp: *sys.yaml_parser_t, event: *sys.yam
     return -1;
 }
 
-// Write the next YAML value (scalar, mapping, or sequence) as JSON.
-// Returns 0 on success, -1 on error; a value is always emitted.
-fn json_write_yaml_value(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
+// Write the next YAML value (scalar, mapping, or sequence) as JSON. `depth` is
+// the nesting depth of that value. Returns 0 on success, -1 on error; a value
+// is always emitted.
+fn json_write_yaml_value(w: *JsonWriter, yp: *sys.yaml_parser_t, depth: usize) c_int {
     var event: sys.yaml_event_t = undefined;
 
     if (sys.yaml_parser_parse(yp, &event) == 0) {
@@ -389,7 +477,7 @@ fn json_write_yaml_value(w: *JsonWriter, yp: *sys.yaml_parser_t) c_int {
         return -1;
     }
 
-    return json_write_yaml_event(w, yp, &event);
+    return json_write_yaml_event(w, yp, &event, depth);
 }
 
 // Write parsed YAML frontmatter as JSON props using libyaml.
@@ -444,8 +532,9 @@ pub fn json_write_yaml_props(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE)
     sys.yaml_event_delete(&event);
 
     // A mid-mapping error is already repaired in the output stream, so the
-    // status is not actionable here; `n_written` is what matters.
-    _ = json_write_yaml_mapping(w, &yp, &n_written);
+    // status is not actionable here; `n_written` is what matters. The root
+    // mapping consumed just above is depth 0, so its values sit at depth 1.
+    _ = json_write_yaml_mapping(w, &yp, &n_written, 1);
 
     sys.yaml_parser_delete(&yp);
     return n_written;
@@ -510,7 +599,150 @@ pub fn md_yaml(
     }
     // Emits a balanced value whatever the outcome (see the malformed-YAML
     // contract above), so a truncated document still yields parseable JSON.
-    _ = json_write_yaml_event(&w, &yp, &event);
+    // The root node is depth 0 -- unlike json_write_yaml_props, no enclosing
+    // mapping was consumed on the way here.
+    _ = json_write_yaml_event(&w, &yp, &event, 0);
     json_write_str(&w, "\n");
     return 0;
+}
+
+// ============================================================================
+// Tests
+//
+// These pin YAML_MAX_DEPTH itself, which no .txt suite can: `test/regressions.txt`
+// can only assert on one rendered document, and the value it encodes is the cap
+// *minus* the frontmatter mapping the AST path has already descended through.
+// They live here rather than in src/md4x.zig because the `zig build test`
+// artifact is the parser alone -- it compiles neither the renderers nor
+// libyaml. `zig build fuzz-zig` compiles this file (through src/lib.zig) and
+// runs them, the same way it already runs the md4x-slug.zig and md4x-heal.zig
+// unit tests.
+// ============================================================================
+
+const testing = std.testing;
+
+const TestSink = struct {
+    out: std.ArrayListUnmanaged(u8) = .empty,
+
+    fn write(data: [*c]const c.MD_CHAR, size: c.MD_SIZE, userdata: ?*anyopaque) void {
+        const self: *TestSink = @ptrCast(@alignCast(userdata.?));
+        const bytes: [*]const u8 = @ptrCast(data);
+        self.out.appendSlice(testing.allocator, bytes[0..size]) catch @panic("OOM");
+    }
+};
+
+/// Run `md_yaml` over `input` and hand back the JSON it produced.
+fn testYaml(input: []const u8) ![]u8 {
+    var sink: TestSink = .{};
+    errdefer sink.out.deinit(testing.allocator);
+    try testing.expectEqual(@as(c_int, 0), md_yaml(@ptrCast(input.ptr), @intCast(input.len), TestSink.write, &sink, 0, 0));
+    return sink.out.toOwnedSlice(testing.allocator);
+}
+
+/// `unit` repeated `n` times.
+fn testRepeat(unit: []const u8, n: usize) ![]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(testing.allocator);
+    for (0..n) |_| try buf.appendSlice(testing.allocator, unit);
+    return buf.toOwnedSlice(testing.allocator);
+}
+
+test "YAML nesting is capped at YAML_MAX_DEPTH (sequences)" {
+    // Deeper than the cap by a wide margin, and balanced, so what stops the
+    // descent is the cap and not a syntax error. The root sequence is depth 0,
+    // so exactly YAML_MAX_DEPTH levels are kept and the next one becomes `null`.
+    const n = YAML_MAX_DEPTH + 64;
+    const opens = try testRepeat("[", n);
+    defer testing.allocator.free(opens);
+    const closes = try testRepeat("]", n);
+    defer testing.allocator.free(closes);
+
+    const input = try std.mem.concat(testing.allocator, u8, &.{ opens, closes });
+    defer testing.allocator.free(input);
+    const got = try testYaml(input);
+    defer testing.allocator.free(got);
+
+    const kept_open = try testRepeat("[", YAML_MAX_DEPTH);
+    defer testing.allocator.free(kept_open);
+    const kept_close = try testRepeat("]", YAML_MAX_DEPTH);
+    defer testing.allocator.free(kept_close);
+    const expected = try std.mem.concat(testing.allocator, u8, &.{ kept_open, "null", kept_close, "\n" });
+    defer testing.allocator.free(expected);
+
+    try testing.expectEqualStrings(expected, got);
+}
+
+test "YAML nesting is capped at YAML_MAX_DEPTH (mappings)" {
+    const n = YAML_MAX_DEPTH + 64;
+    const opens = try testRepeat("{a: ", n);
+    defer testing.allocator.free(opens);
+    const closes = try testRepeat("}", n);
+    defer testing.allocator.free(closes);
+
+    const input = try std.mem.concat(testing.allocator, u8, &.{ opens, closes });
+    defer testing.allocator.free(input);
+    const got = try testYaml(input);
+    defer testing.allocator.free(got);
+
+    const kept_open = try testRepeat("{\"a\":", YAML_MAX_DEPTH);
+    defer testing.allocator.free(kept_open);
+    const kept_close = try testRepeat("}", YAML_MAX_DEPTH);
+    defer testing.allocator.free(kept_close);
+    const expected = try std.mem.concat(testing.allocator, u8, &.{ kept_open, "null", kept_close, "\n" });
+    defer testing.allocator.free(expected);
+
+    try testing.expectEqualStrings(expected, got);
+}
+
+test "a YAML document is abandoned at the cap, and closes every container" {
+    // The walk must unwind without reading another event -- that is what keeps
+    // the cost of a deep document independent of its depth -- while still
+    // closing everything it opened. So the keys after the overflowing one are
+    // NOT emitted (`after` is absent), and the output is still balanced JSON.
+    const n = YAML_MAX_DEPTH + 64;
+    const opens = try testRepeat("[", n);
+    defer testing.allocator.free(opens);
+    const closes = try testRepeat("]", n);
+    defer testing.allocator.free(closes);
+
+    const input = try std.mem.concat(testing.allocator, u8, &.{ "{deep: ", opens, closes, ", after: 1}" });
+    defer testing.allocator.free(input);
+    const got = try testYaml(input);
+    defer testing.allocator.free(got);
+
+    try testing.expect(std.mem.startsWith(u8, got, "{\"deep\":["));
+    try testing.expect(std.mem.endsWith(u8, got, "]}\n"));
+    try testing.expect(std.mem.indexOf(u8, got, "after") == null);
+    // One level is spent on the enclosing mapping, so the sequence keeps one
+    // fewer than the two cases above.
+    try testing.expectEqual(YAML_MAX_DEPTH - 1, std.mem.count(u8, got, "["));
+    try testing.expectEqual(YAML_MAX_DEPTH - 1, std.mem.count(u8, got, "]"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got, "{"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got, "}"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got, "null"));
+}
+
+test "an unterminated deep YAML document still closes every container" {
+    // Same shape, minus the closing brackets: the cap is reached before libyaml
+    // ever reports the syntax error, so this must come out exactly like the
+    // balanced case rather than picking up the malformed-YAML repair path.
+    const n = YAML_MAX_DEPTH + 64;
+    const opens = try testRepeat("[", n);
+    defer testing.allocator.free(opens);
+
+    const input = try std.mem.concat(testing.allocator, u8, &.{ "{deep: ", opens });
+    defer testing.allocator.free(input);
+    const got = try testYaml(input);
+    defer testing.allocator.free(got);
+
+    try testing.expect(std.mem.endsWith(u8, got, "]}\n"));
+    try testing.expectEqual(std.mem.count(u8, got, "["), std.mem.count(u8, got, "]"));
+    try testing.expectEqual(std.mem.count(u8, got, "{"), std.mem.count(u8, got, "}"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, got, "null"));
+}
+
+test "YAML nesting under the cap is untouched" {
+    const got = try testYaml("[[[{a: [b, {c: [d]}]}]]]");
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("[[[{\"a\":[\"b\",{\"c\":[\"d\"]}]}]]]\n", got);
 }
