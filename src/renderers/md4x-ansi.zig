@@ -800,6 +800,27 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .template => {
             // Transparent — content renders normally within parent component.
         },
+
+        .footnote_def_section => {
+            // Set off the definitions from the body with a rule, the same one
+            // that separates a table head from its body.
+            render_separator(r);
+            r.need_newline = false;
+            render_indent(r);
+            render_ansi(r, ANSI_DIM);
+            render_verbatim_lit(r, HORIZONTAL_RULE);
+            render_ansi(r, ANSI_DIM_OFF);
+            render_newline(r);
+        },
+
+        .footnote_def => |*d| {
+            render_indent(r);
+            render_ansi(r, ANSI_DIM);
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "[{d}] ", .{d.id}) catch unreachable;
+            render_verbatim(r, s.ptr, @intCast(s.len));
+            render_ansi(r, ANSI_DIM_OFF);
+        },
     }
 
     return 0;
@@ -913,6 +934,14 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .template => {
             // Transparent — no output needed.
         },
+
+        .footnote_def_section => {
+            r.need_newline = true;
+        },
+
+        .footnote_def => {
+            render_newline(r);
+        },
     }
 
     return 0;
@@ -951,6 +980,16 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .wikilink => render_ansi(r, ANSI_LINK),
         .component => render_ansi(r, ANSI_COLOR_CYAN),
         .span => {}, // Transparent: no special styling
+        // Self-contained span: the whole marker is emitted here. Only the
+        // numeric id reaches the terminal — no document-derived bytes — so
+        // there is nothing for render_sanitized to strip.
+        .footnote_ref => |*d| {
+            render_ansi(r, ANSI_DIM);
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "[{d}]", .{d.id}) catch unreachable;
+            render_verbatim(r, s.ptr, @intCast(s.len));
+            render_ansi(r, ANSI_DIM_OFF);
+        },
     }
 
     return 0;
@@ -992,6 +1031,7 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .wikilink => render_ansi(r, ANSI_RESET),
         .component => render_ansi(r, ANSI_COLOR_DEFAULT),
         .span => {}, // Transparent: no special styling
+        .footnote_ref => {}, // enter_span already emitted the marker.
     }
 
     return 0;

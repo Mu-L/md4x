@@ -423,6 +423,34 @@ fn render_open_ol_block(r: *MD_HTML, det: *const c.BlockOlDetail) void {
     render_verbatim(r, s.ptr, @intCast(s.len));
 }
 
+// `[^1]` -> `<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>`. The span is
+// self-contained (no text callbacks between enter and leave), so the whole
+// markup is emitted here and leave_span is a no-op. md4c a8b0d3e.
+fn render_open_footnote_ref_span(r: *MD_HTML, det: *const c.SpanFootnoteRefDetail) void {
+    var buf: [128]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "<sup><a href=\"#fn-{d}\" id=\"fnref-{d}-{d}\">{d}</a></sup>", .{ det.id, det.id, det.ref_id, det.id }) catch unreachable;
+    render_verbatim(r, s.ptr, @intCast(s.len));
+}
+
+fn render_open_footnote_def_block(r: *MD_HTML, det: *const c.BlockFootnoteDefDetail) void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "<li id=\"fn-{d}\">\n", .{det.id}) catch unreachable;
+    render_verbatim(r, s.ptr, @intCast(s.len));
+}
+
+// One back-reference anchor per reference, so every `[^1]` occurrence in the
+// document has a link back to it.
+fn render_close_footnote_def_block(r: *MD_HTML, det: *const c.BlockFootnoteDefDetail) void {
+    var buf: [128]u8 = undefined;
+    var ref_index: c_uint = 1;
+    while (ref_index <= det.ref_count) : (ref_index += 1) {
+        if (ref_index > 1) render_verbatim_lit(r, " ");
+        const s = std.fmt.bufPrint(&buf, "<a href=\"#fnref-{d}-{d}\" class=\"footnote-backref\">&#8617;</a>", .{ det.id, ref_index }) catch unreachable;
+        render_verbatim(r, s.ptr, @intCast(s.len));
+    }
+    render_verbatim_lit(r, "\n</li>\n");
+}
+
 fn render_open_li_block(r: *MD_HTML, det: *const c.BlockLiDetail) void {
     if (det.is_task) {
         render_verbatim_lit(r, "<li class=\"task-list-item\">" ++
@@ -1143,6 +1171,8 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             render_verbatim_lit(r, "\">\n");
         },
         .frontmatter => {},
+        .footnote_def_section => render_verbatim_lit(r, "<section class=\"footnotes\">\n<ol>\n"),
+        .footnote_def => |*d| render_open_footnote_def_block(r, d),
     }
 
     return 0;
@@ -1206,6 +1236,8 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .alert => render_verbatim_lit(r, "</blockquote>\n"),
         .template => render_verbatim_lit(r, "</template>\n"),
         .frontmatter => {},
+        .footnote_def_section => render_verbatim_lit(r, "</ol>\n</section>\n"),
+        .footnote_def => |*d| render_close_footnote_def_block(r, d),
     }
 
     return 0;
@@ -1234,6 +1266,7 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .wikilink => |*d| render_open_wikilink_span(r, d),
         .component => |*d| render_open_component_span(r, d),
         .span => |*d| render_open_span_span(r, d),
+        .footnote_ref => |*d| render_open_footnote_ref_span(r, d),
     }
 
     return 0;
@@ -1260,6 +1293,8 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .wikilink => render_verbatim_lit(r, "</x-wikilink>"),
         .component => |*d| render_close_component_span(r, d),
         .span => render_verbatim_lit(r, "</span>"),
+        // enter_span already emitted the whole `<sup>…</sup>`.
+        .footnote_ref => {},
     }
 
     return 0;

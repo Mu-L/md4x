@@ -362,6 +362,22 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         },
 
         .template => {},
+
+        .footnote_def_section => {
+            if (r.need_newline) {
+                render_newline(r);
+                r.need_newline = false;
+            }
+        },
+
+        // Only the numeric id reaches the output, so there are no
+        // document-derived bytes here for render_sanitized to strip.
+        .footnote_def => |*d| {
+            render_indent(r);
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "[{d}] ", .{d.id}) catch unreachable;
+            render_verbatim(r, s.ptr, @intCast(s.len));
+        },
     }
 
     return 0;
@@ -445,6 +461,14 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         },
 
         .template => {},
+
+        .footnote_def_section => {
+            r.need_newline = true;
+        },
+
+        .footnote_def => {
+            render_newline(r);
+        },
     }
 
     return 0;
@@ -453,8 +477,23 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
 fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackResult {
     const r: *MD_TEXT = @ptrCast(@alignCast(userdata.?));
 
-    if (detail.* == .img)
-        r.image_nesting_level += 1;
+    switch (detail.*) {
+        .img => r.image_nesting_level += 1,
+
+        // The only span this renderer emits anything for. It is self-contained
+        // (no text callbacks between enter and leave), so without this the
+        // reference would vanish from the plain-text output entirely. Again
+        // only the numeric id is written — no document bytes.
+        .footnote_ref => |*d| {
+            if (r.image_nesting_level == 0) {
+                var buf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&buf, "[{d}]", .{d.id}) catch unreachable;
+                render_verbatim(r, s.ptr, @intCast(s.len));
+            }
+        },
+
+        else => {},
+    }
 
     return 0;
 }

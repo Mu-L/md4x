@@ -552,3 +552,50 @@ A trailing `#` run would close an ATX heading.
 .
 -t markdown
 ````````````````````````````````
+
+## Footnotes
+
+A reference round-trips as `[^label]`. The definition is re-emitted at the end
+of the document, which is where the parser hands it over — a textual move, not
+a semantic one.
+
+```````````````````````````````` example [no-normalize]
+Text[^1] and again[^1].
+
+[^1]: The note.
+.
+Text[^1] and again[^1].
+
+[^1]: The note.
+.
+-t markdown
+````````````````````````````````
+
+Definitions move to the end even when they were written first, and follow
+first-reference order rather than definition order.
+
+```````````````````````````````` example [no-normalize]
+[^b]: B note.
+[^a]: A note.
+
+See [^a] then [^b].
+.
+See [^a] then [^b].
+
+[^a]: A note.
+
+[^b]: B note.
+.
+-t markdown
+````````````````````````````````
+
+A literal `[^1]` with no definition is not a reference, and `[` is escaped
+unconditionally, so it cannot become one on the re-parse.
+
+```````````````````````````````` example [no-normalize]
+Not a ref: [^1].
+.
+Not a ref: \[^1\].
+.
+-t markdown
+````````````````````````````````

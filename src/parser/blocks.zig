@@ -43,6 +43,7 @@ const md_ascii_eq = util.md_ascii_eq;
 const memcmp = util.memcmp;
 
 const md_is_link_reference_definition = refdefs.md_is_link_reference_definition;
+const md_is_footnote_definition = refdefs.md_is_footnote_definition;
 
 const md_is_html_tag = inlines.md_is_html_tag;
 
@@ -147,21 +148,41 @@ pub fn md_start_new_block(ctx: *MD_CTX, line: *const MD_LINE_ANALYSIS) c_int {
     return 0;
 }
 
-// Eat from start of current (textual) block any reference definitions.
+// Eat from start of current (textual) block any reference definitions and/or
+// footnote definitions. (Both can only be at the start of it, as neither can
+// break a paragraph.)
 pub fn md_consume_link_reference_definitions(ctx: *MD_CTX) c_int {
     const lines: [*c]MD_LINE = @ptrCast(@alignCast(ctx.current_block + 1));
     const n_lines: MD_SIZE = ctx.current_block.*.n_lines;
     var n: MD_SIZE = 0;
 
     while (n < n_lines) {
-        const n_link_ref_lines = md_is_link_reference_definition(ctx, lines[n..n_lines]);
-        // Not a reference definition?
-        if (n_link_ref_lines == 0)
+        var n_consumed: c_int = 0;
+
+        // With footnotes enabled, a line starting `[^` is offered to the
+        // footnote recognizer FIRST. Otherwise `[^x]: url` is swallowed by the
+        // link-reference recognizer as a ref def labelled `^x` — which is
+        // exactly the mis-parse this extension fixes.
+        if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0 and
+            lines[n].beg + 1 < ctx.size and
+            ctx.ch(lines[n].beg) == '[' and ctx.ch(lines[n].beg + 1) == '^')
+        {
+            n_consumed = md_is_footnote_definition(ctx, lines[n..n_lines]);
+            if (n_consumed < 0)
+                return -1;
+        }
+
+        if (n_consumed == 0) {
+            n_consumed = md_is_link_reference_definition(ctx, lines[n..n_lines]);
+            if (n_consumed < 0)
+                return -1;
+        }
+
+        // Neither kind of definition?
+        if (n_consumed == 0)
             break;
-        // Ref def but could not be stored (OOM).
-        if (n_link_ref_lines < 0)
-            return -1;
-        n += @intCast(n_link_ref_lines);
+
+        n += @intCast(n_consumed);
     }
 
     if (n > 0) {

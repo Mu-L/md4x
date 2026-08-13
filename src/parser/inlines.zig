@@ -40,6 +40,7 @@ const MD_LINK_ATTR = refdefs.MD_LINK_ATTR;
 const md_is_autolink = refdefs.md_is_autolink;
 const md_is_inline_link_spec = refdefs.md_is_inline_link_spec;
 const md_is_link_reference = refdefs.md_is_link_reference;
+const md_lookup_footnote_def = refdefs.md_lookup_footnote_def;
 
 // ============================================================================
 //  Pass C — Raw HTML recognizers (needed by md_collect_marks). These are
@@ -347,8 +348,23 @@ pub fn md_rollback(ctx: *MD_CTX, opener_index: c_int, closer_index: c_int, how: 
     if (how == MD_ROLLBACK_ALL) {
         var j: c_int = opener_index + 1;
         while (j < closer_index) : (j += 1) {
-            ctx.marks.items[@intCast(j)].ch = 'D';
-            ctx.marks.items[@intCast(j)].flags = 0;
+            const mark = &ctx.marks.items[@intCast(j)];
+
+            // Same asymmetry md_disable_marks guards against (md4c 326fe25):
+            // a footnote-reference opener inside the rolled-back range may have
+            // its `]` closer outside it. md4x reaches the wiki-link case through
+            // md_rollback rather than md_disable_marks, so the guard is needed
+            // in both.
+            if (mark.ch == '[' and (mark.flags & MarkFlags.footnote_ref) != 0 and
+                mark.next >= 0 and mark.next >= closer_index)
+            {
+                const closer = &ctx.marks.items[@intCast(mark.next)];
+                closer.ch = 'D';
+                closer.flags &= ~MarkFlags.resolved;
+            }
+
+            mark.ch = 'D';
+            mark.flags = 0;
         }
     }
 }
@@ -363,6 +379,19 @@ pub fn md_disable_marks(ctx: *MD_CTX, mark_index0: c_int, mark_index1: c_int) vo
     var i: c_int = mark_index0;
     while (i < mark_index1) : (i += 1) {
         const mark = &ctx.marks.items[@intCast(i)];
+
+        // A footnote-reference opener's `]` closer may live OUTSIDE the disabled
+        // range (it does when the opener is swallowed by a wiki-link
+        // destination). Leaving it behind is what tripped md4c's assert in
+        // #348 — kill it with its opener. md4c 326fe25.
+        if (mark.ch == '[' and (mark.flags & MarkFlags.footnote_ref) != 0 and
+            mark.next >= 0 and mark.next >= mark_index1)
+        {
+            const closer = &ctx.marks.items[@intCast(mark.next)];
+            closer.ch = 'D';
+            closer.flags &= ~MarkFlags.resolved;
+        }
+
         mark.ch = 'D';
         mark.flags &= ~MarkFlags.resolved;
     }
@@ -721,6 +750,35 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 }
 
                 off += 1;
+                continue :scan;
+            }
+
+            // A potential footnote reference: `[^label]`. Collected BEFORE the
+            // generic `[` arm so the opener swallows the `^` and can never be
+            // mistaken for a link / image / wikilink opener. The opener spans
+            // `[^` (end - beg == 2); the `]` is collected by the generic closer
+            // arm below and paired by md_analyze_bracket like any other bracket.
+            if ((ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) and
+                ch == '[' and off + 1 < line.*.end and ctx.ch(off + 1) == '^')
+            {
+                const tmp: OFF = off + 2;
+                if (addMark(ctx, '[', off, tmp, MarkFlags.potential_opener | MarkFlags.footnote_ref) == null) {
+                    ret = -1;
+                    return ret;
+                }
+                off = tmp;
+                // Two dummies, matching the generic `[` arm's shape so every
+                // `opener + 1` / `opener + 2` reader stays in range. Only the
+                // first is used: md_resolve_footnote_refs parks the resolved
+                // (id, ref_id) pair in its `beg`/`end`.
+                if (addMark(ctx, 'D', off, off, 0) == null) {
+                    ret = -1;
+                    return ret;
+                }
+                if (addMark(ctx, 'D', off, off, 0) == null) {
+                    ret = -1;
+                    return ret;
+                }
                 continue :scan;
             }
 
@@ -1217,6 +1275,13 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
             continue;
         }
 
+        // Footnote-reference openers are never links: md_resolve_footnote_refs
+        // resolves them after this pass has finished with the real links.
+        if (opener.flags & MarkFlags.footnote_ref != 0) {
+            opener_index = next_index;
+            continue;
+        }
+
         if (next_index >= 0) {
             next_opener = &ctx.marks.items[@intCast(next_index)];
             next_closer = &ctx.marks.items[@intCast(next_opener.?.next)];
@@ -1441,6 +1506,56 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
     }
 
     return 0;
+}
+
+// Resolve every `[^label]` footnote reference in the current block. Runs after
+// md_resolve_links, so all real links are already resolved and any footnote
+// opener that a link URL / wiki-link destination swallowed has been turned into
+// a 'D' dummy (which is what the `ch != '['` guard below rejects — md4c
+// 54bfec0, since the footnote_ref FLAG survives disabling but the char does not).
+//
+// An unknown label is simply left unresolved, so it renders as literal text.
+// md4c a8b0d3e.
+pub fn md_resolve_footnote_refs(ctx: *MD_CTX) void {
+    var i: c_int = 0;
+    while (i < ctx.nMarks()) : (i += 1) {
+        const opener = &ctx.marks.items[@intCast(i)];
+
+        if (opener.ch != '[' or (opener.flags & MarkFlags.footnote_ref) == 0)
+            continue;
+        if (opener.next < 0)
+            continue; // No matching ']' was found.
+
+        const closer = &ctx.marks.items[@intCast(opener.next)];
+        if (closer.ch != ']')
+            continue; // The closer was disabled; see md_disable_marks.
+
+        // The label is the raw text between the marks: `opener.end` points past
+        // `[^`, `closer.beg` at the `]`.
+        const label_beg: OFF = opener.end;
+        const label_end: OFF = closer.beg;
+        if (label_beg >= label_end)
+            continue; // Empty label.
+
+        const def = md_lookup_footnote_def(ctx, ctx.str(label_beg), label_end - label_beg) orelse
+            continue; // Unknown label -> stays literal text.
+
+        // Assign the id on first reference; count every reference.
+        if (def.index == 0) {
+            ctx.next_footnote_index += 1;
+            def.index = ctx.next_footnote_index;
+        }
+        def.ref_count += 1;
+
+        // Park the public detail values in the dummy mark after the opener.
+        const index_mark = &ctx.marks.items[@intCast(i + 1)];
+        std.debug.assert(index_mark.ch == 'D');
+        index_mark.beg = def.index;
+        index_mark.end = def.ref_count;
+
+        opener.flags |= MarkFlags.opener | MarkFlags.resolved;
+        closer.flags |= MarkFlags.closer | MarkFlags.resolved;
+    }
 }
 
 // md4x.c ~3977.
@@ -1924,6 +2039,12 @@ pub fn md_resolve_attrs(ctx: *MD_CTX) c_int {
                 const opener = &ctx.marks.items[@intCast(opener_index)];
                 if (opener_index + 1 < ctx.nMarks() and ctx.marks.items[@intCast(opener_index + 1)].ch == 'S') continue;
                 if (opener.ch == '[' and opener.end - opener.beg >= 2 and mark.end - mark.beg >= 2) continue;
+                // `[^1]{.cls}`: footnote wins, the attrs are not consumed. The
+                // span is self-contained (no text between enter and leave), so
+                // there is nothing for a `{...}` to attach to, and stretching
+                // the closer's `end` here would silently eat the braces from the
+                // output. Neither md4c nor md4x had a rule; this is the choice.
+                if (opener.ch == '[' and (opener.flags & MarkFlags.footnote_ref) != 0) continue;
             }
         }
 
@@ -1956,6 +2077,11 @@ pub fn md_analyze_inlines(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool
     ctx.opener_stacks[BRACKET_OPENERS].top = -1;
     ctx.unresolved_link_head = -1;
     ctx.unresolved_link_tail = -1;
+
+    // (1b) Footnote references. Must run after links, so a footnote pair inside
+    // a resolved link is still found and one inside a link URL is already dead.
+    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0)
+        md_resolve_footnote_refs(ctx);
 
     if (table_mode) {
         // (2) Table cell boundaries.
@@ -2125,6 +2251,27 @@ pub fn md_enter_leave_span_a_with_attrs(ctx: *MD_CTX, enter: bool, ty: c.SpanTyp
 
     md_free_attribute(ctx, &href_build);
     md_free_attribute(ctx, &title_build);
+    return ret;
+}
+
+// A footnote reference is emitted as a SELF-CONTAINED span: enter and leave fire
+// back to back with no text callback between them, so the renderer gets
+// everything from the detail. md4c a8b0d3e.
+pub fn md_enter_leave_span_footnote_ref(ctx: *MD_CTX, id: c_uint, ref_id: c_uint, label: [*c]const CHAR, label_size: SZ) c_int {
+    var label_build: MD_ATTRIBUTE_BUILD = .{};
+    var det: c.SpanFootnoteRefDetail = .{ .id = id, .ref_id = ref_id };
+    var ret: c_int = 0;
+
+    md_build_attribute(ctx, label, label_size, 0, &det.label, &label_build) catch {
+        ret = -1;
+    };
+    if (ret == 0) {
+        const d: c.SpanDetail = .{ .footnote_ref = det };
+        ret = mdEnterSpan(ctx, &d);
+        if (ret == 0) ret = mdLeaveSpan(ctx, &d);
+    }
+
+    md_free_attribute(ctx, &label_build);
     return ret;
 }
 
@@ -2298,7 +2445,16 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                     const opener: [*c]MD_MARK = if (mark.*.ch != ']') mark else &ctx.marks.items[@intCast(mark.*.prev)];
                     const closer: [*c]MD_MARK = &ctx.marks.items[@intCast(opener.*.next)];
 
-                    if ((opener.*.ch == '[' and closer.*.ch == ']') and
+                    // Footnote reference: self-contained span, no text emitted.
+                    // Only the opener is ever seen here — the opener's `end` is
+                    // redirected past the whole `[^label]`, so the post-switch
+                    // `off = mark.end` skips the label text and the `]` closer.
+                    if (opener.*.flags & MarkFlags.footnote_ref != 0) {
+                        const index_mark: [*c]MD_MARK = opener + 1;
+                        ret = md_enter_leave_span_footnote_ref(ctx, index_mark.*.beg, index_mark.*.end, ctx.str(opener.*.end), closer.*.beg - opener.*.end);
+                        if (ret != 0) return ret;
+                        mark.*.end = closer.*.end;
+                    } else if ((opener.*.ch == '[' and closer.*.ch == ']') and
                         opener.*.end - opener.*.beg >= 2 and
                         closer.*.end - closer.*.beg >= 2)
                     {

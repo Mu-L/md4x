@@ -77,7 +77,8 @@ pub const BlockDetail = union(BlockType) {
     table: BlockTableDetail,              thead: void,              tbody: void,
     tr: void,    th: BlockTdDetail,       td: BlockTdDetail,        frontmatter: void,
     component: BlockComponentDetail,      template: BlockTemplateDetail,
-    alert: BlockAlertDetail,
+    alert: BlockAlertDetail,              footnote_def_section: void,
+    footnote_def: BlockFootnoteDefDetail,
 };
 
 pub const SpanDetail = union(SpanType) {
@@ -85,7 +86,7 @@ pub const SpanDetail = union(SpanType) {
     code: SpanAttrsDetail,   del: SpanAttrsDetail,    latexmath: void,
     latexmath_display: void, wikilink: SpanWikilinkDetail,             u: SpanAttrsDetail,
     component: SpanComponentDetail,                    span: SpanSpanDetail,
-    mark: SpanAttrsDetail,
+    mark: SpanAttrsDetail,   footnote_ref: SpanFootnoteRefDetail,
 };
 ```
 
@@ -152,46 +153,58 @@ MD4X assumes UTF-8. Unicode matters for: word boundary classification (emphasis)
 
 ## Block Types (`BlockType` / `BlockDetail`)
 
-| Type           | HTML            | Union payload          |
-| -------------- | --------------- | ---------------------- |
-| `.doc`         | `<body>`        | `void`                 |
-| `.quote`       | `<blockquote>`  | `void`                 |
-| `.ul`          | `<ul>`          | `BlockUlDetail`        |
-| `.ol`          | `<ol>`          | `BlockOlDetail`        |
-| `.li`          | `<li>`          | `BlockLiDetail`        |
-| `.hr`          | `<hr>`          | `void`                 |
-| `.h`           | `<h1>`–`<h6>`   | `BlockHDetail`         |
-| `.code`        | `<pre><code>`   | `BlockCodeDetail`      |
-| `.html`        | _(raw HTML)_    | `void`                 |
-| `.p`           | `<p>`           | `void`                 |
-| `.table`       | `<table>`       | `BlockTableDetail`     |
-| `.thead`       | `<thead>`       | `void`                 |
-| `.tbody`       | `<tbody>`       | `void`                 |
-| `.tr`          | `<tr>`          | `void`                 |
-| `.th`          | `<th>`          | `BlockTdDetail`        |
-| `.td`          | `<td>`          | `BlockTdDetail`        |
-| `.frontmatter` | _(suppressed)_  | `void`                 |
-| `.component`   | _(dynamic tag)_ | `BlockComponentDetail` |
-| `.template`    | `<template>`    | `BlockTemplateDetail`  |
-| `.alert`       | `<blockquote>`  | `BlockAlertDetail`     |
+| Type                    | HTML                              | Union payload            |
+| ----------------------- | --------------------------------- | ------------------------ |
+| `.doc`                  | `<body>`                          | `void`                   |
+| `.quote`                | `<blockquote>`                    | `void`                   |
+| `.ul`                   | `<ul>`                            | `BlockUlDetail`          |
+| `.ol`                   | `<ol>`                            | `BlockOlDetail`          |
+| `.li`                   | `<li>`                            | `BlockLiDetail`          |
+| `.hr`                   | `<hr>`                            | `void`                   |
+| `.h`                    | `<h1>`–`<h6>`                     | `BlockHDetail`           |
+| `.code`                 | `<pre><code>`                     | `BlockCodeDetail`        |
+| `.html`                 | _(raw HTML)_                      | `void`                   |
+| `.p`                    | `<p>`                             | `void`                   |
+| `.table`                | `<table>`                         | `BlockTableDetail`       |
+| `.thead`                | `<thead>`                         | `void`                   |
+| `.tbody`                | `<tbody>`                         | `void`                   |
+| `.tr`                   | `<tr>`                            | `void`                   |
+| `.th`                   | `<th>`                            | `BlockTdDetail`          |
+| `.td`                   | `<td>`                            | `BlockTdDetail`          |
+| `.frontmatter`          | _(suppressed)_                    | `void`                   |
+| `.component`            | _(dynamic tag)_                   | `BlockComponentDetail`   |
+| `.template`             | `<template>`                      | `BlockTemplateDetail`    |
+| `.alert`                | `<blockquote>`                    | `BlockAlertDetail`       |
+| `.footnote_def_section` | `<section class="footnotes"><ol>` | `void`                   |
+| `.footnote_def`         | `<li id="fn-N">`                  | `BlockFootnoteDefDetail` |
+
+The two footnote blocks are emitted **after every other block**, at the end of
+the document, in order of first reference — see
+[markdown-syntax.md](markdown-syntax.md) for the syntax and
+[renderers.md](renderers.md) for what each renderer makes of them.
 
 ## Span Types (`SpanType` / `SpanDetail`)
 
-| Type                 | HTML             | Union payload         |
-| -------------------- | ---------------- | --------------------- |
-| `.em`                | `<em>`           | `SpanAttrsDetail`     |
-| `.strong`            | `<strong>`       | `SpanAttrsDetail`     |
-| `.a`                 | `<a>`            | `SpanADetail`         |
-| `.img`               | `<img>`          | `SpanImgDetail`       |
-| `.code`              | `<code>`         | `SpanAttrsDetail`     |
-| `.del`               | `<del>`          | `SpanAttrsDetail`     |
-| `.latexmath`         | _(inline math)_  | `void`                |
-| `.latexmath_display` | _(display math)_ | `void`                |
-| `.wikilink`          | _(wiki link)_    | `SpanWikilinkDetail`  |
-| `.u`                 | `<u>`            | `SpanAttrsDetail`     |
-| `.component`         | _(dynamic tag)_  | `SpanComponentDetail` |
-| `.span`              | `<span>`         | `SpanSpanDetail`      |
-| `.mark`              | `<mark>`         | `SpanAttrsDetail`     |
+| Type                 | HTML             | Union payload           |
+| -------------------- | ---------------- | ----------------------- |
+| `.em`                | `<em>`           | `SpanAttrsDetail`       |
+| `.strong`            | `<strong>`       | `SpanAttrsDetail`       |
+| `.a`                 | `<a>`            | `SpanADetail`           |
+| `.img`               | `<img>`          | `SpanImgDetail`         |
+| `.code`              | `<code>`         | `SpanAttrsDetail`       |
+| `.del`               | `<del>`          | `SpanAttrsDetail`       |
+| `.latexmath`         | _(inline math)_  | `void`                  |
+| `.latexmath_display` | _(display math)_ | `void`                  |
+| `.wikilink`          | _(wiki link)_    | `SpanWikilinkDetail`    |
+| `.u`                 | `<u>`            | `SpanAttrsDetail`       |
+| `.component`         | _(dynamic tag)_  | `SpanComponentDetail`   |
+| `.span`              | `<span>`         | `SpanSpanDetail`        |
+| `.mark`              | `<mark>`         | `SpanAttrsDetail`       |
+| `.footnote_ref`      | `<sup><a>`       | `SpanFootnoteRefDetail` |
+
+`.footnote_ref` is **self-contained**: `enter_span` and `leave_span` fire back to
+back with no `text` callback between them, so a renderer must emit everything it
+wants from the detail alone.
 
 The `SpanAttrsDetail` spans used to receive _either_ a detail or a `null`
 pointer, depending on whether a trailing `{...}` was present. That distinction
@@ -307,6 +320,19 @@ pub const BlockTemplateDetail = struct {
 pub const BlockAlertDetail = struct {
     type_name: Attribute, // Alert type (e.g. "NOTE", "WARNING")
 };
+
+pub const BlockFootnoteDefDetail = struct {
+    id: c_uint,             // 1-based id, assigned in first-reference order
+    ref_count: c_uint,      // How many references resolved to this definition
+    label: Attribute,       // Raw label text, e.g. "1" or "note"
+};
+
+pub const SpanFootnoteRefDetail = struct {
+    id: c_uint,             // 1-based id of the referenced footnote
+    ref_id: c_uint,         // 1-based ordinal of THIS reference among that
+                            // footnote's references (for a unique backref anchor)
+    label: Attribute,       // Raw label text, e.g. "1" or "note"
+};
 ```
 
 `SpanADetail` and `SpanImgDetail` are **no longer layout-compatible** (they are
@@ -373,11 +399,12 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 | `MD_FLAG_ATTRIBUTES`               | `0x40000`  | Enable `{...}` attributes on inline elements and `[text]{.class}` spans           |
 | `MD_FLAG_ALERTS`                   | `0x80000`  | Enable `> [!TYPE]` alert/admonition syntax                                        |
 | `MD_FLAG_HIGHLIGHT`                | `0x100000` | Enable `==highlight==` spans                                                      |
+| `MD_FLAG_FOOTNOTES`                | `0x200000` | Enable `[^label]` references and `[^label]:` definitions                          |
 
 **Compound flags:**
 
 - `MD_FLAG_PERMISSIVEAUTOLINKS` = email + URL + WWW autolinks
 - `MD_FLAG_NOHTML` = no HTML blocks + no HTML spans
 - `MD_DIALECT_COMMONMARK` = `0` (strict CommonMark)
-- `MD_DIALECT_GITHUB` = permissive autolinks + tables + strikethrough + task lists + alerts
-- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + underline + frontmatter + components + attributes + alerts + highlight)
+- `MD_DIALECT_GITHUB` = permissive autolinks + tables + strikethrough + task lists + alerts + footnotes
+- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + underline + frontmatter + components + attributes + alerts + highlight + footnotes)

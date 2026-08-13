@@ -36,6 +36,7 @@ const md_text_with_null_replacement = util.md_text_with_null_replacement;
 const memmove = util.memmove;
 
 const md_build_ref_def_hashtable = refdefs.md_build_ref_def_hashtable;
+const md_build_footnote_def_hashtable = refdefs.md_build_footnote_def_hashtable;
 
 const mdText = inlines.mdText;
 const md_analyze_inlines = inlines.md_analyze_inlines;
@@ -962,6 +963,63 @@ pub fn md_process_line(ctx: *MD_CTX, p_pivot_line: *[*c]const MD_LINE_ANALYSIS, 
     return ret;
 }
 
+// Emit one footnote definition. Its body is re-parsed here, outside the block
+// loop, from the heap-copied MD_LINE array captured by md_is_footnote_definition
+// — so it is NOT wrapped in a `p` block: the inlines land directly inside
+// `footnote_def`, matching md4c. md4c a8b0d3e.
+fn md_process_footnote_def(ctx: *MD_CTX, def: *const types.MD_FOOTNOTE_DEF) c_int {
+    var label_build: MD_ATTRIBUTE_BUILD = .{};
+    var det: c.BlockFootnoteDefDetail = .{ .id = def.index, .ref_count = def.ref_count };
+    var ret: c_int = 0;
+
+    md_build_attribute(ctx, def.label, def.label_size, 0, &det.label, &label_build) catch {
+        ret = -1;
+    };
+
+    if (ret == 0) {
+        const d: c.BlockDetail = .{ .footnote_def = det };
+        ret = mdEnterBlock(ctx, &d);
+        if (ret == 0) ret = md_process_normal_block_contents(ctx, def.content_lines);
+        if (ret == 0) ret = mdLeaveBlock(ctx, &d);
+    }
+
+    md_free_attribute(ctx, &label_build);
+    return ret;
+}
+
+fn md_footnote_def_less_by_index(_: void, a: types.MD_FOOTNOTE_DEF, b: types.MD_FOOTNOTE_DEF) bool {
+    // Unreferenced defs (index == 0) always sort after referenced ones.
+    if (a.index == 0) return false;
+    if (b.index == 0) return true;
+    return a.index < b.index;
+}
+
+// Emit the footnote definitions that were actually referenced, in
+// first-reference order, wrapped in one `footnote_def_section`. Called from
+// md_process_doc AFTER md_process_all_blocks — this deferred emission is why the
+// definition lines are copied to the heap rather than left in the block arena,
+// which md_process_all_blocks has already consumed by now. md4c a8b0d3e.
+fn md_process_footnote_defs(ctx: *MD_CTX) c_int {
+    if (ctx.footnote_defs.items.len == 0 or ctx.next_footnote_index == 0)
+        return 0;
+
+    // Sort by index so emission follows reference order. Sorting in place is
+    // safe: every lookup is done by now, and md_free_footnote_defs only needs
+    // the array's bounds (unchanged), not its order.
+    std.sort.pdq(types.MD_FOOTNOTE_DEF, ctx.footnote_defs.items, {}, md_footnote_def_less_by_index);
+
+    var ret = mdEnterBlock(ctx, &.{ .footnote_def_section = {} });
+    if (ret != 0) return ret;
+
+    for (ctx.footnote_defs.items) |*def| {
+        if (def.index == 0) break;
+        ret = md_process_footnote_def(ctx, def);
+        if (ret != 0) return ret;
+    }
+
+    return mdLeaveBlock(ctx, &.{ .footnote_def_section = {} });
+}
+
 // md4x.c ~7942.
 pub fn md_process_doc(ctx: *MD_CTX) c_int {
     var pivot_line: [*c]const MD_LINE_ANALYSIS = &md_dummy_blank_line;
@@ -990,12 +1048,22 @@ pub fn md_process_doc(ctx: *MD_CTX) c_int {
 
     ret = md_build_ref_def_hashtable(ctx);
     if (ret < 0) return ret;
+    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) {
+        ret = md_build_footnote_def_hashtable(ctx);
+        if (ret < 0) return ret;
+    }
 
     // Process all blocks.
     ret = md_leave_child_containers(ctx, 0);
     if (ret < 0) return ret;
     ret = md_process_all_blocks(ctx);
     if (ret < 0) return ret;
+
+    // Emit the referenced footnote definitions, in reference order.
+    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) {
+        ret = md_process_footnote_defs(ctx);
+        if (ret < 0) return ret;
+    }
 
     ret = mdLeaveBlock(ctx, &.{ .doc = {} });
     if (ret != 0) return ret;

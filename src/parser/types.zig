@@ -226,6 +226,13 @@ pub const MarkFlags = struct {
     pub const autolink_missing_mailto: u8 = 0x40;
     pub const valid_permissive_autolink: u8 = 0x20; // For permissive autolinks.
     pub const has_nested_brackets: u8 = 0x20; // For '[' to rule out invalid labels early.
+    // `[` opener of a `[^label]` footnote reference (never a link/image/wikilink
+    // opener). Aliases the same bit as `emph_mod3_0` / `autolink_missing_mailto`
+    // — neither of which is ever written on a '[' mark: mod-3 bits belong to
+    // '*'/'_' and the mailto bit to '<'/'>'/'@'/':'/'.'. The bit a '[' mark DOES
+    // already use is 0x20 (`has_nested_brackets`), which is why this one is 0x40
+    // and not 0x20.
+    pub const footnote_ref: u8 = 0x40;
 };
 
 pub const CODESPAN_MARK_MAXLEN: usize = 32;
@@ -248,15 +255,39 @@ pub const MD_REF_DEF = extern struct {
     title_needs_free: bool = false,
 };
 
-// Complex hashtable bucket: holds multiple ref-def pointers (a hash collision
+// One footnote definition, `[^label]: text…`. Internal-only (renderers see the
+// public `BlockFootnoteDefDetail` instead), so plain struct / Zig slices.
+//
+// `label` points **into ctx.text** — a footnote label may not span lines, so
+// unlike a link-reference label it never needs the merge-and-own path and there
+// is nothing to free. `content_lines` is the one owned allocation; its length is
+// exactly `content_lines.len`, which is what `md_free_footnote_defs` frees.
+pub const MD_FOOTNOTE_DEF = struct {
+    // Non-const to keep the `label`/`label_size`/`hash` header layout-compatible
+    // with MD_REF_DEF, which is what lets both share `LabelHashTable`.
+    label: [*c]CHAR = null,
+    label_size: SZ = 0,
+    hash: c_uint = 0,
+    /// 0 = unreferenced; otherwise the 1-based order of the first reference.
+    index: c_uint = 0,
+    /// Number of `[^label]` references that resolved to this definition.
+    ref_count: c_uint = 0,
+    content_lines: []MD_LINE = &.{},
+};
+
+// Complex hashtable bucket: holds multiple label-def pointers (a hash collision
 // of distinct labels). Mirrors `struct MD_REF_DEF_LIST_tag` with the C
 // flexible-array member `MD_REF_DEF* ref_defs[]`. We allocate
-// `@sizeOf(MD_REF_DEF_LIST) + n * @sizeOf(?*MD_REF_DEF)` bytes and index past
-// the header manually (see md_ref_def_list_items).
+// `@sizeOf(MD_REF_DEF_LIST) + n * @sizeOf(?*Def)` bytes and index past the
+// header manually (see refdefs.LabelHashTable(Def).items).
+//
+// The header is shared by every label hashtable (link ref-defs and footnote
+// defs): the flexible array is pointer-sized whatever `Def` is, so only the
+// element *type* differs and that lives in the generic, not here.
 pub const MD_REF_DEF_LIST = extern struct {
     n_ref_defs: c_int = 0,
     alloc_ref_defs: c_int = 0,
-    // Flexible array `MD_REF_DEF* ref_defs[]` follows in memory.
+    // Flexible array `Def* defs[]` follows in memory.
 };
 
 // "During analyzes of inline marks, we need to manage stacks of unresolved
@@ -358,6 +389,14 @@ pub const MD_CTX = struct {
     // `int`, which overflows above ~429M ref-defs; upstream 19dd06f widened it.
     ref_def_hashtable_size: usize = 0,
     max_ref_def_output: SZ = 0,
+
+    // Footnote definitions. Same shape as the ref-def pair above and driven by
+    // the same generic (`refdefs.LabelHashTable`); only the record type differs.
+    footnote_defs: std.ArrayListUnmanaged(MD_FOOTNOTE_DEF) = .empty,
+    footnote_hashtable: [*c]?*anyopaque = null,
+    footnote_hashtable_size: usize = 0,
+    /// 1-based counter handing out `MD_FOOTNOTE_DEF.index` on first reference.
+    next_footnote_index: c_uint = 0,
 
     // Stack of inline/span markers. (PLAN 8.1: ArrayListUnmanaged. The emphasis
     // engine walks it with raw `[*c]MD_MARK` pointers derived from

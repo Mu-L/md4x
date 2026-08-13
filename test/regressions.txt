@@ -1962,3 +1962,50 @@ a@ex.com.-
 <p>http://ex.coma._</p>
 <p>a@ex.com.-</p>
 ````````````````````````````````
+
+
+## Footnote definition with bracketed link text
+
+A definition whose body is an unbalanced-emphasis link label used to trip an
+assertion (md4c `54bfec0`). The definition is consumed, the body is a link
+whose label re-parses to nothing, and the definition is unreferenced so nothing
+is emitted at all.
+
+```````````````````````````````` example
+[^x]:
+[**x*]()
+.
+````````````````````````````````
+
+
+## Footnote reference inside a wiki-link destination
+
+The `[^` opener is swallowed by the wiki-link destination; its `]` closer lives
+*outside* the disabled range and has to be killed along with it, or the emission
+pass meets a resolved closer whose opener is a dummy (md4c `326fe25`, #348).
+
+```````````````````````````````` example
+[[[^|]]]
+[^|]:
+.
+<p><x-wikilink data-target="[^">]</x-wikilink>
+[^|]:</p>
+````````````````````````````````
+
+A well-formed reference and a well-formed wiki link in the same paragraph are
+both unaffected:
+
+```````````````````````````````` example
+x[^1] [[foo|bar]]
+
+[^1]: Note.
+.
+<p>x<sup><a href="#fn-1" id="fnref-1-1">1</a></sup> <x-wikilink data-target="foo">bar</x-wikilink></p>
+<section class="footnotes">
+<ol>
+<li id="fn-1">
+Note.<a href="#fnref-1-1" class="footnote-backref">&#8617;</a>
+</li>
+</ol>
+</section>
+````````````````````````````````

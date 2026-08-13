@@ -721,6 +721,25 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .template => {
             // Transparent — render children normally
         },
+
+        // Definitions are re-emitted here, at the END of the document, not at
+        // their original position. That is a textual move, not a semantic one:
+        // a footnote definition may sit anywhere in the source and resolves the
+        // same either way, and the parser only ever hands them over deferred.
+        .footnote_def_section => {},
+
+        .footnote_def => |*d| {
+            if (r.need_newline) {
+                render_newline(r);
+                r.need_newline = false;
+            }
+            render_indent(r);
+            render_verbatim_lit(r, "[^");
+            if (d.label.text.len > 0)
+                render_attribute(r, &d.label, render_verbatim);
+            render_verbatim_lit(r, "]: ");
+            r.at_line_start = false;
+        },
     }
 
     return 0;
@@ -827,6 +846,15 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         },
 
         .template => {},
+
+        .footnote_def_section => {
+            r.need_newline = true;
+        },
+
+        .footnote_def => {
+            render_newline(r);
+            r.need_newline = true;
+        },
     }
 
     return 0;
@@ -899,6 +927,17 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
 
         .span => {
             // Generic span — transparent, just render content
+        },
+
+        // Self-contained span: no text callbacks follow, so the whole
+        // `[^label]` is written here. The label is verbatim by construction —
+        // it cannot contain whitespace, `[` or `]`, which are the only bytes
+        // that could end it early on the re-parse.
+        .footnote_ref => |*d| {
+            render_verbatim_lit(r, "[^");
+            if (d.label.text.len > 0)
+                render_attribute(r, &d.label, render_verbatim);
+            render_verbatim_lit(r, "]");
         },
     }
 
@@ -976,6 +1015,8 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         },
 
         .span => {},
+
+        .footnote_ref => {}, // enter_span already wrote the whole `[^label]`.
     }
 
     return 0;

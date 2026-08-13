@@ -72,6 +72,13 @@ pub const BlockType = enum(c_uint) {
     component,
     template,
     alert,
+    /// Container wrapping every referenced footnote definition, emitted once at
+    /// the very end of the document. Carries no detail.
+    footnote_def_section,
+    /// One footnote definition, emitted inside `footnote_def_section` in order
+    /// of FIRST REFERENCE (not definition order). Unreferenced definitions are
+    /// consumed by the parser and never emitted.
+    footnote_def,
 };
 
 /// Span types. Ordinals are the values of the former C `MD_SPANTYPE`.
@@ -89,6 +96,10 @@ pub const SpanType = enum(c_uint) {
     component,
     span,
     mark,
+    /// `[^label]`. **Self-contained**: `enter_span` and `leave_span` fire back
+    /// to back with no `text` callback between them, so everything a renderer
+    /// needs is in `SpanFootnoteRefDetail`.
+    footnote_ref,
 };
 
 /// Text-run types. Ordinals are the values of the former C `MD_TEXTTYPE`.
@@ -210,6 +221,26 @@ pub const BlockAlertDetail = struct {
     type_name: Attribute = .{},
 };
 
+pub const BlockFootnoteDefDetail = struct {
+    /// 1-based identifier of this footnote, assigned in first-reference order.
+    id: c_uint = 0,
+    /// How many `[^label]` references in the document resolved to it.
+    ref_count: c_uint = 0,
+    /// Raw label text, e.g. "1" or "note".
+    label: Attribute = .{},
+};
+
+pub const SpanFootnoteRefDetail = struct {
+    /// 1-based identifier of the referenced footnote (matches
+    /// `BlockFootnoteDefDetail.id`).
+    id: c_uint = 0,
+    /// 1-based ordinal of THIS reference among the references to that footnote,
+    /// so a renderer can emit a unique back-reference anchor per occurrence.
+    ref_id: c_uint = 0,
+    /// Raw label text, e.g. "1" or "note".
+    label: Attribute = .{},
+};
+
 pub const SpanADetail = struct {
     href: Attribute = .{},
     title: Attribute = .{},
@@ -273,6 +304,8 @@ pub const BlockDetail = union(BlockType) {
     component: BlockComponentDetail,
     template: BlockTemplateDetail,
     alert: BlockAlertDetail,
+    footnote_def_section: void,
+    footnote_def: BlockFootnoteDefDetail,
 
     /// The all-defaults value of the arm selected by `ty`. The emission path
     /// uses it to materialize a detail for a block whose type is only known at
@@ -300,6 +333,7 @@ pub const SpanDetail = union(SpanType) {
     component: SpanComponentDetail,
     span: SpanSpanDetail,
     mark: SpanAttrsDetail,
+    footnote_ref: SpanFootnoteRefDetail,
 };
 
 /// Local `std.meta.TagPayload` / default-value helpers. Spelled out here so
@@ -382,11 +416,12 @@ pub const MD_FLAG_COMPONENTS = __helpers.promoteIntLiteral(c_int, 0x20000, .hex)
 pub const MD_FLAG_ATTRIBUTES = __helpers.promoteIntLiteral(c_int, 0x40000, .hex);
 pub const MD_FLAG_ALERTS = __helpers.promoteIntLiteral(c_int, 0x80000, .hex);
 pub const MD_FLAG_HIGHLIGHT = __helpers.promoteIntLiteral(c_int, 0x100000, .hex);
+pub const MD_FLAG_FOOTNOTES = __helpers.promoteIntLiteral(c_int, 0x200000, .hex);
 pub const MD_FLAG_PERMISSIVEAUTOLINKS = (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_FLAG_PERMISSIVEURLAUTOLINKS) | MD_FLAG_PERMISSIVEWWWAUTOLINKS;
 pub const MD_FLAG_NOHTML = MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS;
 pub const MD_DIALECT_COMMONMARK = @as(c_int, 0);
-pub const MD_DIALECT_GITHUB = (((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_ALERTS;
-pub const MD_DIALECT_ALL = ((((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_UNDERLINE) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT;
+pub const MD_DIALECT_GITHUB = ((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_ALERTS) | MD_FLAG_FOOTNOTES;
+pub const MD_DIALECT_ALL = (((((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_UNDERLINE) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT) | MD_FLAG_FOOTNOTES;
 
 // ---------------------------------------------------------------------------
 // Renderer ABI types + flag values (formerly the md4x-*.h headers). The entry

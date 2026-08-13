@@ -169,6 +169,7 @@ const md_build_ref_def_hashtable = refdefs.md_build_ref_def_hashtable;
 const md_free_ref_def_hashtable = refdefs.md_free_ref_def_hashtable;
 const md_lookup_ref_def = refdefs.md_lookup_ref_def;
 const md_free_ref_defs = refdefs.md_free_ref_defs;
+const md_free_footnote_defs = refdefs.md_free_footnote_defs;
 const MD_LINK_ATTR = refdefs.MD_LINK_ATTR;
 const md_is_link_label = refdefs.md_is_link_label;
 const md_is_link_destination_A = refdefs.md_is_link_destination_A;
@@ -271,6 +272,9 @@ fn md_parse_impl(alloc: std.mem.Allocator, text: [*c]const CHAR, size: SZ, parse
     // so it MUST be torn down before md_free_ref_defs frees/deinits ref_defs.
     md_free_ref_def_hashtable(&ctx);
     md_free_ref_defs(&ctx);
+    // The footnote hashtable indexes into ctx.footnote_defs the same way, so
+    // md_free_footnote_defs tears the two down in that order internally.
+    md_free_footnote_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
     util.arena_free(ctx.alloc, ctx.block_bytes, ctx.alloc_block_bytes);
@@ -399,6 +403,9 @@ fn _test_run_inline(parser: *const c.Parser, text: [*c]const CHAR, size: SZ) c_i
     // Hashtable before ref_defs: it indexes into ctx.ref_defs (see md_parse_impl).
     md_free_ref_def_hashtable(&ctx);
     md_free_ref_defs(&ctx);
+    // The footnote hashtable indexes into ctx.footnote_defs the same way, so
+    // md_free_footnote_defs tears the two down in that order internally.
+    md_free_footnote_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
     ctx.inline_attrs.deinit(ctx.alloc);
@@ -615,6 +622,9 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
     // Hashtable before ref_defs: it indexes into ctx.ref_defs (see md_parse_impl).
     md_free_ref_def_hashtable(&ctx);
     md_free_ref_defs(&ctx);
+    // The footnote hashtable indexes into ctx.footnote_defs the same way, so
+    // md_free_footnote_defs tears the two down in that order internally.
+    md_free_footnote_defs(&ctx);
     util.free_array_a(CHAR, ctx.alloc, ctx.buffer, @intCast(ctx.alloc_buffer));
     ctx.marks.deinit(ctx.alloc);
     ctx.inline_attrs.deinit(ctx.alloc);
@@ -1505,7 +1515,8 @@ test "OOM: full md_parse sweep is crash- and leak-free under FailingAllocator" {
     // md_merge_lines_alloc buffers (PLAN item 5 — see the tail of the document).
     // std.testing.allocator flags any leak; FailingAllocator turns each
     // successive internal allocation into OOM so every abort/cleanup path runs.
-    // The document currently makes 40 ctx.alloc allocations, 4 of them merges.
+    // The document currently makes 46 ctx.alloc allocations, 4 of them merges
+    // and 6 of them the footnote sites listed at the tail of the document.
     //
     // The second titled link carries a 15-substring title (8 entities separated
     // by literal text), which is the ONLY thing in this document that drives
@@ -1534,7 +1545,16 @@ test "OOM: full md_parse sweep is crash- and leak-free under FailingAllocator" {
         //      whose buffer is handed to the `ptr_stack` and freed by its walk.
         "[multi\nline label]: /m \"multi\nline title\"\n\n" ++
         "Ref to [multi\nline label] here.\n\n" ++
-        "An [x](/u \"multi\nline title\") link.\n";
+        "An [x](/u \"multi\nline title\") link.\n\n" ++
+        // Footnotes add four ctx.alloc sites of their own: the heap-copied
+        // content_lines array, the footnote_defs list, the footnote hashtable
+        // (buckets, and a complex bucket once two labels collide), and the
+        // md_build_attribute label attribute on both the ref span and the def
+        // block. The unreferenced def keeps the "consumed but never emitted"
+        // free path covered, and the two-line def keeps the multi-line
+        // content_lines copy covered.
+        "See [^a] twice [^a] and [^b] and [^missing].\n\n" ++
+        "[^a]: first *note*.\nsecond line.\n[^b]: second note.\n[^unused]: dropped.\n";
     var probe: AbortProbe = .{};
     var p = probe.parser();
     var fail: usize = 0;
@@ -1662,6 +1682,8 @@ const TraceProbe = struct {
             c.BlockType.component => "COMPONENT",
             c.BlockType.template => "TEMPLATE",
             c.BlockType.alert => "ALERT",
+            c.BlockType.footnote_def_section => "FOOTNOTE_DEF_SECTION",
+            c.BlockType.footnote_def => "FOOTNOTE_DEF",
         };
     }
 
@@ -1680,6 +1702,7 @@ const TraceProbe = struct {
             c.SpanType.u => "U",
             c.SpanType.component => "COMPONENT",
             c.SpanType.span => "SPAN",
+            c.SpanType.footnote_ref => "FOOTNOTE_REF",
         };
     }
 
@@ -1753,6 +1776,11 @@ const TraceProbe = struct {
             c.BlockType.alert => |x| {
                 self.attr("type", x.type_name);
             },
+            c.BlockType.footnote_def_section => self.raw(" <no-detail>", .{}),
+            c.BlockType.footnote_def => |x| {
+                self.raw(" id={d} ref_count={d}", .{ x.id, x.ref_count });
+                self.attr("label", x.label);
+            },
         }
     }
 
@@ -1786,6 +1814,10 @@ const TraceProbe = struct {
             // the old "NULL detail" case.
             c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.u, c.SpanType.mark => |x| {
                 if (x.raw_attrs.len == 0) self.raw(" <no-detail>", .{}) else self.rawStr("attrs", x.raw_attrs);
+            },
+            c.SpanType.footnote_ref => |x| {
+                self.raw(" id={d} ref_id={d}", .{ x.id, x.ref_id });
+                self.attr("label", x.label);
             },
         }
     }
@@ -1929,6 +1961,12 @@ const trace_doc =
     \\Inline :badge[New]{color="red"} and :icon-star standalone.
     \\
     \\<!-- a comment -->
+    \\
+    \\Note[^fn] twice[^fn] and once[^two].
+    \\
+    \\[^fn]: first *body*.
+    \\[^two]: second.
+    \\[^unused]: never referenced.
     \\
 ;
 
@@ -2233,9 +2271,33 @@ const expected_trace =
     \\    text HTML "\n"
     \\  -block HTML
     \\  +block P <detail:opaque>
+    \\    text NORMAL "Note"
+    \\    +span FOOTNOTE_REF id=1 ref_id=1 label="fn"[NORMAL@0|end@2]
+    \\    -span FOOTNOTE_REF
+    \\    text NORMAL " twice"
+    \\    +span FOOTNOTE_REF id=1 ref_id=2 label="fn"[NORMAL@0|end@2]
+    \\    -span FOOTNOTE_REF
+    \\    text NORMAL " and once"
+    \\    +span FOOTNOTE_REF id=2 ref_id=1 label="two"[NORMAL@0|end@3]
+    \\    -span FOOTNOTE_REF
+    \\    text NORMAL "."
+    \\  -block P
+    \\  +block P <detail:opaque>
     \\    text NORMAL "nul"
     \\    text NULLCHAR "\0"
     \\    text NORMAL "char"
     \\  -block P
+    \\  +block FOOTNOTE_DEF_SECTION <no-detail>
+    \\    +block FOOTNOTE_DEF id=1 ref_count=2 label="fn"[NORMAL@0|end@2]
+    \\      text NORMAL "first "
+    \\      +span EM <no-detail>
+    \\        text NORMAL "body"
+    \\      -span EM
+    \\      text NORMAL "."
+    \\    -block FOOTNOTE_DEF
+    \\    +block FOOTNOTE_DEF id=2 ref_count=1 label="two"[NORMAL@0|end@3]
+    \\      text NORMAL "second."
+    \\    -block FOOTNOTE_DEF
+    \\  -block FOOTNOTE_DEF_SECTION
     \\-block DOC
 ++ "\n";

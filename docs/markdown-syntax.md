@@ -39,6 +39,41 @@ it cannot open when followed by whitespace and cannot close when preceded by
 whitespace, but an intra-word `a==b==c` is a highlight. Setext underlines are
 block-level and are unaffected.
 
+## Extension: Footnotes (`MD_FLAG_FOOTNOTES`)
+
+```
+Text with a footnote[^1] and again[^1].
+
+[^1]: The footnote content.
+```
+
+- **Reference** `[^label]` — the label is a non-empty run of characters that are
+  not whitespace, `[` or `]`. Labels are matched case-insensitively (the same
+  case-folding link reference labels use), so `[^AB]` and `[^ab]` are one
+  footnote.
+- **Definition** `[^label]:` at the **start of a paragraph block**. Like a link
+  reference definition it cannot interrupt a paragraph. The body is the rest of
+  that first line plus the remaining lines of the same paragraph block, stopping
+  before a line that itself starts a new `[^…]:` definition. A blank line ends it,
+  because a blank line ends the block — so, unlike GFM, an indented
+  multi-paragraph footnote body is not supported.
+- Definitions are emitted **at the very end of the document**, in order of
+  **first reference**, not definition order. A definition that is never
+  referenced is consumed and never emitted; a reference whose label has no
+  definition stays literal text. Duplicate labels: the first definition wins.
+- The reference renders `<sup><a href="#fn-N" id="fnref-N-K">N</a></sup>`, and the
+  definitions render inside `<section class="footnotes"><ol><li id="fn-N">…`, with
+  one `↩` back-reference anchor per reference.
+
+Interactions with the other MD4X extensions:
+
+- `[^1]{.cls}` — **footnote wins**, the `{...}` stays literal. The span is
+  self-contained, so there is no content for inline attributes to attach to.
+- Wiki links are unaffected: a footnote opener is `[^`, never the `[[` a wiki link
+  needs. A reference that lands inside a wiki-link **destination** is swallowed by
+  the destination.
+- Alerts (`[!TYPE]`) and components (`:name[…]`, `::name`) do not overlap `[^`.
+
 ## Extension: Permissive Autolinks
 
 - **URL** (`MD_FLAG_PERMISSIVEURLAUTOLINKS`): `https://example.com`
