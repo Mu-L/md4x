@@ -358,6 +358,68 @@ const LineContextScanner = struct {
     }
 };
 
+// "Is `pos` inside an unterminated ``` fence?" — the resumable form of
+// `in_fenced_code_block`, for the one caller that asks repeatedly.
+//
+// `heal_comparison_operators` queries it once per `- > 5`-shaped list line
+// while sweeping forward, and `in_fenced_code_block` restarts at offset 0 every
+// time, so the pair was O(n^2): 400 KB of `'- > 5\n'` repeats took 10.3 s and
+// grew 4x per doubling. Every other caller asks exactly once, so they keep
+// using the plain function.
+//
+// The loop body is the original's, with `i` promoted to a field. Two details of
+// the original are region-bounded rather than prefix-pure, and both are carried
+// in state instead:
+//
+//   * the fence test is `i + 2 < pos`, i.e. "the ``` fits entirely inside
+//     [0, pos)". A backtick within two bytes of `pos` is therefore undecided —
+//     it may start a fence once the region grows — so the cursor stops in front
+//     of it rather than consuming it. That cannot change the answer for `pos`:
+//     the original steps over those bytes with its else branch, which touches
+//     no state.
+//   * the "skip to the end of the fence line" inner loop is also bounded by
+//     `pos`, so it can be left unfinished. `skipping` records that and the next
+//     query resumes inside it.
+//
+// Everything the cursor does commit is region-independent, so resuming is exact
+// rather than approximate — provided the queried positions never decrease and
+// `text[0..pos]` never changes after being queried. The caller guarantees both:
+// it appends its output and queries at its own append cursor.
+const FenceScanner = struct {
+    i: u32 = 0,
+    inside: bool = false,
+    skipping: bool = false,
+
+    /// Equivalent to `in_fenced_code_block(text, _, pos)`.
+    /// `pos` must be >= every `pos` previously passed to this instance.
+    fn at(self: *FenceScanner, text: [*]const u8, pos: u32) bool {
+        while (self.i < pos) {
+            const c = text[self.i];
+            if (self.skipping) {
+                if (c != '\n') {
+                    self.i +%= 1;
+                    continue;
+                }
+                // The original's skip loop stops *at* the newline; the outer
+                // loop then steps over it below.
+                self.skipping = false;
+            }
+            if (c == '`') {
+                if (self.i + 2 >= pos) break;
+                if (text[self.i + 1] == '`' and text[self.i + 2] == '`') {
+                    if (!is_escaped(text, self.i))
+                        self.inside = !self.inside;
+                    self.i +%= 3;
+                    self.skipping = true;
+                    continue;
+                }
+            }
+            self.i +%= 1;
+        }
+        return self.inside;
+    }
+};
+
 // ***************************
 // ***  Setext headings    ***
 // ***************************
@@ -917,6 +979,13 @@ fn heal_links_and_images(buf: *HEAL_BUF) void {
                     }
                     return;
                 }
+                // A closer was found after this `[`. The search range only
+                // grows as `i` walks left, so that same closer sits after every
+                // earlier `[` too and none of them can heal either — the rest
+                // of the walk is pure work. Bailing here is what makes the case
+                // O(n) instead of O(n^2): without it, `'['*(n-1) + ']'` re-ran
+                // the forward scan once per bracket (26 s at 400 KB).
+                break;
             }
         }
     }
@@ -958,29 +1027,52 @@ fn heal_html_tag(buf: *HEAL_BUF) void {
 // ***  Comparison ops     ***
 // ***************************
 
+// The scan itself was always linear; the two things it did per escaped `>` were
+// not. It rescanned the whole prefix for fences (see `FenceScanner`) and it
+// memmoved the entire tail one byte right per inserted backslash, so a document
+// of `'- > 5\n'` repeats cost O(n^2) twice over — 10.3 s at 400 KB, growing 4x
+// per doubling. Both are reachable from untrusted input (`heal()` is exported to
+// the JS bindings and `--heal` applies to every renderer).
+//
+// So the escaped copy is now *appended* to a second buffer instead of being
+// spliced in place: `out` holds the source prefix with every backslash inserted
+// so far, `copied` is how much of `src` has been flushed into it, and the whole
+// pass is O(n). `src` is never mutated, which is also what makes the resumable
+// fence scan sound — its committed prefix cannot be rewritten underneath it.
+//
+// `out` is what the in-place version's buffer held at the same point, byte for
+// byte, so `fences.at(out.data, out.size)` sees exactly what
+// `in_fenced_code_block(buf.data, size, gt_pos)` used to: the source prefix
+// carrying the earlier insertions. That equality is the whole correctness
+// argument — keep the flush *before* the query.
 fn heal_comparison_operators(buf: *HEAL_BUF) void {
-    var size = buf.size;
+    const src = buf.data.?;
+    const size = buf.size;
+
+    // Allocated lazily, on the first line that reaches the fence check: a
+    // document with no comparison-operator candidate pays nothing.
+    var out: HEAL_BUF = .{ .data = null, .size = 0, .cap = 0, .err = 0 };
+    var copied: u32 = 0;
+    var fences: FenceScanner = .{};
+
     var i: u32 = 0;
-
     while (i < size) {
-        const ls = i;
-
-        while (i < size and (buf.data.?[i] == ' ' or buf.data.?[i] == '\t')) i +%= 1;
+        while (i < size and (src[i] == ' ' or src[i] == '\t')) i +%= 1;
 
         var is_list = false;
         if (i < size) {
-            if (buf.data.?[i] == '-' or buf.data.?[i] == '*' or buf.data.?[i] == '+') {
+            if (src[i] == '-' or src[i] == '*' or src[i] == '+') {
                 const after = i + 1;
-                if (after < size and buf.data.?[after] == ' ') {
+                if (after < size and src[after] == ' ') {
                     is_list = true;
                     i = after + 1;
                 }
-            } else if (buf.data.?[i] >= '0' and buf.data.?[i] <= '9') {
+            } else if (src[i] >= '0' and src[i] <= '9') {
                 var j = i;
-                while (j < size and buf.data.?[j] >= '0' and buf.data.?[j] <= '9') j +%= 1;
-                if (j < size and (buf.data.?[j] == '.' or buf.data.?[j] == ')')) {
+                while (j < size and src[j] >= '0' and src[j] <= '9') j +%= 1;
+                if (j < size and (src[j] == '.' or src[j] == ')')) {
                     j +%= 1;
-                    if (j < size and buf.data.?[j] == ' ') {
+                    if (j < size and src[j] == ' ') {
                         is_list = true;
                         i = j + 1;
                     }
@@ -988,35 +1080,60 @@ fn heal_comparison_operators(buf: *HEAL_BUF) void {
             }
         }
 
-        if (is_list and i < size and buf.data.?[i] == '>') {
+        if (is_list and i < size and src[i] == '>') {
             const gt_pos = i;
             i +%= 1;
-            if (i < size and buf.data.?[i] == '=') {
+            if (i < size and src[i] == '=') {
                 i +%= 1;
             }
-            while (i < size and buf.data.?[i] == ' ') i +%= 1;
-            if (i < size and buf.data.?[i] == '$') i +%= 1;
-            if (i < size and buf.data.?[i] >= '0' and buf.data.?[i] <= '9') {
-                if (!in_fenced_code_block(buf.data.?, size, gt_pos)) {
-                    const old_size = buf.size;
-                    buf_append_ch(buf, 0);
-                    if (buf.size <= old_size)
+            while (i < size and src[i] == ' ') i +%= 1;
+            if (i < size and src[i] == '$') i +%= 1;
+            if (i < size and src[i] >= '0' and src[i] <= '9') {
+                if (out.data == null) {
+                    buf_init(&out, size +| 64);
+                    if (out.data == null) {
+                        buf.err = 1;
                         return;
-                    // memmove(buf->data + gt_pos + 1, buf->data + gt_pos, old_size - gt_pos)
-                    const n: u32 = old_size - gt_pos;
-                    std.mem.copyBackwards(u8, buf.data.?[gt_pos + 1 .. gt_pos + 1 + n], buf.data.?[gt_pos .. gt_pos + n]);
-                    buf.data.?[gt_pos] = '\\';
-                    size = buf.size;
-                    i +%= 1;
+                    }
+                }
+                buf_append(&out, src + copied, gt_pos - copied);
+                copied = gt_pos;
+                if (out.err != 0) {
+                    buf.err = 1;
+                    buf_free(&out);
+                    return;
+                }
+                if (!fences.at(out.data.?, out.size)) {
+                    buf_append_ch(&out, '\\');
+                    if (out.err != 0) {
+                        buf.err = 1;
+                        buf_free(&out);
+                        return;
+                    }
                 }
             }
         }
 
-        while (i < size and buf.data.?[i] != '\n') i +%= 1;
+        while (i < size and src[i] != '\n') i +%= 1;
         if (i < size) i +%= 1;
-
-        _ = ls;
     }
+
+    // No candidate line: `buf` was never touched, so there is nothing to swap.
+    if (out.data == null) return;
+
+    buf_append(&out, src + copied, size - copied);
+    if (out.err != 0) {
+        buf.err = 1;
+        buf_free(&out);
+        return;
+    }
+
+    // Every later healer re-reads `buf.data`, so handing over the new buffer
+    // here is safe; `src` is dead from this point.
+    const prev_err = buf.err;
+    buf_free(buf);
+    buf.* = out;
+    buf.err = prev_err;
 }
 
 // ***************************

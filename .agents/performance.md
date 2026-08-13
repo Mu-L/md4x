@@ -51,11 +51,34 @@ until the input has no newlines, and then runs back to offset 0. Their callers
 forward, so each pair was O(n²): 240 KB of `'_a '` repeats took **14 s**, and a heal of the 565 KB
 bench fixture cost 10.9 **billion** instructions — ~400× an HTML render of the same file.
 
-The fix pattern, in both directions, is a **resumable cursor**: keep the original state machine
+`in_fenced_code_block` was the fourth, and the worst: `heal_comparison_operators` asks it once per
+`- > 5`-shaped list line, so 400 KB of those took **10.3 s** and 1 MB took **68 s**.
+
+The fix pattern, in every direction, is a **resumable cursor**: keep the original state machine
 verbatim, promote its loop index to a field, and let the caller drive it from its own forward index
-(`MathScanner`, `LineContextScanner`). That is exact rather than approximate **only while the
-queried positions never decrease** — say so in the doc comment of any such helper, and check the
-call sites really are forward-only.
+(`MathScanner`, `LineContextScanner`, `FenceScanner`). That is exact rather than approximate **only
+while the queried positions never decrease** — say so in the doc comment of any such helper, and
+check the call sites really are forward-only. `FenceScanner` adds a second precondition, because
+`in_fenced_code_block`'s two `pos`-bounded details are not prefix-pure: a backtick within two bytes
+of `pos` is undecidable (the ``` may complete once the region grows) so the cursor stops in front of
+it, and the "skip to the end of the fence line" inner loop can be left unfinished, which a
+`skipping` flag carries. Both only work if **`text[0..pos]` never changes after being queried** —
+which is why the caller had to stop mutating in place, below.
+
+## Nor may a healer splice per insertion
+
+`heal_comparison_operators` also `memmove`d the whole tail one byte right for every backslash it
+inserted, so the same input was O(n²) a second time over. It now **appends** to a second `HEAL_BUF`
+and hands it to `buf` at the end: `out` is the source prefix with every earlier insertion applied,
+`copied` tracks how much of `src` has been flushed, and the buffer is allocated lazily so a document
+with no candidate line pays nothing. Flushing up to `gt_pos` **before** querying `FenceScanner` is
+what makes `out` byte-identical to what the in-place version's buffer held at that point — that
+equality is the entire correctness argument, so do not reorder it.
+
+That rewrite also retires the file's one mid-scan mutator. Every healer now caches
+`const text = buf.data.?` and is safe only because each `buf_append` is that healer's **last** use
+of the cached pointer — an append followed by another `text[…]` read is a use-after-free. If you add
+one, either re-read `buf.data.?` after the append or move the append last.
 
 When touching heal, remember `md_heal()` does **not** use the parser, so none of the parser's
 linear-time limits (`docs/parser-api.md`) cover it, and `scripts/diff-corpus.sh`'s corpus is short
