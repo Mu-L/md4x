@@ -33,11 +33,9 @@ const c = @import("abi");
 // resolved through link-time C-ABI symbols. `abi` holds types only.
 const md4x = @import("../md4x.zig");
 const heal = @import("md4x-heal.zig");
-const sys = @cImport({
-    @cInclude("stdio.h");
-    @cInclude("string.h");
-    @cInclude("yaml.h");
-});
+// No @cImport here any more: the last C dependency was `snprintf`, and the
+// handful of `%u` conversions it served are now open-coded (jsonWriteUint).
+// libyaml is reached through md4x-json.zig, which owns that binding.
 const diag = @import("md4x-diag.zig");
 
 const c_allocator = std.heap.c_allocator;
@@ -93,7 +91,6 @@ const slug = @import("md4x-slug.zig");
 const JsonWriter = json.JsonWriter;
 const jsonWrite = json.json_write;
 const jsonWriteStr = json.json_write_str;
-const jsonWriteStrZ = json.json_write_strz;
 const jsonWriteEscaped = json.json_write_escaped;
 const jsonWriteString = json.json_write_string;
 const jsonWriteYamlProps = json.json_write_yaml_props;
@@ -262,6 +259,14 @@ const JsonCtx = struct {
     suppressed_depth: usize = 0,
     image_nesting: c_int = 0,
     err: c_int = 0,
+
+    // Set when a dynamic component or a `template` node is created. Both of
+    // jsonTransformTree()'s rewrites are keyed on one of those two, so a
+    // document without either cannot be changed by it and the whole walk is
+    // skipped — it is otherwise a full second traversal of every node in the
+    // tree (~1.4% of a render) that provably finds nothing. Plain CommonMark,
+    // i.e. most input, never sets this.
+    has_mdc: bool = false,
 
     // Heading capture. The text is accumulated from the SAX `text` stream --
     // NOT walked back out of the built subtree -- because that is the only form
@@ -601,6 +606,7 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
                 return -1;
             }
             node.?.tag_is_dynamic = true;
+            ctx.has_mdc = true;
             if (d.raw_props.len > 0) {
                 const dup = dupNts(d.raw_props);
                 if (dup == null) {
@@ -627,6 +633,7 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
                 return -1;
             }
             node.?.detail.tmpl_name = name_str;
+            ctx.has_mdc = true;
         },
         else => node = jsonNodeNew(tag, .element),
     }
@@ -814,6 +821,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
         }
         node.?.tag_is_dynamic = true;
         node.?.tag_kind = .dynamic;
+        ctx.has_mdc = true;
         if (d.raw_props.len > 0) {
             const dup = dupNts(d.raw_props);
             if (dup == null) {
@@ -931,7 +939,6 @@ fn jsonLeaveSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
 
 fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaque) c.CallbackResult {
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
-    var value: ?[:0]u8 = null;
 
     // Guard against unbalanced callbacks causing NULL current.
     if (ctx.current == null) {
@@ -990,21 +997,6 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
             return 0;
         },
 
-        .softbr => {
-            // Softbreak → "\n" text.
-            value = dupNts("\n") orelse {
-                ctx.err = 1;
-                return -1;
-            };
-        },
-
-        .nullchar => {
-            value = dupNts(&utf8_replacement_char) orelse {
-                ctx.err = 1;
-                return -1;
-            };
-        },
-
         .html => {
             // Inline HTML: check for comment <!-- ... -->
             if (jsonIsHtmlComment(text)) |cbody| {
@@ -1061,34 +1053,52 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
             return 0;
         },
 
-        else => {
-            // Normal text, entity, code, latexmath.
-            value = dupNts(text) orelse {
+        // Normal text, entity, code, latexmath — plus the two events that stand
+        // for a fixed string rather than for their own bytes.
+        else => {},
+    }
+
+    const src: []const u8 = switch (text_type) {
+        .softbr => "\n", // Softbreak → "\n" text.
+        .nullchar => &utf8_replacement_char,
+        else => text,
+    };
+
+    // Merge consecutive text nodes, by appending the source bytes STRAIGHT onto
+    // the previous node's buffer. Copying them into a fresh arena slice first
+    // and appending that made every merge quadratic, in time and in memory
+    // alike: the arena can only grow its most recent allocation in place, so the
+    // intermediate copy pushed `prev.text_value` off the tail and turned each
+    // append into a full realloc-and-copy of the whole accumulated text, with
+    // the old buffer abandoned to the arena rather than reused.
+    //
+    // Every soft-wrapped line of a paragraph is one such merge (text, softbr,
+    // text, ...), so the cost grew with the square of the PARAGRAPH length, not
+    // of the document: at a fixed 1.4 MB total, going from 60 to 960 lines per
+    // paragraph took the render from 16 ms to 132 ms, and a single 1.4 MB
+    // paragraph exhausted memory outright — the renderer was OOM-killed after
+    // allocating tens of GB for a document every other renderer emits in 3 ms.
+    if (cur.last_child) |prev| {
+        if (prev.kind == .text and prev.text_value != null) {
+            prev.text_value = appendToStr(prev.text_value.?, src) orelse {
                 ctx.err = 1;
                 return -1;
             };
-        },
-    }
-
-    // Merge consecutive text nodes.
-    const prev_opt = cur.last_child;
-    if (prev_opt != null and prev_opt.?.kind == .text and prev_opt.?.text_value != null and value != null) {
-        const prev = prev_opt.?;
-        prev.text_value = appendToStr(prev.text_value.?, value.?) orelse {
-            ctx.err = 1;
-            return -1;
-        };
-        // `value` is abandoned to the arena.
-        return 0;
+            return 0;
+        }
     }
 
     const node = jsonNodeNew(null, .text);
     if (node == null) {
-        // `value` is abandoned to the arena.
         ctx.err = 1;
         return -1;
     }
-    node.?.text_value = value;
+    // Allocated after the node, so the text buffer is the arena's newest
+    // allocation and the merges above can extend it in place.
+    node.?.text_value = dupNts(src) orelse {
+        ctx.err = 1;
+        return -1;
+    };
 
     jsonAppendChild(ctx, node.?);
     return 0;
@@ -1199,6 +1209,27 @@ fn jsonWriteSlice(w: *JsonWriter, s: []const u8) void {
     jsonWriteString(w, s.ptr, @intCast(s.len));
 }
 
+// Write a decimal integer. Replaces `snprintf(buf, n, "%u", v)` followed by
+// `jsonWriteStrZ` (which then `strlen`s what snprintf had just measured): the
+// pair cost ~1.5% of a `--format=json` render on glibc for what is a dozen-byte
+// conversion, and every one of these call sites formats a single plain `%u`.
+// Both `id`/`refId`/`refCount` and the `start`/`highlights`/`level` numbers go
+// through here, so a footnote- or heading-dense document stops paying libc's
+// format-string parse per number.
+fn jsonWriteUint(w: *JsonWriter, v: c_uint) void {
+    // c_uint tops out at 4294967295 — 10 digits.
+    var buf: [10]u8 = undefined;
+    var i: usize = buf.len;
+    var n = v;
+    while (true) {
+        i -= 1;
+        buf[i] = '0' + @as(u8, @intCast(n % 10));
+        n /= 10;
+        if (n == 0) break;
+    }
+    jsonWrite(w, buf[i..].ptr, @intCast(buf.len - i));
+}
+
 // Write the props object for an element node.
 fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
     var has_prop: c_int = 0;
@@ -1261,9 +1292,8 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
         },
         .ol => {
             if (node.detail.ol_start != 1) {
-                var buf: [32]u8 = undefined;
-                _ = sys.snprintf(&buf, buf.len, "\"start\":%u", node.detail.ol_start);
-                jsonWriteStrZ(w, @ptrCast(&buf));
+                jsonWriteStr(w, "\"start\":");
+                jsonWriteUint(w, node.detail.ol_start);
                 has_prop = 1;
             }
         },
@@ -1288,13 +1318,11 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             }
             if (node.detail.code_highlights) |highlights| {
                 if (highlights.len > 0) {
-                    var buf: [16]u8 = undefined;
                     if (has_prop != 0) jsonWrite(w, ",", 1);
                     jsonWriteStr(w, "\"highlights\":[");
                     for (highlights, 0..) |hl, hi| {
                         if (hi > 0) jsonWrite(w, ",", 1);
-                        _ = sys.snprintf(&buf, buf.len, "%u", hl);
-                        jsonWriteStrZ(w, @ptrCast(&buf));
+                        jsonWriteUint(w, hl);
                     }
                     jsonWrite(w, "]", 1);
                     has_prop = 1;
@@ -1376,23 +1404,21 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
             }
         },
         .footnote_def => {
-            var buf: [32]u8 = undefined;
-            _ = sys.snprintf(&buf, buf.len, "\"id\":%u", node.detail.footnote_id);
-            jsonWriteStrZ(w, @ptrCast(&buf));
+            jsonWriteStr(w, "\"id\":");
+            jsonWriteUint(w, node.detail.footnote_id);
             if (node.detail.footnote_label) |label| {
                 jsonWriteStr(w, ",\"label\":");
                 jsonWriteSlice(w, label);
             }
-            _ = sys.snprintf(&buf, buf.len, ",\"refCount\":%u", node.detail.footnote_ref_count);
-            jsonWriteStrZ(w, @ptrCast(&buf));
+            jsonWriteStr(w, ",\"refCount\":");
+            jsonWriteUint(w, node.detail.footnote_ref_count);
             has_prop = 1;
         },
         .footnote_ref => {
-            var buf: [32]u8 = undefined;
-            _ = sys.snprintf(&buf, buf.len, "\"id\":%u", node.detail.footnote_id);
-            jsonWriteStrZ(w, @ptrCast(&buf));
-            _ = sys.snprintf(&buf, buf.len, ",\"refId\":%u", node.detail.footnote_ref_id);
-            jsonWriteStrZ(w, @ptrCast(&buf));
+            jsonWriteStr(w, "\"id\":");
+            jsonWriteUint(w, node.detail.footnote_id);
+            jsonWriteStr(w, ",\"refId\":");
+            jsonWriteUint(w, node.detail.footnote_ref_id);
             if (node.detail.footnote_label) |label| {
                 jsonWriteStr(w, ",\"label\":");
                 jsonWriteSlice(w, label);
@@ -1590,11 +1616,9 @@ fn jsonSerializeNode(w: *JsonWriter, node: *const JsonNode) void {
             // tree is shallower than the source. Emitted only in that case.
             jsonWriteStr(w, "},\"meta\":{\"headings\":[");
             for (node.headings, 0..) |h, i| {
-                var buf: [16]u8 = undefined;
                 if (i > 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "{\"level\":");
-                _ = sys.snprintf(&buf, buf.len, "%u", h.level);
-                jsonWriteStrZ(w, @ptrCast(&buf));
+                jsonWriteUint(w, h.level);
                 jsonWriteStr(w, ",\"text\":");
                 jsonWriteSlice(w, h.text);
                 jsonWriteStr(w, ",\"id\":");
@@ -1803,16 +1827,21 @@ pub fn md_ast(
         return -1;
     }
 
-    // Serialize the AST to JSON via the output callback.
-    var writer: JsonWriter = undefined;
-    writer.process_output = process_output;
-    writer.userdata = userdata;
+    // Serialize the AST to JSON via the output callback. The writer coalesces
+    // its (mostly one-byte) writes, so it must be built as a whole value — a
+    // field-by-field fill of an `undefined` left `len` uninitialized — and
+    // flushed before returning.
+    var writer: JsonWriter = .{ .process_output = process_output, .userdata = userdata };
     if (ctx.root) |root| {
         root.headings = ctx.headings.items;
-        jsonTransformTree(root);
+        // Both of its rewrites need an MDC node to fire; without one it is a
+        // whole extra traversal that cannot change anything.
+        if (ctx.has_mdc)
+            jsonTransformTree(root);
         jsonSerializeNode(&writer, root);
     }
     jsonWrite(&writer, "\n", 1);
+    json.json_flush(&writer);
 
     // Arena (via defer) frees the whole tree at once.
     return 0;

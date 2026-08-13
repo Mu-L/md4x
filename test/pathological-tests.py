@@ -136,6 +136,27 @@ pathological = {
             (("[t]{" * 50000),
             re.compile(r"(\[t\]\{){50000}")),
 
+    # --format=json case. The AST renderer is the one renderer that BUILDS a
+    # tree instead of streaming, and its consecutive-text-node merge used to
+    # copy the incoming bytes into the arena before appending them -- which
+    # pushed the node's own buffer off the arena's growable tail, so every
+    # merge reallocated and copied the whole accumulated text and abandoned the
+    # previous buffer. Every soft-wrapped line of a paragraph is one merge, so
+    # the cost was quadratic in the PARAGRAPH length; the streaming renderers
+    # never touch this path, which is why none of the cases above caught it.
+    #
+    # This trigger is deliberately memory-decisive rather than time-decisive:
+    # the quadratic is in the arena as much as in the copying, so the buggy
+    # build is OOM-killed (~20 GB, exit 137) rather than merely slow, and the
+    # case fails on the exit code on any machine. A correct build renders it in
+    # ~10 ms. Newline-free content per line, and no blank line anywhere, so the
+    # whole document is ONE paragraph -- a blank line every so often would cap
+    # the merge chain at the paragraph and hide the bug.
+    "one huge soft-wrapped paragraph (json)":
+            (("a\n" * 100000),
+            re.compile(r'\["p",\{\},"a(\\na)+"\]'),
+            ["--format=json"]),
+
     # --format=heal cases. md_heal() does not use the parser, so none of the
     # limits above cover it; its helpers used to rescan the document once per
     # candidate marker, which made these inputs quadratic (50 000 asterisks took

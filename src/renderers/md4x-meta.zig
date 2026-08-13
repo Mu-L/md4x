@@ -380,11 +380,12 @@ pub fn md_meta(
         return -1;
     }
 
-    // Serialize metadata to JSON via the output callback.
-    var writer: JSON_WRITER = undefined;
-    writer.process_output = process_output;
-    writer.userdata = userdata;
+    // Serialize metadata to JSON via the output callback. The writer coalesces
+    // its writes, so it must be built as a whole value (a field-by-field fill of
+    // an `undefined` left `len` uninitialized) and flushed before returning.
+    var writer: JSON_WRITER = .{ .process_output = process_output, .userdata = userdata };
     meta_serialize(&writer, &ctx);
+    json.json_flush(&writer);
 
     meta_free(&ctx);
     return 0;

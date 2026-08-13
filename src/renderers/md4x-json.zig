@@ -19,8 +19,9 @@ const scan = @import("../scan.zig");
 // MD_* types now come from the Zig-native abi module (replacing md4x.h);
 // genuinely external C headers (if any) stay in a @cImport bound as `sys`.
 const c = @import("abi");
+// stdio.h is gone with the last `snprintf` (the `\u00xx` escape is open-coded
+// below); only libyaml is genuinely external now.
 const sys = @cImport({
-    @cInclude("stdio.h");
     @cInclude("yaml.h");
 });
 
@@ -32,13 +33,52 @@ const sys = @cImport({
 pub const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
 // Streaming JSON writer (mirrors the C JSON_WRITER struct).
+//
+// Writes are COALESCED through `buf` rather than handed to `process_output` one
+// at a time. JSON is punctuation-dense — the AST serializer spends most of its
+// calls on a single `,`, `"`, `[` or `{` — and every one of those used to cost
+// an indirect call into the sink plus, in each of the three sinks, a capacity
+// check and a `memcpy` of one or two bytes. Over a 1 MB document that was
+// ~13% of the render in the CLI's `ArrayList.appendSlice` sink alone, before
+// counting the `memcpy` calls it made.
+//
+// The sink is only reached once per full buffer (or once per large string, see
+// below), so it sees a handful of big appends instead of ~90 000 tiny ones.
+//
+// **Every entry point that builds a JsonWriter must `json_flush` it before
+// returning**, or the tail of the document is silently dropped. There is no
+// deinit to hang it off — the struct is a plain value with no allocation.
 pub const JsonWriter = struct {
     process_output: ProcessOutputFn,
     userdata: ?*anyopaque,
+    buf: [8192]u8 = undefined,
+    len: usize = 0,
 };
 
+// Strings at least this long skip the buffer and go straight to the sink: the
+// copy into `buf` would cost as much as the sink's own copy, and a long run of
+// them (a big code block, a raw HTML block) would otherwise flush every time.
+const passthrough_threshold: usize = 1024;
+
+pub fn json_flush(w: *JsonWriter) void {
+    if (w.len > 0) {
+        w.process_output(@ptrCast(&w.buf), @intCast(w.len), w.userdata);
+        w.len = 0;
+    }
+}
+
 pub fn json_write(w: *JsonWriter, data: [*]const u8, size: c.MD_SIZE) void {
-    w.process_output(@ptrCast(data), size, w.userdata);
+    const n: usize = size;
+    if (n >= passthrough_threshold) {
+        // Ordering matters: whatever is buffered precedes this string.
+        json_flush(w);
+        w.process_output(@ptrCast(data), size, w.userdata);
+        return;
+    }
+    if (w.len + n > w.buf.len)
+        json_flush(w);
+    @memcpy(w.buf[w.len..][0..n], data[0..n]);
+    w.len += n;
 }
 
 // Write a sentinel-terminated string slice (length known at the type level).
@@ -84,7 +124,16 @@ pub fn json_write_escaped(w: *JsonWriter, str: [*]const u8, size: c.MD_SIZE) voi
             '\t' => replacement = "\\t",
             else => {
                 if (ch < 0x20) {
-                    _ = sys.snprintf(&esc, esc.len, "\\u%04x", @as(c_uint, ch));
+                    // `snprintf("\\u%04x")` open-coded: the value is always a
+                    // single byte, so the two low nibbles are the whole number
+                    // and the high two digits are constant.
+                    const hex = "0123456789abcdef";
+                    esc[0] = '\\';
+                    esc[1] = 'u';
+                    esc[2] = '0';
+                    esc[3] = '0';
+                    esc[4] = hex[ch >> 4];
+                    esc[5] = hex[ch & 0x0f];
                     replacement = &esc;
                     esc_len = 6;
                 }
@@ -434,6 +483,8 @@ pub fn md_yaml(
     if (sys.yaml_parser_initialize(&yp) == 0)
         return -1;
     defer sys.yaml_parser_delete(&yp);
+    // Every `return` below is a success path that has already written output.
+    defer json_flush(&w);
 
     sys.yaml_parser_set_input_string(&yp, @ptrCast(input), input_size);
 
