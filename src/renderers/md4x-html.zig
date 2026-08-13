@@ -1374,7 +1374,6 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
     switch (detail.*) {
         .em => |*d| render_open_tag_with_attrs(r, "em", d),
         .strong => |*d| render_open_tag_with_attrs(r, "strong", d),
-        .u => |*d| render_open_tag_with_attrs(r, "u", d),
         .a => |*d| render_open_a_span(r, d),
         .img => |*d| render_open_img_span(r, d),
         .code => |*d| render_open_tag_with_attrs(r, "code", d),
@@ -1402,7 +1401,6 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
     switch (detail.*) {
         .em => render_verbatim_lit(r, "</em>"),
         .strong => render_verbatim_lit(r, "</strong>"),
-        .u => render_verbatim_lit(r, "</u>"),
         .a => render_verbatim_lit(r, "</a>"),
         .img => |*d| render_close_img_span(r, d),
         .code => render_verbatim_lit(r, "</code>"),

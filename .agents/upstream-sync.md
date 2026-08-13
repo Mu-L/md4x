@@ -150,6 +150,21 @@ Every upstream bugfix in the series is an artifact of detecting in `md_process_l
 detects in `md_analyze_line` from day one — the shape `c9e4a7c` refactored _toward_. This was
 a tests-only item, discharged by `26038a5` (`test/spec-alerts.txt` 19 → 42 cases).
 
+### Underline `MD_FLAG_UNDERLINE` / `MD_SPAN_U` — **removed from md4x**
+
+**Do not re-port.** Upstream still ships the flag and the `MD_SPAN_U` span type; md4x deleted
+both (see unjs/md4x#18). The flag was in `MD_DIALECT_ALL`, which every md4x entry point
+hardcodes — CLI, WASM and NAPI — so `_foo_` emitted `<u>`, `__foo__` emitted `<u><u>` (one
+`<u>` per underscore, upstream's own semantics) and `_` emphasis was unreachable. CommonMark
+and GFM both treat `*` and `_` as exact synonyms and have no underline syntax at all, so the
+default silently broke every document written for either. Since md4x has no CLI toggle for
+parser flags and no C ABI consumer, keeping the flag would have meant keeping an
+unreachable-and-untestable code path plus its span type across five renderers.
+
+Consequences to remember: `SpanType` ordinals after `wikilink` all shift down by one, and the
+AST/JSON renderers no longer emit a `u` node. If a future sync brings a commit touching
+`MD_SPAN_U`, it is not applicable here.
+
 ## Open — reviewed, actionable, not landed
 
 | upstream             | item                                                                                       | note                                                                    |

@@ -834,7 +834,6 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .latexmath => tag = "math",
             .latexmath_display => tag = "math-display",
             .wikilink => tag = "wikilink",
-            .u => tag = "u",
             .span => tag = "span",
             .footnote_ref => tag = "footnote-ref",
             // `.component` is resolved above; the arm only exists to keep the
@@ -888,7 +887,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
                         n.raw_attrs = dup;
                 }
             },
-            .em, .strong, .code, .del, .u, .mark => |*d| {
+            .em, .strong, .code, .del, .mark => |*d| {
                 // These spans may carry trailing {attrs}; an empty raw_attrs
                 // means there were none.
                 if (d.raw_attrs.len > 0) {

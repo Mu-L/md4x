@@ -67,8 +67,6 @@ const ANSI_DIM = "\x1b[2m";
 const ANSI_DIM_OFF = "\x1b[22m";
 const ANSI_ITALIC = "\x1b[3m";
 const ANSI_ITALIC_OFF = "\x1b[23m";
-const ANSI_UNDERLINE = "\x1b[4m";
-const ANSI_UNDERLINE_OFF = "\x1b[24m";
 const ANSI_STRIKETHROUGH = "\x1b[9m";
 const ANSI_STRIKE_OFF = "\x1b[29m";
 // Highlight (`==x==`). Reverse video rather than a background colour: it is the
@@ -959,7 +957,6 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
     switch (detail.*) {
         .em => render_ansi(r, ANSI_ITALIC),
         .strong => render_ansi(r, ANSI_BOLD),
-        .u => render_ansi(r, ANSI_UNDERLINE),
         .a => |*a| {
             // OSC 8 hyperlink: makes text clickable in supported terminals
             if (r.flags & MD_ANSI_FLAG_NO_COLOR == 0 and a.href.text.len > 0) {
@@ -1007,7 +1004,6 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
     switch (detail.*) {
         .em => render_ansi(r, ANSI_ITALIC_OFF),
         .strong => render_ansi(r, ANSI_BOLD_OFF),
-        .u => render_ansi(r, ANSI_UNDERLINE_OFF),
         .a => |*a| {
             render_ansi(r, ANSI_RESET);
             // Close OSC 8 hyperlink

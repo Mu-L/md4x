@@ -33,12 +33,12 @@
 <p><del class="red">deleted</del></p>
 ````````````````````````````````
 
-## Underline with class attribute
+## Emphasis with class attribute
 
 ```````````````````````````````` example
-_underline_{.accent}
+_emphasis_{.accent}
 .
-<p><u class="accent">underline</u></p>
+<p><em class="accent">emphasis</em></p>
 ````````````````````````````````
 
 ## Link with target attribute

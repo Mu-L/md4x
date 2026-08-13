@@ -562,18 +562,18 @@ n<a href="#fnref-1-1" class="footnote-backref">&#8617;</a> <a href="#fnref-1-2" 
 </section>
 ````````````````````````````````
 
-With highlight and underline in the same document:
+With highlight and emphasis in the same document:
 
 ```````````````````````````````` example
 ==hi== and _u_ and note[^1].
 
 [^1]: ==body== _too_
 .
-<p><mark>hi</mark> and <u>u</u> and note<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>.</p>
+<p><mark>hi</mark> and <em>u</em> and note<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>.</p>
 <section class="footnotes">
 <ol>
 <li id="fn-1">
-<mark>body</mark> <u>too</u><a href="#fnref-1-1" class="footnote-backref">&#8617;</a>
+<mark>body</mark> <em>too</em><a href="#fnref-1-1" class="footnote-backref">&#8617;</a>
 </li>
 </ol>
 </section>

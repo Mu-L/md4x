@@ -225,12 +225,12 @@ And in an indented code block:
 <p><mark>very <em>important</em> text</mark></p>
 ````````````````````````````````
 
-Note MD4X also enables `MD_FLAG_UNDERLINE`, so `_x_` is `<u>`, not `<em>`:
+Emphasis nests inside a highlight span:
 
 ```````````````````````````````` example
 ==**bold** and _italic_==
 .
-<p><mark><strong>bold</strong> and <u>italic</u></mark></p>
+<p><mark><strong>bold</strong> and <em>italic</em></mark></p>
 ````````````````````````````````
 
 ```````````````````````````````` example

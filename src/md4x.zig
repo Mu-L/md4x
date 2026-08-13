@@ -1699,7 +1699,6 @@ const TraceProbe = struct {
             c.SpanType.latexmath => "LATEXMATH",
             c.SpanType.latexmath_display => "LATEXMATH_DISPLAY",
             c.SpanType.wikilink => "WIKILINK",
-            c.SpanType.u => "U",
             c.SpanType.component => "COMPONENT",
             c.SpanType.span => "SPAN",
             c.SpanType.footnote_ref => "FOOTNOTE_REF",
@@ -1810,9 +1809,9 @@ const TraceProbe = struct {
             c.SpanType.span => |x| {
                 self.rawStr("attrs", x.raw_attrs);
             },
-            // em/strong/code/del/u/mark carry SpanAttrsDetail; an empty raw_attrs is
+            // em/strong/code/del/mark carry SpanAttrsDetail; an empty raw_attrs is
             // the old "NULL detail" case.
-            c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.u, c.SpanType.mark => |x| {
+            c.SpanType.em, c.SpanType.strong, c.SpanType.code, c.SpanType.del, c.SpanType.mark => |x| {
                 if (x.raw_attrs.len == 0) self.raw(" <no-detail>", .{}) else self.rawStr("attrs", x.raw_attrs);
             },
             c.SpanType.footnote_ref => |x| {
@@ -2021,9 +2020,9 @@ const expected_trace =
     \\      text NORMAL "del"
     \\    -span DEL
     \\    text NORMAL ", "
-    \\    +span U <no-detail>
+    \\    +span EM <no-detail>
     \\      text NORMAL "u"
-    \\    -span U
+    \\    -span EM
     \\    text NORMAL ", "
     \\    +span MARK <no-detail>
     \\      text NORMAL "mark"
@@ -2097,9 +2096,9 @@ const expected_trace =
     \\      text NORMAL "d"
     \\    -span DEL
     \\    text NORMAL " "
-    \\    +span U attrs=".a"
+    \\    +span EM attrs=".a"
     \\      text NORMAL "uu"
-    \\    -span U
+    \\    -span EM
     \\    text NORMAL " "
     \\    +span MARK attrs=".m"
     \\      text NORMAL "hl"

@@ -2344,45 +2344,7 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                     }
                 },
 
-                '_' => {
-                    if (ctx.parser.flags & c.MD_FLAG_UNDERLINE != 0) {
-                        var raw_a: [*c]const CHAR = null;
-                        var raw_a_sz: SZ = 0;
-                        if (mark.*.flags & MarkFlags.opener != 0)
-                            _ = md_find_inline_attr(ctx, mark.*.next, &raw_a, &raw_a_sz, null)
-                        else
-                            _ = md_find_inline_attr(ctx, @intCast((@intFromPtr(mark) - @intFromPtr(ctx.marks.items.ptr)) / @sizeOf(MD_MARK)), &raw_a, &raw_a_sz, &attr_skip_to);
-
-                        // Only the outermost of a run of `_` marks carries the
-                        // trailing {attrs}; the rest get a bare detail.
-                        const det_attrs: c.SpanDetail = .{ .u = attrsDetail(raw_a, raw_a_sz) };
-                        const det_bare: c.SpanDetail = .{ .u = .{} };
-                        if (mark.*.flags & MarkFlags.opener != 0) {
-                            var first: c_int = 1;
-                            while (off < mark.*.end) {
-                                ret = mdEnterSpan(ctx, if (first != 0 and raw_a != null) &det_attrs else &det_bare);
-                                if (ret != 0) return ret;
-                                first = 0;
-                                off += 1;
-                            }
-                        } else {
-                            const count: c_int = @intCast(mark.*.end - off);
-                            var idx: c_int = 0;
-                            while (off < mark.*.end) {
-                                ret = mdLeaveSpan(ctx, if (idx == count - 1 and raw_a != null) &det_attrs else &det_bare);
-                                if (ret != 0) return ret;
-                                idx += 1;
-                                off += 1;
-                            }
-                        }
-                        // break out of switch — fallthrough to post-mark handling.
-                    } else {
-                        ret = emitEmphasis(ctx, mark, &off, &attr_skip_to);
-                        if (ret != 0) return ret;
-                    }
-                },
-
-                '*' => {
+                '_', '*' => {
                     ret = emitEmphasis(ctx, mark, &off, &attr_skip_to);
                     if (ret != 0) return ret;
                 },
@@ -2626,7 +2588,7 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
     return ret;
 }
 
-// Emit emphasis/strong for '*' (and '_' without UNDERLINE). md4x.c ~4838.
+// Emit emphasis/strong for '*' and '_'. md4x.c ~4838.
 pub fn emitEmphasis(ctx: *MD_CTX, mark: [*c]MD_MARK, off_p: *OFF, attr_skip_to: *OFF) c_int {
     var ret: c_int = 0;
     var raw_a: [*c]const CHAR = null;

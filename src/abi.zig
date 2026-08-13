@@ -92,7 +92,6 @@ pub const SpanType = enum(c_uint) {
     latexmath,
     latexmath_display,
     wikilink,
-    u,
     component,
     span,
     mark,
@@ -329,7 +328,6 @@ pub const SpanDetail = union(SpanType) {
     latexmath: void,
     latexmath_display: void,
     wikilink: SpanWikilinkDetail,
-    u: SpanAttrsDetail,
     component: SpanComponentDetail,
     span: SpanSpanDetail,
     mark: SpanAttrsDetail,
@@ -409,7 +407,6 @@ pub const MD_FLAG_PERMISSIVEWWWAUTOLINKS = @as(c_int, 0x0400);
 pub const MD_FLAG_TASKLISTS = @as(c_int, 0x0800);
 pub const MD_FLAG_LATEXMATHSPANS = @as(c_int, 0x1000);
 pub const MD_FLAG_WIKILINKS = @as(c_int, 0x2000);
-pub const MD_FLAG_UNDERLINE = @as(c_int, 0x4000);
 pub const MD_FLAG_HARD_SOFT_BREAKS = __helpers.promoteIntLiteral(c_int, 0x8000, .hex);
 pub const MD_FLAG_FRONTMATTER = __helpers.promoteIntLiteral(c_int, 0x10000, .hex);
 pub const MD_FLAG_COMPONENTS = __helpers.promoteIntLiteral(c_int, 0x20000, .hex);
@@ -421,7 +418,7 @@ pub const MD_FLAG_PERMISSIVEAUTOLINKS = (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_F
 pub const MD_FLAG_NOHTML = MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS;
 pub const MD_DIALECT_COMMONMARK = @as(c_int, 0);
 pub const MD_DIALECT_GITHUB = ((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_ALERTS) | MD_FLAG_FOOTNOTES;
-pub const MD_DIALECT_ALL = (((((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_UNDERLINE) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT) | MD_FLAG_FOOTNOTES;
+pub const MD_DIALECT_ALL = ((((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT) | MD_FLAG_FOOTNOTES;
 
 // ---------------------------------------------------------------------------
 // Renderer ABI types + flag values (formerly the md4x-*.h headers). The entry

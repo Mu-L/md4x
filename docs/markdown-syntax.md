@@ -88,10 +88,6 @@ Inline `$...$` and display `$$...$$`. Opener must not be preceded by alphanumeri
 
 `[[target]]` — Max 100 character destination.
 
-## Extension: Underline (`MD_FLAG_UNDERLINE`)
-
-`_text_` renders as underline instead of emphasis (disables `_` for emphasis).
-
 ## Extension: Frontmatter (`MD_FLAG_FRONTMATTER`)
 
 YAML-style frontmatter delimited by `---` at the very start of the document. The opening `---` must be on the first line (no leading blank lines). Content is exposed as verbatim text via `MD_BLOCK_FRONTMATTER`. The HTML renderer suppresses frontmatter from body output; in full-HTML mode (`MD_HTML_FLAG_FULL_HTML`), YAML `title` and `description` fields are used in `<head>`. If unclosed, the rest of the document is treated as frontmatter content. Special fields: `depth` (max heading level for TOC, default 2), `searchDepth` (TOC search depth, default 2).
@@ -255,7 +251,7 @@ Attributes can be added to inline elements using `{...}` syntax immediately afte
 `code`{.lang}              → <code class="lang">code</code>
 ~~del~~{.red}              → <del class="red">del</del>
 ==mark=={.hit}             → <mark class="hit">mark</mark>
-_underline_{.accent}       → <u class="accent">underline</u>
+_italic_{.accent}          → <em class="accent">italic</em>
 [Link](url){target="_blank"} → <a href="url" target="_blank">Link</a>
 ![img](pic.png){.responsive} → <img src="pic.png" alt="img" class="responsive">
 ```

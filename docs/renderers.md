@@ -198,7 +198,6 @@ pub fn md_ansi(
 - Headings: bold magenta (`\033[1;35m`)
 - Bold/strong: bold (`\033[1m`)
 - Italic/emphasis: italic (`\033[3m`)
-- Underline: underline (`\033[4m`)
 - Strikethrough: strikethrough (`\033[9m`)
 - Highlight (`==x==`): reverse video (`\033[7m`) — legible on both light and dark themes
 - Inline code: cyan (`\033[36m`)
@@ -359,7 +358,7 @@ pub fn md_text(
 
 ### Rendering Details
 
-- All inline formatting (bold, italic, underline, strikethrough, code spans) stripped — only text content remains
+- All inline formatting (bold, italic, strikethrough, code spans) stripped — only text content remains
 - Headings: plain text + newline
 - Paragraphs: plain text + newline
 - Lists: `- ` (unordered) or `1. ` (ordered) prefix with 2-space nesting indentation
@@ -418,7 +417,7 @@ component props) is dropped or emitted as a tag.
 - Alerts: rendered as a blockquote whose first line is `[!TYPE]`
 - Horizontal rules: `---`
 - Code blocks: always fenced (indented code included) — ` ``` `, or `~~~` when the source fence char was `~`; the full info string is re-emitted, including `[filename]` / `{1-3}` metadata
-- Inline: `*em*`, `**strong**`, `` `code` ``, `~~del~~`, `==mark==`; underline has no Markdown spelling, so it is emitted as `<u>…</u>`
+- Inline: `*em*`, `**strong**`, `` `code` ``, `~~del~~`, `==mark==`
 - Links: `[text](href "title")` — the title is emitted only when present; images: `![alt](src "title")`
 - Autolinks are expanded to the explicit form (`<https://a.b>` → `[https://a.b](https://a.b)`)
 - Wiki links become regular links: `[[target]]` → `[target](target)`

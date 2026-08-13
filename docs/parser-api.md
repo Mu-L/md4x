@@ -84,7 +84,7 @@ pub const BlockDetail = union(BlockType) {
 pub const SpanDetail = union(SpanType) {
     em: SpanAttrsDetail,     strong: SpanAttrsDetail, a: SpanADetail,   img: SpanImgDetail,
     code: SpanAttrsDetail,   del: SpanAttrsDetail,    latexmath: void,
-    latexmath_display: void, wikilink: SpanWikilinkDetail,             u: SpanAttrsDetail,
+    latexmath_display: void, wikilink: SpanWikilinkDetail,
     component: SpanComponentDetail,                    span: SpanSpanDetail,
     mark: SpanAttrsDetail,   footnote_ref: SpanFootnoteRefDetail,
 };
@@ -196,7 +196,6 @@ the document, in order of first reference — see
 | `.latexmath`         | _(inline math)_  | `void`                  |
 | `.latexmath_display` | _(display math)_ | `void`                  |
 | `.wikilink`          | _(wiki link)_    | `SpanWikilinkDetail`    |
-| `.u`                 | `<u>`            | `SpanAttrsDetail`       |
 | `.component`         | _(dynamic tag)_  | `SpanComponentDetail`   |
 | `.span`              | `<span>`         | `SpanSpanDetail`        |
 | `.mark`              | `<mark>`         | `SpanAttrsDetail`       |
@@ -392,7 +391,6 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 | `MD_FLAG_TASKLISTS`                | `0x0800`   | Enable task list extension                                                        |
 | `MD_FLAG_LATEXMATHSPANS`           | `0x1000`   | Enable `$` / `$$` LaTeX math                                                      |
 | `MD_FLAG_WIKILINKS`                | `0x2000`   | Enable `[[wiki links]]`                                                           |
-| `MD_FLAG_UNDERLINE`                | `0x4000`   | Enable underline (disables `_` emphasis)                                          |
 | `MD_FLAG_HARD_SOFT_BREAKS`         | `0x8000`   | Force all soft breaks to act as hard breaks                                       |
 | `MD_FLAG_FRONTMATTER`              | `0x10000`  | Enable frontmatter extension                                                      |
 | `MD_FLAG_COMPONENTS`               | `0x20000`  | Enable components (inline `:name[content]{props}` and block `::name{props}...::`) |
@@ -407,4 +405,4 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 - `MD_FLAG_NOHTML` = no HTML blocks + no HTML spans
 - `MD_DIALECT_COMMONMARK` = `0` (strict CommonMark)
 - `MD_DIALECT_GITHUB` = permissive autolinks + tables + strikethrough + task lists + alerts + footnotes
-- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + underline + frontmatter + components + attributes + alerts + highlight + footnotes)
+- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + frontmatter + components + attributes + alerts + highlight + footnotes)

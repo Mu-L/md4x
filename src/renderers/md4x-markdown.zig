@@ -913,11 +913,6 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
             render_verbatim_lit(r, "[");
         },
 
-        .u => {
-            // Underline has no standard markdown — use HTML tag
-            render_verbatim_lit(r, "<u>");
-        },
-
         .component => |*comp| {
             render_verbatim_lit(r, "<");
             if (comp.tag_name.text.len > 0)
@@ -1001,10 +996,6 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
             render_verbatim_lit(r, "](");
             render_destination(r, &wl.target);
             render_verbatim_lit(r, ")");
-        },
-
-        .u => {
-            render_verbatim_lit(r, "</u>");
         },
 
         .component => |*comp| {

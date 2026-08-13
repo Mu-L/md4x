@@ -40,7 +40,7 @@ Control -- U+20C0 was already punctuation in 15.1:
 ```````````````````````````````` example
 _foo_⃀
 .
-<p><u>foo</u>⃀</p>
+<p><em>foo</em>⃀</p>
 ````````````````````````````````
 
 U+20C1, adjacent to the control and added after 15.1:
@@ -48,7 +48,7 @@ U+20C1, adjacent to the control and added after 15.1:
 ```````````````````````````````` example
 _foo_⃁
 .
-<p><u>foo</u>⃁</p>
+<p><em>foo</em>⃁</p>
 ````````````````````````````````
 
 U+2E60 (Supplemental Punctuation):
@@ -56,7 +56,7 @@ U+2E60 (Supplemental Punctuation):
 ```````````````````````````````` example
 _foo_⹠
 .
-<p><u>foo</u>⹠</p>
+<p><em>foo</em>⹠</p>
 ````````````````````````````````
 
 U+1CC00, a 4-byte sequence from the largest added block (U+1CC00..U+1CCEF):
@@ -64,7 +64,7 @@ U+1CC00, a 4-byte sequence from the largest added block (U+1CC00..U+1CCEF):
 ```````````````````````````````` example
 _foo_𜰀
 .
-<p><u>foo</u>𜰀</p>
+<p><em>foo</em>𜰀</p>
 ````````````````````````````````
 
 U+1FBCB, from the last added range:
@@ -72,7 +72,7 @@ U+1FBCB, from the last added range:
 ```````````````````````````````` example
 _foo_🯋
 .
-<p><u>foo</u>🯋</p>
+<p><em>foo</em>🯋</p>
 ````````````````````````````````
 
 
@@ -166,7 +166,7 @@ Example of 1-byte UTF-8 sequence (U+0009):
 ```````````````````````````````` example
 x→__foo__→
 .
-<p>x	<u><u>foo</u></u></p>
+<p>x <strong>foo</strong></p>
 ````````````````````````````````
 (The initial `x` to suppress indented code block.)
 
@@ -174,14 +174,14 @@ Example of 2-byte UTF-8 sequence (U+00A0):
 ```````````````````````````````` example
  __foo__
 .
-<p><u><u>foo</u></u></p>
+<p> <strong>foo</strong> </p>
 ````````````````````````````````
 
 Example of 3-byte UTF-8 sequence (U+2000):
 ```````````````````````````````` example
  __foo__
 .
-<p> <u><u>foo</u></u></p>
+<p> <strong>foo</strong> </p>
 ````````````````````````````````
 
 (AFAIK, there is no 4-byte UTF-8 whitespace.)
@@ -194,28 +194,28 @@ Example of 1-byte UTF-8 sequence (U+002E):
 ```````````````````````````````` example
 .__foo__.
 .
-<p>.<u><u>foo</u></u>.</p>
+<p>.<strong>foo</strong>.</p>
 ````````````````````````````````
 
 Example of 2-byte UTF-8 sequence (U+00B7):
 ```````````````````````````````` example
 ·__foo__·
 .
-<p>·<u><u>foo</u></u>·</p>
+<p>·<strong>foo</strong>·</p>
 ````````````````````````````````
 
 Example of 3-byte UTF-8 sequence (U+0C84):
 ```````````````````````````````` example
 ಄__foo__಄
 .
-<p>಄<u><u>foo</u></u>಄</p>
+<p>಄<strong>foo</strong>಄</p>
 ````````````````````````````````
 
 Example of 4-byte UTF-8 sequence (U+1039F):
 ```````````````````````````````` example
 𐎟__foo__𐎟
 .
-<p>𐎟<u><u>foo</u></u>𐎟</p>
+<p>𐎟<strong>foo</strong>𐎟</p>
 ````````````````````````````````
 
 
