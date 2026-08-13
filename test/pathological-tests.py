@@ -6,6 +6,7 @@ import argparse
 import sys
 import platform
 from prog import Prog
+from subprocess import TimeoutExpired
 from timeit import default_timer as timer
 
 if __name__ == "__main__":
@@ -136,6 +137,174 @@ pathological = {
             ["--format=heal"]),
 }
 
+
+# ---------------------------------------------------------------------------
+# Timed heal cases.
+#
+# The cases above only assert on OUTPUT, and a quadratic healer still produces
+# exactly the right bytes -- just eventually. md_heal() also does not use the
+# parser, so none of the parser's linear-time limits (docs/parser-api.md) cover
+# it, and the corpus in scripts/diff-corpus.sh is far too short for a quadratic
+# path to show up there. Three separate O(n^2) DoS bugs shipped in md_heal()
+# through exactly that gap (the heal_links_and_images bracket walk, the
+# heal_comparison_operators fence rescan + per-insertion splice, and
+# heal_strikethrough's monotone has_meaningful_content test), on top of an
+# earlier round covering '*'*n / 'a_'*n / '~'*n. heal() is an exported JS API
+# and --heal is reachable on every renderer, so all of them were reachable from
+# untrusted input. Each trigger below is therefore *timed*, and a case that
+# blows its budget FAILS the suite rather than just printing a large number.
+#
+# Threshold strategy: every trigger heals the SAME number of bytes as a prose
+# document, and must finish within HEAL_BUDGET_FACTOR x the prose time (with a
+# floor, below). Two alternatives were rejected:
+#
+#   * An absolute wall-clock limit has to be tuned for the slowest CI runner,
+#     and is then far too loose on a fast one.
+#   * A scaling ratio across two sizes (~4x per doubling = quadratic, ~2x =
+#     linear) needs the sizes to be big enough that the ~4 ms process start
+#     stops dominating; at sizes small enough to keep this suite fast, that
+#     constant compresses every ratio towards 1 and the test measures nothing.
+#
+# Calibrating against the prose baseline keeps the yardstick machine-relative
+# (both sides scale with the CPU) while staying valid at a size where the whole
+# section costs well under a second. The constant process start is included on
+# both sides, which compresses the observed ratios towards 1 -- that only makes
+# the check more conservative, and the margin absorbs it: at 256 KB every
+# healed pathological input below measures within 1.3x of prose, whereas a
+# build from before the fixes measures 10.8 s (brackets), 4.2 s (comparison
+# operators), 13.6 s (strikethrough) and 18.8 s (tildes) for the same bytes,
+# i.e. 800x-3800x the prose baseline.
+#
+# HEAL_BUDGET_FLOOR keeps a very fast machine from turning the budget into
+# noise: below ~62 ms of baseline the floor wins, above it the relative term
+# does. Timing is best-of-HEAL_ATTEMPTS with an early exit on the first passing
+# run, so a healthy suite pays one run per case and only a suspected failure
+# pays the retries that rule out a transient stall -- and only while the
+# overrun is small enough to plausibly BE one, since a real quadratic overruns
+# by three orders of magnitude and re-timing it just makes the suite slow.
+HEAL_SIZE = 256 * 1024
+HEAL_BUDGET_FACTOR = 8.0
+HEAL_BUDGET_FLOOR = 0.5
+HEAL_ATTEMPTS = 3
+HEAL_RETRY_MARGIN = 4.0
+
+# Real markdown prose, balanced so that no healer has anything to fix: the
+# baseline must measure throughput, not healing work.
+HEAL_PROSE = (
+    "## Section heading\n"
+    "\n"
+    "The quick brown fox jumps over the *lazy* dog, and then writes it all\n"
+    "up in `code`, linking to [the docs](https://example.com/docs) as it goes.\n"
+    "\n"
+    "- one item\n"
+    "- two **items**\n"
+    "- three items\n"
+    "\n"
+)
+
+
+def heal_repeat(unit, odd=True):
+    """Repeat count that fills HEAL_SIZE bytes with `unit`.
+
+    Odd by default so a repeated marker really is unbalanced and heal takes its
+    append path -- an even count is already balanced and exercises less. That
+    is not a nicety: on a pre-fix build '~' * 262143 heals in 19.1 s and
+    '~' * 262144 in 0.005 s, because only the odd run leaves the trailing '~'
+    that arms heal_strikethrough. An even count here would test nothing.
+    """
+    n = max(1, HEAL_SIZE // len(unit))
+    if odd and n % 2 == 0:
+        n -= 1
+    return n
+
+
+heal_baseline = HEAL_PROSE * heal_repeat(HEAL_PROSE, odd=False)
+
+heal_timed = {
+    # heal_links_and_images' backward bracket walk (fixed: a single pass that
+    # keeps a stack of open brackets). The trailing ']' is what makes the walk
+    # run; without it there is no closer to match.
+    "unclosed brackets (heal)":
+            ("[" * (heal_repeat("[") - 1)) + "]",
+    # heal_comparison_operators: one in_fenced_code_block() rescan per '- > 5'
+    # line, plus a whole-tail memmove per inserted backslash (fixed: a
+    # resumable FenceScanner and an append-only second buffer).
+    "many comparison operators (heal)":
+            "- > 5\n" * heal_repeat("- > 5\n"),
+    # heal_strikethrough's two descending loops re-asking has_meaningful_content
+    # over a range that grows as the index falls (fixed: one hoisted backward
+    # scan per loop). The TRAILING '~' is load-bearing -- it is what arms the
+    # `size >= 4 && text[size-1] == '~'` guard on the first loop. Ending the
+    # input in any other byte drops straight through it and times nothing.
+    "unclosed strikethrough (heal)":
+            ("~~ " * heal_repeat("~~ ")) + "~",
+    # The same heal_strikethrough loops off the plainest possible trigger. An
+    # ODD run of tildes ends in the '~' that arms them, so this one is
+    # quadratic on a pre-fix build too (19.1 s here, 4.8 s at half the size)
+    # -- do not "simplify" the repeat count to an even one.
+    "many tildes (heal)":
+            "~" * heal_repeat("~"),
+    # Paths fixed in the earlier round (in_math_block restarting at offset 0,
+    # in_link_url / in_html_tag walking back to the previous newline -- which
+    # is the whole document when it has none). Kept as regression guards.
+    "many asterisks (heal)":
+            "*" * heal_repeat("*"),
+    "many emph closers (heal)":
+            "a_" * heal_repeat("a_"),
+    "many asterisk closers (heal)":
+            "a*" * heal_repeat("a*"),
+    "many math delimiters (heal)":
+            "$" * heal_repeat("$"),
+    "many backticks (heal)":
+            "`" * heal_repeat("`"),
+    "many backtick runs (heal)":
+            "a` " * heal_repeat("a` "),
+    "many escapes (heal)":
+            "\\" * heal_repeat("\\"),
+    # Fence-dense input, to drive the FenceScanner cursor rather than the
+    # comparison-operator caller that queries it.
+    "many code fences (heal)":
+            "```\n" * heal_repeat("```\n"),
+    # Every marker family interleaved and nested, with an unbalanced tail so
+    # the emphasis healers all engage.
+    "nested mixed markers (heal)":
+            ("***a **b _c_ ~~d~~ `e` $f$ [g](h) "
+             * heal_repeat("***a **b _c_ ~~d~~ `e` $f$ [g](h) ")) + "***",
+}
+
+
+def time_heal(program, inp, budget=None):
+    """Best-of-HEAL_ATTEMPTS wall time of a `--format=heal` run over `inp`.
+
+    Returns (seconds, rc, output, err); seconds is None if the run was killed
+    for exceeding the hard cap. Stops after the first run that fits `budget`
+    (None = always run every attempt, used for the baseline itself).
+    """
+    prog = Prog(cmdline=program, default_options=["--format=heal"])
+    # Hard cap so a reintroduced quadratic fails the suite in seconds rather
+    # than hanging CI: the bugs above ran for minutes at 1 MB.
+    cap = max(30.0, (budget or 0.0) * 30.0)
+    best = None
+    for _ in range(HEAL_ATTEMPTS):
+        start = timer()
+        try:
+            [rc, actual, err] = prog.to_html(inp, timeout=cap)
+        except TimeoutExpired:
+            return (None, 0, '', b'')
+        end = timer()
+        if best is None or end - start < best:
+            best = end - start
+        if rc != 0:
+            return (best, rc, actual, err)
+        if budget is None:
+            continue
+        if best <= budget:
+            break                       # already known good, no need to retry
+        if best > budget * HEAL_RETRY_MARGIN:
+            break                       # far too slow to be a transient stall
+    return (best, 0, actual, err)
+
+
 whitespace_re = re.compile('/s+/')
 passed = 0
 errored = 0
@@ -164,6 +333,44 @@ for description in pathological:
         print('{:35} [FAILED]'.format(description))
         print(repr(actual))
         failed += 1
+
+(base_secs, base_rc, base_out, base_err) = time_heal(args.program, heal_baseline)
+if base_rc != 0 or base_secs is None:
+    errored += 1
+    print('{:35} [ERRORED (exit code {})]'.format('heal prose baseline', base_rc))
+    print(base_err)
+    budget = HEAL_BUDGET_FLOOR
+else:
+    print('{:35} [PASSED] {:.3f} secs ({} bytes)'.format(
+            'heal prose baseline', base_secs, len(heal_baseline)))
+    passed += 1
+    budget = max(HEAL_BUDGET_FACTOR * base_secs, HEAL_BUDGET_FLOOR)
+
+for description in heal_timed:
+    inp = heal_timed[description]
+    (secs, rc, actual, err) = time_heal(args.program, inp, budget)
+    if secs is None:
+        failed += 1
+        print('{:35} [FAILED] killed after the {:.3f} sec cap (budget {:.3f} secs)'.format(
+                description, max(30.0, budget * 30.0), budget))
+    elif rc != 0:
+        errored += 1
+        print('{:35} [ERRORED (exit code {})]'.format(description, rc))
+        print(err)
+    elif len(actual) == 0:
+        failed += 1
+        print('{:35} [FAILED] empty output for {} bytes of input'.format(
+                description, len(inp)))
+    elif secs > budget:
+        failed += 1
+        print('{:35} [FAILED] {:.3f} secs > {:.3f} sec budget ({:.1f}x the prose '
+              'baseline for the same {} bytes -- likely a quadratic path)'.format(
+                description, secs, budget,
+                secs / base_secs if base_secs else float('inf'), len(inp)))
+    else:
+        print('{:35} [PASSED] {:.3f} secs (budget {:.3f})'.format(
+                description, secs, budget))
+        passed += 1
 
 print("%d passed, %d failed, %d errored" % (passed, failed, errored))
 if (failed == 0 and errored == 0):

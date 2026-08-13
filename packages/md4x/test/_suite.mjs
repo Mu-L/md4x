@@ -1934,6 +1934,95 @@ export function defineSuite({
     it("does not heal inside code blocks", async () => {
       expect(await heal("```\n**bold\n```")).toBe("```\n**bold\n```");
     });
+
+    // md_heal() does not use the parser, so none of the parser's linear-time
+    // limits cover it -- and three separate O(n^2) paths shipped through that
+    // gap (the heal_links_and_images bracket walk, the heal_comparison_operators
+    // fence rescan + per-insertion splice, and heal_strikethrough's monotone
+    // has_meaningful_content test, which an odd run of plain '~' also trips).
+    // test/pathological-tests.py is the primary guard, but it only drives the
+    // CLI; heal() is the exported API and { heal: true } on every renderer
+    // reaches the same code, i.e. it is what most consumers point at untrusted
+    // input. So the binding surface carries the check too.
+    //
+    // Threshold: each trigger heals the same number of bytes as a prose
+    // baseline and must land within HEAL_PERF_BUDGET x it, so the yardstick
+    // follows the machine instead of a hard-coded wall clock. The floor is far
+    // more generous than the Python suite's because a vitest worker sharing a
+    // CI box is a much noisier clock than a dedicated subprocess -- and it can
+    // afford to be: against binaries built before the fixes the first trigger
+    // alone measures 10.8 s (napi) and 22.6 s (wasm) at this size, against a
+    // 4-11 ms baseline, so even a 1 s floor fails them by an order of
+    // magnitude and the retry margin below stops it re-timing them.
+    const HEAL_PERF_SIZE = 256 * 1024;
+    const HEAL_PERF_BUDGET = 25;
+    const HEAL_PERF_FLOOR_MS = 1000;
+
+    // Odd repeat counts, so the marker really is unbalanced and heal takes its
+    // append path; an even count is already balanced and exercises less.
+    const healPerfRepeat = (unit, odd = true) => {
+      let n = Math.max(1, Math.floor(HEAL_PERF_SIZE / unit.length));
+      if (odd && n % 2 === 0) n -= 1;
+      return n;
+    };
+
+    const healPerfProse =
+      "## Section heading\n\nThe quick brown fox jumps over the *lazy* dog, " +
+      "and then writes it all\nup in `code`, linking to " +
+      "[the docs](https://example.com/docs) as it goes.\n\n" +
+      "- one item\n- two **items**\n- three items\n\n";
+
+    const timeHeal = async (input, budgetMs) => {
+      let best = Infinity;
+      // Best-of-2, with an early exit once a run fits: a healthy binding pays
+      // one heal per trigger, and only a suspected failure pays the retry that
+      // rules out a transient stall -- and only while the overrun is small
+      // enough to plausibly BE one, since a real quadratic overruns by orders
+      // of magnitude and re-timing it just makes the run slower.
+      for (let i = 0; i < 2; i++) {
+        const start = performance.now();
+        const out = await heal(input);
+        best = Math.min(best, performance.now() - start);
+        expect(out.length).toBeGreaterThan(0);
+        if (budgetMs !== undefined && (best <= budgetMs || best > budgetMs * 4))
+          break;
+      }
+      return best;
+    };
+
+    it("heals pathological input in linear time", async () => {
+      const baseline = await timeHeal(
+        healPerfProse.repeat(healPerfRepeat(healPerfProse, false)),
+      );
+      const budget = Math.max(HEAL_PERF_FLOOR_MS, HEAL_PERF_BUDGET * baseline);
+
+      const triggers = {
+        // heal_links_and_images' backward bracket walk. The trailing ']' is
+        // what gives the walk something to match.
+        brackets: "[".repeat(healPerfRepeat("[") - 1) + "]",
+        // heal_comparison_operators' fence rescan + whole-tail splice.
+        comparisons: "- > 5\n".repeat(healPerfRepeat("- > 5\n")),
+        // heal_strikethrough's descending has_meaningful_content loops. The
+        // TRAILING '~' is load-bearing: it arms the `size >= 4 &&
+        // text[size - 1] == '~'` guard. Any other last byte times nothing.
+        strikethrough: "~~ ".repeat(healPerfRepeat("~~ ")) + "~",
+        tildes: "~".repeat(healPerfRepeat("~")),
+        mixed:
+          "***a **b _c_ ~~d~~ `e` $f$ [g](h) ".repeat(
+            healPerfRepeat("***a **b _c_ ~~d~~ `e` $f$ [g](h) "),
+          ) + "***",
+      };
+
+      for (const [name, input] of Object.entries(triggers)) {
+        const elapsed = await timeHeal(input, budget);
+        expect(
+          elapsed,
+          `heal(${name}) took ${elapsed.toFixed(1)}ms for ${input.length} bytes, ` +
+            `${(elapsed / baseline).toFixed(1)}x the ${baseline.toFixed(1)}ms prose ` +
+            `baseline for the same size -- likely a quadratic path`,
+        ).toBeLessThanOrEqual(budget);
+      }
+    }, 120_000);
   });
 
   describe("heal option on renderers", () => {
