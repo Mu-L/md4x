@@ -4,18 +4,19 @@
 
 ## Guides
 
-| Area                                               | Read when                                                         |
-| -------------------------------------------------- | ----------------------------------------------------------------- |
-| [.agents/build.md](.agents/build.md)               | Building, targets, module graph rules                             |
-| [.agents/testing.md](.agents/testing.md)           | Running tests, fuzzing, the parser invariants only unit tests pin |
-| [.agents/conventions.md](.agents/conventions.md)   | Touching parser or renderer internals                             |
-| [.agents/safety.md](.agents/safety.md)             | Reviewing changes — bug classes and the audit checklist           |
-| [.agents/performance.md](.agents/performance.md)   | Byte scans, SIMD, libc, benchmarking                              |
-| [.agents/extending.md](.agents/extending.md)       | Adding a block/span type, a renderer, or regenerating tables      |
-| [docs/parser-api.md](docs/parser-api.md)           | SAX callback table, detail types, parser flags                    |
-| [docs/renderers.md](docs/renderers.md)             | Renderer entry points and their flags                             |
-| [docs/js-bindings.md](docs/js-bindings.md)         | WASM / standalone / NAPI targets and the JS package API           |
-| [docs/markdown-syntax.md](docs/markdown-syntax.md) | Supported syntax and extensions                                   |
+| Area                                                 | Read when                                                                  |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| [.agents/build.md](.agents/build.md)                 | Building, targets, module graph rules                                      |
+| [.agents/testing.md](.agents/testing.md)             | Running tests, fuzzing, the parser invariants only unit tests pin          |
+| [.agents/conventions.md](.agents/conventions.md)     | Touching parser or renderer internals                                      |
+| [.agents/safety.md](.agents/safety.md)               | Reviewing changes — bug classes and the audit checklist                    |
+| [.agents/performance.md](.agents/performance.md)     | Byte scans, SIMD, libc, benchmarking                                       |
+| [.agents/extending.md](.agents/extending.md)         | Adding a block/span type, a renderer, or regenerating tables               |
+| [.agents/upstream-sync.md](.agents/upstream-sync.md) | Syncing with mity/md4c — ledger of reviewed commits, do-not-port decisions |
+| [docs/parser-api.md](docs/parser-api.md)             | SAX callback table, detail types, parser flags                             |
+| [docs/renderers.md](docs/renderers.md)               | Renderer entry points and their flags                                      |
+| [docs/js-bindings.md](docs/js-bindings.md)           | WASM / standalone / NAPI targets and the JS package API                    |
+| [docs/markdown-syntax.md](docs/markdown-syntax.md)   | Supported syntax and extensions                                            |
 
 ## Quick start
 
@@ -67,6 +68,7 @@ scripts/
   run-tests.ts        # Main test runner
   diff-corpus.sh      # Output-parity harness (sha256 of all 6 formats over the corpus)
   build-standalone.ts # Bundles lib/standalone.mjs (rolldown, gzip+Z85 inlined wasm)
+  upstream-sync.ts    # Lists md4c commits newer than .agents/upstream-sync.json
   _gen-*.py           # Zig table generators (unicode, entities)
   build-*.ts          # Legacy C table generators
   unicode/            # Unicode data files
