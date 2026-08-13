@@ -21,7 +21,7 @@ import { init, renderToHtml } from "md4x/wasm";
 await init({ wasm: await readFile("packages/md4x/build/md4x-safe.wasm") });
 ```
 
-It is byte-for-byte identical in output to `md4x.wasm` and roughly a quarter slower (see the table below) — fine for a reproducer, which is why the shipped binary stays `ReleaseFast`.
+It is byte-for-byte identical in output to `md4x.wasm`, and 9-30% slower depending on input size (see the table below) — fine for a reproducer, which is why the shipped binary stays `ReleaseFast`.
 
 Two properties make it usable from the same loader:
 
@@ -30,21 +30,30 @@ Two properties make it usable from the same loader:
 
 ### Profile tradeoffs
 
-All three binaries are the same `wasm32-wasi` + `simd128` module built at a different optimize level, and all three produce **identical output** (verified on the bench fixture across `renderToHtml` / `renderToAST`). They differ only in speed and size:
+All three binaries are the same `wasm32-wasi` + `simd128` module built at a different optimize level, and all three produce **identical output** (hash-compared across `renderToHtml` / `renderToAST` / `renderToText` on both inputs below). They differ only in speed and size:
 
-| Profile                   | Step                   |    Raw | gzip -9 |  `renderToHtml` |   `renderToAST` | Instantiate |
-| ------------------------- | ---------------------- | -----: | ------: | --------------: | --------------: | ----------: |
-| `ReleaseFast` (shipped)   | `zig build wasm`       | 378 KB |  126 KB | 10.3 µs (1.00×) | 14.2 µs (1.00×) |      1.2 ms |
-| `ReleaseSmall` (compact)  | `zig build wasm-small` | 285 KB |  106 KB | 11.8 µs (1.15×) | 20.2 µs (1.42×) |      1.0 ms |
-| `ReleaseSafe` (debug aid) | `zig build wasm-safe`  | 2.2 MB |  749 KB | 13.6 µs (1.32×) | 20.2 µs (1.42×) |      1.9 ms |
+| Profile                   | Step                   |    Raw | gzip -9 | Instantiate |
+| ------------------------- | ---------------------- | -----: | ------: | ----------: |
+| `ReleaseFast` (shipped)   | `zig build wasm`       | 378 KB |  126 KB |      1.2 ms |
+| `ReleaseSmall` (compact)  | `zig build wasm-small` | 285 KB |  106 KB |      1.0 ms |
+| `ReleaseSafe` (debug aid) | `zig build wasm-safe`  | 2.2 MB |  749 KB |      1.9 ms |
 
-Medium bench fixture (`packages/md4x/bench/_fixtures.mjs`), Bun 1.3 on an i7-10700K, best-of-10 rounds after warm-up; times are per call, so the JS↔WASM copy is included in every number.
+Speed, in µs per call and as a ratio to `ReleaseFast`. **Document size changes the answer**, so both ends are listed: a 494 B input (the `medium` bench fixture — one short message, the streaming/chat shape) where per-call fixed costs dominate, and a 623 KB input (the fuzzer seed corpus plus `test/spec.txt` ×3 — the document shape):
+
+| Profile        |  494 B: html |          ast |         text | 623 KB: html |          ast |         text |
+| -------------- | -----------: | -----------: | -----------: | -----------: | -----------: | -----------: |
+| `ReleaseFast`  | 10.2 (1.00×) | 14.9 (1.00×) | 10.0 (1.00×) | 7395 (1.00×) | 8038 (1.00×) | 6152 (1.00×) |
+| `ReleaseSmall` | 11.9 (1.16×) | 20.6 (1.38×) | 11.4 (1.13×) | 7746 (1.05×) | 9433 (1.17×) | 6635 (1.08×) |
+| `ReleaseSafe`  | 13.3 (1.30×) | 19.9 (1.34×) | 12.6 (1.25×) | 8066 (1.09×) | 9379 (1.17×) | 6812 (1.11×) |
+
+Bun 1.3 on an i7-10700K, best-of-8 rounds after warm-up; times are per call, so the JS↔WASM copy is in every number. `ReleaseFast` runs the large document at ~86 MB/s of markdown. All three produce identical output hashes on both inputs.
 
 Reading it:
 
-- **`ReleaseSmall` buys 93 KB raw / 20 KB gzipped** for 15% on HTML and 42% on AST. That is the right trade only for `md4x/standalone`, where the binary ships inside the JS bundle as a Z85 string and every byte is download weight; `md4x/wasm` fetches a `.wasm` asset once and keeps the speed.
-- **`ReleaseSafe` costs ~32% on HTML** and the same 42% on AST. The size column is misleading: 1.8 MB of it is DWARF. Stripped, the safety checks themselves cost only ~50 KB over `ReleaseFast` (427 KB raw / 143 KB gzipped) — the binary is big because it is meant to be debugged, not shipped.
-- Instantiate time tracks code size, not optimize level, and stays ~1–2 ms in all three — it is not a reason to pick a profile.
+- **The optimize level costs most on small inputs, not large ones.** Per-call setup (allocator, context init, the copy in and out) is branchy code where the checks and the size-optimized codegen land hardest; the large-document path is dominated by `scan.zig`'s vectorized byte scans and memory bandwidth, which barely move. Quoting a single ratio for these builds is misleading — say which input size it is for.
+- **`ReleaseSmall` buys 93 KB raw / 20 KB gzipped.** That is the right trade only for `md4x/standalone`, where the binary ships inside the JS bundle as a Z85 string and every byte is download weight; `md4x/wasm` fetches a `.wasm` asset once and keeps the speed.
+- **`ReleaseSafe` costs 9-11% on documents and 25-34% on short messages**, so what it is worth depends on the workload it would run. The size column is misleading: 1.8 MB of it is DWARF. Stripped, the safety checks themselves cost only ~50 KB over `ReleaseFast` (427 KB raw / 143 KB gzipped) — the binary is big because it is meant to be debugged, not shipped.
+- Instantiate time tracks code size, not optimize level, and stays ~1-2 ms in all three — it is not a reason to pick a profile.
 
 > **Runtime requirement:** all three binaries are built with the **`simd128`** feature (WebAssembly fixed-width SIMD), which `src/scan.zig` uses for its byte scans. That sets a floor of **Chrome 91+, Firefox 89+, Safari 16.4+ (March 2023), Node 16.4+**, and Bun/Deno of any version. Older engines cannot instantiate the module at all — `WebAssembly.instantiate` rejects rather than degrading. It buys +4-5% on Node and +12-22% on Bun across `renderToHtml` / `renderToAST` / `renderToText`; see `build.zig`'s `addWasm` to turn it off if you need to support an older engine.
 
