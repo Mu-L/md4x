@@ -1440,6 +1440,20 @@ export function defineSuite({
       expect(meta.headings[0].text).toBe("Using parseMeta API");
     });
 
+    // md4c #325: a numeric entity naming a surrogate is not a Unicode scalar
+    // value, and U+0000 is not one either. Both must become a single U+FFFD --
+    // not CESU-8 (which TextDecoder would turn into three U+FFFD) and not a
+    // raw NUL byte. The meta renderer is not reachable from the CLI, so this
+    // is the only regression pin on its copy of the UTF-8 encoder.
+    it("replaces surrogate and NUL entities in a heading with U+FFFD", async () => {
+      const meta = await parseMeta(
+        "# &#xD7FF; &#xD800; &#xDBFF; &#xDC00; &#xDFFF; &#xE000; &#x10FFFF; &#x110000; &#0; &#55296;",
+      );
+      expect(meta.headings[0].text).toBe(
+        "\uD7FF \uFFFD \uFFFD \uFFFD \uFFFD \uE000 \u{10FFFF} \uFFFD \uFFFD \uFFFD",
+      );
+    });
+
     it("ignores component frontmatter", async () => {
       const meta = await parseMeta(
         "---\ntitle: Installation\ndescription: How to install.\n---\n\n" +

@@ -1438,3 +1438,55 @@ b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|b|
 </tbody>
 </table>
 ````````````````````````````````
+
+
+## [Issue 325](https://github.com/mity/md4c/pull/325)
+
+A numeric character reference naming a UTF-16 surrogate (U+D800..U+DFFF) is not
+a Unicode scalar value, so encoding it as an ordinary 3-byte sequence yields
+CESU-8, which is invalid UTF-8. CommonMark requires such a reference -- like one
+resolving to U+0000, or one out of range -- to render as U+FFFD instead.
+
+```````````````````````````````` example
+&#xD800; &#xDFFF; &#55296; &#57343;
+.
+<p>� � � �</p>
+````````````````````````````````
+
+The full boundary set. U+D7FF and U+E000 flank the surrogate block and stay
+verbatim (U+E000 is a private-use code point, so it renders invisibly here);
+U+10FFFF is the highest valid code point and U+110000 is out of range.
+
+```````````````````````````````` example
+&#xD7FF; &#xD800; &#xDBFF; &#xDC00; &#xDFFF; &#xE000; &#x10FFFF; &#x110000; &#0;
+.
+<p>퟿ � � � �  􏿿 � �</p>
+````````````````````````````````
+
+The parser hands the entity through to the renderer verbatim, so every renderer
+decodes the code point itself. The text, ANSI and markdown renderers each carry
+their own copy of the encoder and must agree with the HTML one.
+
+```````````````````````````````` example [no-normalize]
+&#xD7FF; &#xD800; &#xDFFF; &#xE000; &#x110000; &#0;
+.
+퟿ � �  � �
+.
+-t text
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+&#xD7FF; &#xD800; &#xDFFF; &#xE000; &#x110000; &#0;
+.
+퟿ � �  � �
+.
+-t ansi
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+&#xD7FF; &#xD800; &#xDFFF; &#xE000; &#x110000; &#0;
+.
+퟿ � �  � �
+.
+-t markdown
+````````````````````````````````

@@ -141,7 +141,11 @@ fn render_utf8_codepoint(r: *MD_MARKDOWN, codepoint: c_uint, fn_append: AppendFn
         utf8[3] = @intCast(0x80 + ((codepoint >> 0) & 0x3f));
     }
 
-    if (0 < codepoint and codepoint <= 0x10ffff)
+    // Surrogates (U+D800..U+DFFF) are not Unicode scalar values, so encoding
+    // them as an ordinary 3-byte sequence yields malformed UTF-8. CommonMark
+    // requires them -- like U+0000 -- to be rendered as U+FFFD.
+    if (0 < codepoint and codepoint <= 0x10ffff and
+        (codepoint < 0xd800 or codepoint > 0xdfff))
         fn_append(r, &utf8, @intCast(n))
     else
         fn_append(r, &utf8_replacement_char, 3);
