@@ -799,3 +799,37 @@ Content
 <p>Content</p>
 </card>
 ````````````````````````````````
+
+# Bind Props in JSON Output
+
+## Bind prop on an inline component is a JSON-escaped string
+
+```````````````````````````````` example [no-normalize]
+:widget{:data='{"x":1}'}
+.
+{"nodes":[["p",{},["widget",{":data":"{\"x\":1}"}]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Numeric bind prop stays a string
+
+```````````````````````````````` example [no-normalize]
+:widget{:count="5"}
+.
+{"nodes":[["p",{},["widget",{":count":"5"}]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Bind prop on a block component cannot inject sibling props
+
+```````````````````````````````` example [no-normalize]
+::alert{:k='1,"injected":"yes"'}
+body
+::
+.
+{"nodes":[["alert",{":k":"1,\"injected\":\"yes\""},["p",{},"body"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````

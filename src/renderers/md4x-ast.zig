@@ -960,7 +960,12 @@ fn jsonWriteComponentProps(w: *JsonWriter, raw: [*]const u8, size: c.MD_SIZE) c_
                 jsonWrite(w, "\":", 2);
                 jsonWriteEscaped(w, p.key, p.key_size);
                 jsonWriteStr(w, "\":");
-                jsonWrite(w, p.value.?, p.value_size);
+                // The bind value is emitted as a JSON-escaped *string*, never
+                // spliced in raw: a raw splice produces invalid JSON for any
+                // non-JSON value and lets an author inject arbitrary sibling
+                // keys into the props object. See docs/comark-ast.md
+                // ("Object/Array Properties") and docs/js-bindings.md.
+                jsonWriteString(w, p.value.?, p.value_size);
                 n_written += 1;
             },
         }

@@ -176,3 +176,80 @@ hello{.class}
 .
 <p><strong highlighted>important</strong></p>
 ````````````````````````````````
+
+# Bind Attributes in JSON Output
+
+The `:key='value'` bind value is emitted as a JSON-escaped string, never spliced
+into the JSON stream raw (see `docs/comark-ast.md`, "Object/Array Properties").
+A raw splice produced invalid JSON for every non-JSON value and let an author
+inject sibling keys into the props object.
+
+## Bind value on strong is a quoted string
+
+```````````````````````````````` example [no-normalize]
+**b**{:k='hello'}
+.
+{"nodes":[["p",{},["strong",{":k":"hello"},"b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Empty bind value
+
+```````````````````````````````` example [no-normalize]
+**b**{:k=''}
+.
+{"nodes":[["p",{},["strong",{":k":""},"b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Unquoted bind value
+
+```````````````````````````````` example [no-normalize]
+**b**{:k=hello}
+.
+{"nodes":[["p",{},["strong",{":k":"hello"},"b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Bind value containing a space
+
+```````````````````````````````` example [no-normalize]
+**b**{:k='a b'}
+.
+{"nodes":[["p",{},["strong",{":k":"a b"},"b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Bind value cannot inject sibling props
+
+```````````````````````````````` example [no-normalize]
+**b**{:k='1,"injected":"yes"'}
+.
+{"nodes":[["p",{},["strong",{":k":"1,\"injected\":\"yes\""},"b"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Bind value on a link cannot inject sibling props
+
+```````````````````````````````` example [no-normalize]
+[t](u){:k='1,"injected":"yes"'}
+.
+{"nodes":[["p",{},["a",{"href":"u",":k":"1,\"injected\":\"yes\""},"t"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````
+
+## Bind value on an attribute span cannot inject sibling props
+
+```````````````````````````````` example [no-normalize]
+[t]{:k='1,"injected":"yes"'}
+.
+{"nodes":[["p",{},["span",{":k":"1,\"injected\":\"yes\""},"t"]]],"frontmatter":{},"meta":{}}
+.
+--format=json
+````````````````````````````````

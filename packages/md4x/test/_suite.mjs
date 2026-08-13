@@ -870,10 +870,33 @@ export function defineSuite({
     });
 
     it("handles bind syntax in props", async () => {
+      // The bind value is a JSON-escaped *string*, not raw JSON spliced into
+      // the stream — see docs/comark-ast.md, "Object/Array Properties".
       const ast = await parseAST(":widget{:data='{\"x\":1}'}");
       const comp = ast.nodes[0][2];
       expect(comp[0]).toBe("widget");
-      expect(comp[1][":data"]).toEqual({ x: 1 });
+      expect(comp[1][":data"]).toBe('{"x":1}');
+    });
+
+    it("keeps output valid JSON for non-JSON bind values", async () => {
+      for (const input of [
+        ":widget{:k='hello'}",
+        ":widget{:k=''}",
+        ":widget{:k=hello}",
+        ":widget{:k='a b'}",
+        ":widget{:k=}",
+        "**b**{:k='a b'}",
+      ]) {
+        const json = await renderToAST(input);
+        expect(() => JSON.parse(json), input).not.toThrow();
+      }
+    });
+
+    it("does not let a bind value inject sibling props", async () => {
+      const ast = await parseAST(':widget{:k=\'1,"injected":"yes"\'}');
+      const comp = ast.nodes[0][2];
+      expect(comp[1]).toEqual({ ":k": '1,"injected":"yes"' });
+      expect(comp[1].injected).toBeUndefined();
     });
 
     it("renders merged classes in HTML", async () => {
@@ -892,10 +915,12 @@ export function defineSuite({
     });
 
     it("handles array/JSON prop value", async () => {
+      // Passed through verbatim as a string; the consumer decides whether to
+      // JSON.parse it. See docs/comark-ast.md, "Object/Array Properties".
       const ast = await parseAST(':widget{:items=\'["a","b"]\'}');
       const comp = ast.nodes[0][2];
       expect(comp[0]).toBe("widget");
-      expect(comp[1][":items"]).toEqual(["a", "b"]);
+      expect(comp[1][":items"]).toBe('["a","b"]');
     });
   });
 

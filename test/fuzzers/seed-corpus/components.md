@@ -34,3 +34,9 @@ Footer text
 Inner content
 ::
 :::
+
+:widget{:data='{"x":1}' :count="5"}
+
+::alert{:k='1,"injected":"yes"'}
+Body
+::

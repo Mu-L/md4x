@@ -17,3 +17,7 @@ _underline_{.accent}
 [**bold** and *italic*]{#special .styled}
 
 **nested _emph_{.inner}**{.outer}
+
+**bind**{:k='hello'}
+
+[Link](https://example.com){:data='{"x":1}'}
