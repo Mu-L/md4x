@@ -41,11 +41,14 @@
   },
   "devDependencies": {
     "@ox-content/napi": "^2.81.0",
+    "confbox": "^0.2.4",
+    "js-yaml": "^5.2.3",
     "markdown-it": "^14.1.1",
     "markdown-it-mdc": "^0.2.12",
     "md4w": "^0.2.7",
     "md4x-c": "npm:md4x@latest",
     "mitata": "^1.0.34",
-    "satteri": "^0.9.5"
+    "satteri": "^0.9.5",
+    "yaml": "^2.9.0"
   }
 }

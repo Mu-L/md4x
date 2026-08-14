@@ -16,7 +16,7 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 - **Streaming heal** — Fix incomplete markdown from LLM output in real-time
 - **Full CommonMark** — Passes the CommonMark spec
 - **GitHub Flavored Markdown** — Tables, task lists, strikethrough, autolinks, alerts
-- **Built-in YAML frontmatter** — Parsed via libyaml into structured data
+- **Built-in YAML parser** — Frontmatter and standalone YAML, no external dependency
 - **Extra extensions** — LaTeX math, wiki links, underline, highlight, footnotes, inline attributes
 - **Comark (MDC) support** — Block and inline components with props, slots
 - **Universal JS** — Native Node.js addon (NAPI) + portable WASM for browsers, Deno, Bun, edge workers
@@ -82,6 +82,7 @@ import {
   renderToMarkdown,
   renderToMeta,
   parseMeta,
+  parseYAML,
   heal,
 } from "md4x";
 
@@ -95,6 +96,7 @@ const text = renderToText("# Hello, **world**!"); // plain text (stripped)
 const md = renderToMarkdown("# Hello, **world**!"); // clean standard markdown
 const metaJson = renderToMeta("# Hello, **world**!"); // raw JSON string
 const meta = parseMeta("# Hello, **world**!"); // parsed meta
+const yaml = parseYAML("title: Hello"); // standalone YAML -> JS value
 
 const healed = heal("**incomplete streaming mark"); // "**incomplete streaming mark**"
 ```
@@ -293,6 +295,64 @@ summary
    1.19x faster than md4x-wasm heal (large)
    125.91x faster than remend heal (large)
 ```
+
+</details>
+
+### YAML
+
+MD4X ships its own YAML parser — a Zig port of [libyaml](https://github.com/yaml/libyaml), with no C dependency in the shipped artifacts. It backs frontmatter parsing, and is exposed directly for standalone YAML documents. Any root node is accepted (mapping, sequence, or bare scalar); an empty document yields `null`.
+
+```js
+import { parseYAML, yamlToJson } from "md4x";
+
+parseYAML("title: Hello\ncount: 42\ndraft: true");
+// { title: "Hello", count: 42, draft: true }
+
+yamlToJson("title: Hello"); // '{"title":"Hello"}'  (raw JSON string)
+```
+
+`yamlToJson` is `parseYAML` without the `JSON.parse` — use it when the value is headed straight back out as JSON.
+
+<details>
+<summary>Benchmarks</summary>
+
+```
+bun packages/md4x/bench/yaml.mjs
+cpu: Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz
+runtime: bun 1.3.14 (x64-linux)
+
+benchmark                      avg (min … max) p75 / p99    (min … top 1%)
+md4x.napi (parseYAML) (medium)   22.34 µs/iter  22.32 µs  22.35 µs ▆▁▆▁▁▁▃▆▃▁█
+md4x.wasm (parseYAML) (medium)   41.11 µs/iter  49.34 µs  80.21 µs ▄█▃▂▂▂▂▂▁▁▁
+js-yaml (parseYAML) (medium)     50.69 µs/iter  53.59 µs  98.25 µs ▅█▅▃▂▂▂▂▁▁▁
+yaml (parseYAML) (medium)       377.44 µs/iter 392.99 µs 728.75 µs ▃█▃▂▁▁▂▂▂▁▁
+confbox (parseYAML) (medium)     40.27 µs/iter  43.47 µs  44.08 µs ▅▅█▅▅▅▅▁▁▅█
+
+summary
+  md4x.napi (parseYAML) (medium)
+   1.8x faster than confbox (parseYAML) (medium)
+   1.84x faster than md4x.wasm (parseYAML) (medium)
+   2.27x faster than js-yaml (parseYAML) (medium)
+   16.89x faster than yaml (parseYAML) (medium)
+
+md4x.napi (yamlToJson) (medium)  17.78 µs/iter  17.83 µs  19.29 µs ▂▂▂▂█▂▁▁▁▁▂
+md4x.wasm (yamlToJson) (medium)  28.63 µs/iter  29.35 µs  29.61 µs ▃▁▁▁▆▁▁█▆▆▃
+js-yaml (yamlToJson) (medium)    44.24 µs/iter  43.28 µs  47.30 µs ▂▂█▂▁▁▁▁▁▁▂
+yaml (yamlToJson) (medium)      321.22 µs/iter 310.31 µs 644.56 µs ▅█▂▁▁▁▁▁▁▁▁
+
+summary
+  md4x.napi (yamlToJson) (medium)
+   1.61x faster than md4x.wasm (yamlToJson) (medium)
+   2.49x faster than js-yaml (yamlToJson) (medium)
+   18.07x faster than yaml (yamlToJson) (medium)
+```
+
+Notes:
+
+- The bench asserts every parser returns the same value as js-yaml on each fixture before timing anything, so the numbers are for identical work.
+- The `parseYAML` group ends at a materialized JS value for every entry. The `yamlToJson` group compares md4x's native JSON-string output against the JS libs' parse-then-`JSON.stringify`; confbox has no string-output path, so it only appears in the first group.
+- `confbox` bundles js-yaml 4, which is why it tracks js-yaml closely.
+- `yaml` builds a full CST and `Document` on every parse, which accounts for its much larger gap.
 
 </details>
 
