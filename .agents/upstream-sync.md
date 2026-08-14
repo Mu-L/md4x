@@ -165,6 +165,63 @@ Consequences to remember: `SpanType` ordinals after `wikilink` all shift down by
 AST/JSON renderers no longer emit a `u` node. If a future sync brings a commit touching
 `MD_SPAN_U`, it is not applicable here.
 
+## Deliberate deviations — md4x ahead of md4c on CommonMark
+
+Not upstream commits: **md4x code that no longer matches upstream's, on purpose.** A future
+sync will find these four sites textually diverged from md4c HEAD; that is not drift to
+repair. All four were bugs inherited byte-identically from md4c, found by differential
+testing against commonmark.js and fixed in unjs/md4x#23. Each is pinned by examples in
+`test/regressions.txt` (§ Issue 23) and each is confirmed against CommonMark 0.31.2 —
+which is what `test/spec.txt` is, and the reason spec text is quoted here rather than
+commonmark.js behavior: commonmark.js 0.30 still requires an **uppercase** letter in the
+third item, where 0.31.2 accepts any ASCII letter.
+
+| site                          | md4c                                    | md4x                                             |
+| ----------------------------- | --------------------------------------- | ------------------------------------------------ |
+| `blocks.zig` `t1` loop        | HTML block type 1 matches a bare prefix | tag name must be followed by ` `, `\t`, `>`, EOL |
+| `blocks.zig` type 4           | `ISASCII` after `<!`                    | ASCII letter after `<!`                          |
+| `blocks.zig` HTML block start | no indent guard                         | `line.indent < code_indent_offset`               |
+| `process.zig` verbatim lines  | indentation regenerated as spaces       | indentation re-derived from the source bytes     |
+
+1. **Type 1 prefix.** md4c returns 1 on the bare `md_ascii_case_eq`, so `<textareaa`, `<prea`
+   and `<prex y` open a raw HTML block. Spec 4.6 start condition 1 requires "a space, a tab,
+   the string `>`, or the end of the line" — the check the type 6 branch two blocks down
+   already performs.
+2. **Type 4 `<!`.** md4c tests `ISASCII` (its own comment flags it), so `<!_`, `<!-`, `<!1`,
+   `<! `, `<!>` and `<!"` all open a block. Its second consequence is that **type 5 was
+   unreachable**: `<![CDATA[` matched type 4 first and CDATA ended at the first `>` instead of
+   `]]>`. Fixing type 4 alone leaves type 5 dead behind two off-by-one bounds (`off + 3 <
+size` for `<!--`, `off + 8 < size` for `<![CDATA[`), so both became `<=` in the same change
+   — otherwise a document ending exactly at the marker regresses to a paragraph.
+3. **Indent guard.** The ATX header and code fence checks immediately above already guard on
+   `line.indent < ctx.code_indent_offset`; the raw HTML check did not, so `    <div>` after a
+   paragraph line interrupted it instead of being a lazy continuation. md4x's guard also
+   lifts inside a block component (`inside_component != 0`), because indented code is
+   disabled there — matching the component-aware checks in the same function, not the plain
+   ATX/fence form.
+4. **Verbatim indentation.** `MD_VERBATIMLINE.indent` is a **column** count, and md4c replays
+   it out of a literal space string, so a tab that survived the 4-column strip is lost
+   (`\t\tj` → four spaces). md4x re-derives the residual from the source: it walks back over
+   the line's whitespace run, and only where a tab was cut through does it expand to spaces
+   (spec 2.2 "Tabs", examples 2 and 5). The absolute-column walk from the line start is what
+   makes a tab's width knowable, and it runs only when the run actually contains a tab — the
+   no-tab path stays the original space emit.
+
+   **Frontmatter opts out** (`preserve_tabs = false`, the only `false` caller): its body is
+   handed to libyaml, and YAML forbids a tab as indentation. md4c's rewrite has been quietly
+   making tab-indented frontmatter parse, and preserving the tab turns `a:\n\t- 1` into a
+   libyaml error and a `null` value. That is a CommonMark rule about code and HTML blocks
+   being applied where it does not belong, so the carve-out is deliberate — pinned by a
+   `--format=json` example in `test/regressions.txt`.
+
+Blast radius, measured: all 17 `.txt` suites pass (1 201 examples, 17 of them the new
+regression cases), and over `scripts/diff-corpus.sh`'s whole corpus × 6 formats exactly
+**one** hash moves — a tab-indented line inside a fenced block in `test/spec-footnotes.txt`,
+now a tab. Re-baseline `diff-corpus.sh` on that. A 3 868-input differential sweep (generated
+from a whitespace/raw-HTML/container token alphabet, normalized through `test/normalize.py`)
+against markdown-it's `commonmark` preset reported 0 regressions and 762 inputs that newly
+agree with it.
+
 ## Open — reviewed, actionable, not landed
 
 | upstream             | item                                                                                       | note                                                                    |
@@ -209,6 +266,11 @@ Linux/Windows/coverage CI matrix that does not exist.
 3. `6d168ef`'s pathological-test timeout never fires.
 4. In `d1f8a97`, a segment that consumes nothing still rolls `end` back past its own start,
    killing the whole match (`http://example.com//`, `http://ex.coma._`, `a@ex.com.-`).
+5. The four CommonMark divergences in
+   [Deliberate deviations](#deliberate-deviations--md4x-ahead-of-md4c-on-commonmark), all of
+   which reproduce in md4c HEAD: `<textareaa` as a raw HTML block, `<!_` as one (and HTML
+   block type 5 unreachable behind it), an indented `<div>` interrupting a paragraph, and a
+   surviving tab rewritten as spaces in verbatim indentation.
 
 ## Ledger — 2026-08 sweep (fork point → `c4be862`)
 

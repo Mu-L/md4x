@@ -2174,3 +2174,204 @@ b: dropped with the rest of the document
 .
 --format=json
 ````````````````````````````````
+
+
+## [Issue 23](https://github.com/unjs/md4x/issues/23) — CommonMark divergences inherited from md4c
+
+Four fixes where md4x deliberately deviates from upstream md4c to follow
+CommonMark 0.31.2. See `.agents/upstream-sync.md`.
+
+
+### HTML block type 1 must not match on a prefix
+
+The tag name has to be followed by a space, a tab, `>`, or the end of the line
+(spec 4.6, start condition 1). md4c matches the bare prefix, so these opened a
+raw HTML block:
+
+```````````````````````````````` example
+<textareaa
+.
+<p>&lt;textareaa</p>
+````````````````````````````````
+
+```````````````````````````````` example
+<prex y
+.
+<p>&lt;prex y</p>
+````````````````````````````````
+
+Still a block when the delimiter is there — end of line, `>`, and a space:
+
+```````````````````````````````` example
+<pre
+.
+<pre
+````````````````````````````````
+
+```````````````````````````````` example
+<pre>
+x
+</pre>
+.
+<pre>
+x
+</pre>
+````````````````````````````````
+
+```````````````````````````````` example
+<textarea foo
+.
+<textarea foo
+````````````````````````````````
+
+
+### HTML block type 4 needs an ASCII letter after `<!`
+
+md4c tests `ISASCII` there, which swallows anything printable:
+
+```````````````````````````````` example
+<!_
+.
+<p>&lt;!_</p>
+````````````````````````````````
+
+A letter still opens the block (CommonMark 0.31.2 dropped the uppercase
+requirement, so a lowercase one counts):
+
+```````````````````````````````` example
+<!DOCTYPE html>
+.
+<!DOCTYPE html>
+````````````````````````````````
+
+```````````````````````````````` example
+<!x
+.
+<!x
+````````````````````````````````
+
+Because type 4 was tried before type 5 and matched `<![`, type 5 was
+unreachable and CDATA ended at the first `>` instead of `]]>`:
+
+```````````````````````````````` example
+<![CDATA[
+>
+]]>
+x
+.
+<![CDATA[
+>
+]]>
+<p>x</p>
+````````````````````````````````
+
+
+### A raw HTML block start does not interrupt a paragraph when indented
+
+Four spaces make it a lazy continuation line, as they already did for an ATX
+header and a code fence:
+
+```````````````````````````````` example
+i
+    <div>
+.
+<p>i
+<div></p>
+````````````````````````````````
+
+Unindented it still interrupts, and on its own it is still indented code:
+
+```````````````````````````````` example
+i
+<div>
+.
+<p>i</p>
+<div>
+````````````````````````````````
+
+```````````````````````````````` example
+    <div>
+.
+<pre><code>&lt;div&gt;
+</code></pre>
+````````````````````````````````
+
+
+### A tab that survives the indentation strip stays a tab
+
+The residual indentation of a verbatim line is a column count, and md4c
+regenerated it from a literal space string. Only a tab the strip cut through
+expands to spaces (spec 2.2, examples 2 and 5):
+
+```````````````````````````````` example [no-normalize]
+		j
+.
+<pre><code>	j
+</code></pre>
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+   	 	j
+.
+<pre><code> 	j
+</code></pre>
+````````````````````````````````
+
+Cut through by the list item's two columns and then by the code block's four,
+the first tab contributes spaces and the second survives whole:
+
+```````````````````````````````` example [no-normalize]
+- foo
+
+		bar
+.
+<ul>
+<li><p>foo</p>
+<pre><code>  bar
+</code></pre>
+</li>
+</ul>
+````````````````````````````````
+
+Fenced code is stripped the same way:
+
+```````````````````````````````` example [no-normalize]
+~~~
+	foo
+		bar
+~~~
+.
+<pre><code>	foo
+		bar
+</code></pre>
+````````````````````````````````
+
+A blank line inside a code block keeps its residual tabs too:
+
+```````````````````````````````` example [no-normalize]
+    foo
+      	   
+    bar
+.
+<pre><code>foo
+  	   
+bar
+</code></pre>
+````````````````````````````````
+
+Frontmatter is the exception: its body goes to libyaml, which rejects a tab as
+indentation, so it keeps md4c's regenerate-as-spaces and tab-indented YAML
+still parses.
+
+```````````````````````````````` example [no-normalize]
+---
+a:
+	- 1
+	- 2
+---
+x
+.
+{"nodes":[["p",{},"x"]],"frontmatter":{"a":[1,2]},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````

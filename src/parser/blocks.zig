@@ -547,16 +547,25 @@ pub const map6 = [26][]const TAG{
 pub fn md_is_html_block_start_condition(ctx: *MD_CTX, beg: OFF) c_int {
     var off: OFF = beg + 1;
 
-    // Check for type 1: <script, <pre, or <style
+    // Check for type 1: <pre, <script, <style or <textarea. The tag name has to
+    // be followed by a space, a tab, '>' or the end of the line, the same check
+    // the type 6 branch below performs. (md4c matches on the bare prefix, so
+    // `<textareaa` starts a raw HTML block there; md4x deliberately deviates.)
     for (t1) |tag| {
         if (off + tag.len <= ctx.size) {
-            if (md_ascii_case_eq(ctx.str(off), tag.name, tag.len))
-                return 1;
+            if (md_ascii_case_eq(ctx.str(off), tag.name, tag.len)) {
+                const tmp: OFF = off + tag.len;
+                if (tmp >= ctx.size)
+                    return 1;
+                if (ctx.isBlank(tmp) or ctx.isNewline(tmp) or ctx.ch(tmp) == '>')
+                    return 1;
+                break;
+            }
         }
     }
 
     // Check for type 2: <!--
-    if (off + 3 < ctx.size and ctx.ch(off) == '!' and ctx.ch(off + 1) == '-' and ctx.ch(off + 2) == '-')
+    if (off + 3 <= ctx.size and ctx.ch(off) == '!' and ctx.ch(off + 1) == '-' and ctx.ch(off + 2) == '-')
         return 2;
 
     // Check for type 3: <?
@@ -565,12 +574,14 @@ pub fn md_is_html_block_start_condition(ctx: *MD_CTX, beg: OFF) c_int {
 
     // Check for type 4 or 5: <!
     if (off < ctx.size and ctx.ch(off) == '!') {
-        // Type 4: <! followed by uppercase letter (C tests ISASCII here).
-        if (off + 1 < ctx.size and ctx.isAscii(off + 1))
+        // Type 4: <! followed by an ASCII letter. (md4c tests ISASCII here,
+        // which swallows `<!_`, `<![`, `<! ` and — because type 4 wins over
+        // type 5 — makes type 5 unreachable. md4x deliberately deviates.)
+        if (off + 1 < ctx.size and ctx.isAlpha(off + 1))
             return 4;
 
         // Type 5: <![CDATA[
-        if (off + 8 < ctx.size) {
+        if (off + 8 <= ctx.size) {
             if (md_ascii_eq(ctx.str(off), "![CDATA[", 8))
                 return 5;
         }
@@ -1623,8 +1634,14 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             }
         }
 
-        // Check for start of raw HTML block.
-        if (off < ctx.size and ctx.ch(off) == '<' and
+        // Check for start of raw HTML block. As with the ATX header and the code
+        // fence above, an indented '<' is not a block start — it is indented code
+        // (handled above) or a lazy paragraph continuation. (md4c lacks the indent
+        // guard, so `    <div>` interrupts a paragraph there; md4x deliberately
+        // deviates.) Inside a block component indented code is disabled, so the
+        // guard lifts there, matching the component-aware checks above.
+        if ((line.indent < ctx.code_indent_offset or inside_component != 0) and
+            off < ctx.size and ctx.ch(off) == '<' and
             (ctx.parser.flags & c.MD_FLAG_NOHTMLBLOCKS == 0))
         {
             ctx.html_block_type = md_is_html_block_start_condition(ctx, off);

@@ -285,25 +285,108 @@ pub fn md_process_normal_block_contents(ctx: *MD_CTX, lines: []const MD_LINE) c_
     return ret;
 }
 
-// md4x.c ~5412.
-pub fn md_process_verbatim_block_contents(ctx: *MD_CTX, text_type: c.TextType, lines: []const MD_VERBATIMLINE) c_int {
-    const indent_chunk_str: [*:0]const CHAR = "                ";
-    const indent_chunk_size: SZ = 16;
+const indent_chunk_str: [*:0]const CHAR = "                ";
+const indent_chunk_size: SZ = 16;
+
+// Column width of the byte at `off` when the column it starts at is `col`.
+inline fn md_column_width(ctx: *MD_CTX, off: OFF, col: c_uint) c_uint {
+    return if (ctx.ch(off) == '\t') (((col + 4) & ~@as(c_uint, 3)) - col) else 1;
+}
+
+inline fn md_emit_spaces(ctx: *MD_CTX, text_type: c.TextType, n_in: c_uint) c_int {
+    var n = n_in;
+    while (n > indent_chunk_size) {
+        const ret = mdText(ctx, text_type, indent_chunk_str, indent_chunk_size);
+        if (ret != 0) return ret;
+        n -= indent_chunk_size;
+    }
+    if (n > 0) return mdText(ctx, text_type, indent_chunk_str, @intCast(n));
+    return 0;
+}
+
+// Emit the residual indentation of a verbatim line, i.e. what is left of its
+// leading whitespace after the block's own indentation has been stripped.
+//
+// `indent` is a **column** count, so it cannot simply be replayed as spaces:
+// CommonMark expands a tab only where the strip cut through it, and keeps a tab
+// that survived it whole (spec 2.2 "Tabs", examples 2 and 5). md4c regenerates
+// the indentation from a literal space string and loses those tabs; md4x
+// deliberately deviates. `beg` is the line's first content byte (for a blank
+// line inside the block, its newline), i.e. the end of the whitespace run.
+fn md_process_verbatim_indent(ctx: *MD_CTX, text_type: c.TextType, beg: OFF, indent: c_uint) c_int {
+    // The whitespace run the indentation was measured over. Without a tab in it
+    // columns are bytes and plain spaces reproduce it exactly.
+    var ws_beg: OFF = beg;
+    var has_tab = false;
+    while (ws_beg > 0 and ctx.isBlank(ws_beg - 1)) {
+        ws_beg -= 1;
+        has_tab = has_tab or ctx.ch(ws_beg) == '\t';
+    }
+    if (!has_tab) return md_emit_spaces(ctx, text_type, indent);
+
+    // A tab's width depends on where it starts, so walk the line from its start
+    // to get absolute columns: first the column of the whitespace run, then the
+    // column of the content. The residual is the last `indent` columns of that.
+    var off: OFF = ws_beg;
+    while (off > 0 and !ctx.isNewline(off - 1)) off -= 1;
+    var ws_col: c_uint = 0;
+    while (off < ws_beg) : (off += 1)
+        ws_col += md_column_width(ctx, off, ws_col);
+
+    var end_col: c_uint = ws_col;
+    off = ws_beg;
+    while (off < beg) : (off += 1)
+        end_col += md_column_width(ctx, off, end_col);
+
+    // A residual reaching past the whitespace run has nothing to be sourced
+    // from; pad it with spaces (defensive — the strip only ever eats columns
+    // the whitespace run itself contributed).
+    if (end_col < indent) return md_emit_spaces(ctx, text_type, indent);
+    const start_col: c_uint = end_col - indent;
+    if (start_col < ws_col) {
+        const ret = md_emit_spaces(ctx, text_type, ws_col - start_col);
+        if (ret != 0) return ret;
+    }
+
+    // Skip the bytes wholly before the residual.
+    var col: c_uint = ws_col;
+    off = ws_beg;
+    while (off < beg) {
+        const w = md_column_width(ctx, off, col);
+        if (col + w > start_col) break;
+        col += w;
+        off += 1;
+    }
+
+    // A tab the strip cut through contributes its uncut columns as spaces.
+    if (off < beg and col < start_col) {
+        const w = md_column_width(ctx, off, col);
+        const ret = md_emit_spaces(ctx, text_type, col + w - start_col);
+        if (ret != 0) return ret;
+        off += 1;
+    }
+
+    // Everything from here on survived the strip whole: emit it verbatim.
+    return mdText(ctx, text_type, ctx.str(off), beg - off);
+}
+
+// md4x.c ~5412. `preserve_tabs` selects CommonMark's tab handling for the
+// residual indentation (see md_process_verbatim_indent). Frontmatter passes
+// false: its body goes to libyaml, which rejects a tab as indentation, and
+// md4c's regenerate-as-spaces has been quietly making tab-indented YAML parse.
+pub fn md_process_verbatim_block_contents(ctx: *MD_CTX, text_type: c.TextType, lines: []const MD_VERBATIMLINE, preserve_tabs: bool) c_int {
     var ret: c_int = 0;
 
     var line_index: MD_SIZE = 0;
     while (line_index < lines.len) : (line_index += 1) {
         const line = &lines[line_index];
-        var indent: c_int = @intCast(line.indent);
 
         // Output code indentation.
-        while (indent > @as(c_int, @intCast(indent_chunk_size))) {
-            ret = mdText(ctx, text_type, indent_chunk_str, indent_chunk_size);
-            if (ret != 0) return ret;
-            indent -= @intCast(indent_chunk_size);
-        }
-        if (indent > 0) {
-            ret = mdText(ctx, text_type, indent_chunk_str, @intCast(indent));
+        if (line.indent > 0) {
+            ret = if (preserve_tabs)
+                md_process_verbatim_indent(ctx, text_type, line.beg, line.indent)
+            else
+                md_emit_spaces(ctx, text_type, line.indent);
             if (ret != 0) return ret;
         }
 
@@ -338,7 +421,7 @@ pub fn md_process_code_block_contents(ctx: *MD_CTX, is_fenced: c_int, lines_in: 
 
     if (lines.len == 0) return 0;
 
-    return md_process_verbatim_block_contents(ctx, c.TextType.code, lines);
+    return md_process_verbatim_block_contents(ctx, c.TextType.code, lines, true);
 }
 
 // md4x.c ~5473. Parse highlight ranges string (e.g. "1-3,5,7") into expanded
@@ -682,11 +765,11 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
     switch (btype) {
         c.BlockType.hr => {},
         c.BlockType.code => ret = md_process_code_block_contents(ctx, @intFromBool(block.bits.data != 0), @as([*]const MD_VERBATIMLINE, @ptrCast(@alignCast(block_lines + 1)))[0..block.n_lines]),
-        c.BlockType.html => ret = md_process_verbatim_block_contents(ctx, c.TextType.html, @as([*]const MD_VERBATIMLINE, @ptrCast(@alignCast(block_lines + 1)))[0..block.n_lines]),
+        c.BlockType.html => ret = md_process_verbatim_block_contents(ctx, c.TextType.html, @as([*]const MD_VERBATIMLINE, @ptrCast(@alignCast(block_lines + 1)))[0..block.n_lines], true),
         c.BlockType.frontmatter => {
             // Skip the opening fence line (first line is the --- opener).
             const vlines: [*]const MD_VERBATIMLINE = @ptrCast(@alignCast(block_lines + 1));
-            ret = md_process_verbatim_block_contents(ctx, c.TextType.normal, (vlines + 1)[0 .. block.n_lines - 1]);
+            ret = md_process_verbatim_block_contents(ctx, c.TextType.normal, (vlines + 1)[0 .. block.n_lines - 1], false);
         },
         c.BlockType.table => ret = md_process_table_block_contents(ctx, @intCast(block.bits.data), @as([*]const MD_LINE, @ptrCast(@alignCast(block_lines + 1)))[0..block.n_lines]),
         else => ret = md_process_normal_block_contents(ctx, @as([*]const MD_LINE, @ptrCast(@alignCast(block_lines + 1)))[0..block.n_lines]),
