@@ -148,46 +148,49 @@ cpu: Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz
 runtime: bun 1.3.14 (x64-linux)
 
 benchmark                        avg (min … max) p75 / p99    (min … top 1%)
-md4x.napi (renderToHtml)            6.84 µs/iter   6.89 µs   7.01 µs ▂█▂▄▄▂▅▄▂▂▄
-md4x.wasm (renderToHtml)           14.75 µs/iter  15.20 µs  29.38 µs █▆▄▂▂▁▁▁▁▁▁
-md4w (renderToHtml)                17.07 µs/iter  17.65 µs  39.78 µs ██▄▂▁▁▁▁▁▁▁
-markdown-it (renderToHtml)         54.38 µs/iter  53.77 µs 122.02 µs ▅█▂▂▂▂▁▁▁▁▁
-markdown-exit (renderToHtml)       53.24 µs/iter  52.64 µs 105.82 µs ▃█▂▂▁▁▁▁▁▁▁
-satteri (renderToHtml)             25.59 µs/iter  26.40 µs  43.70 µs ▄█▆▃▂▁▁▁▁▁▁
-ox-content (renderToHtml)          10.87 µs/iter  10.98 µs  11.09 µs ▃▃▁▁▅▁▅▁█▁▃
+md4x.napi (renderToHtml)            6.78 µs/iter   6.82 µs   6.88 µs ▃▃██▆▆▆▆█▃▃
+md4x.wasm (renderToHtml)           15.15 µs/iter  15.70 µs  31.72 µs █▄▃▂▂▁▁▁▁▁▁
+md4w (renderToHtml)                17.56 µs/iter  18.23 µs  38.41 µs ▆█▆▂▂▁▁▁▁▁▁
+markdown-it (renderToHtml)         59.77 µs/iter  69.44 µs 143.41 µs ██▂▃▃▂▁▁▁▁▁
+markdown-exit (renderToHtml)       56.02 µs/iter  54.56 µs 125.47 µs ▃█▂▁▁▁▁▁▁▁▁
+satteri (renderToHtml)             26.31 µs/iter  27.21 µs  47.39 µs ▄█▅▃▂▁▁▁▁▁▁
+ox-content (renderToHtml)          11.11 µs/iter  11.30 µs  11.56 µs ▃█▆▆▁▁▁▃▁▃▃
+qip.wasm (renderToHtml)            21.57 µs/iter  21.71 µs  37.39 µs █▆▃▂▁▁▁▁▁▁▁
 
 summary
   md4x.napi (renderToHtml)
-   1.59x faster than ox-content (renderToHtml)
-   2.16x faster than md4x.wasm (renderToHtml)
-   2.5x faster than md4w (renderToHtml)
-   3.74x faster than satteri (renderToHtml)
-   7.79x faster than markdown-exit (renderToHtml)
-   7.95x faster than markdown-it (renderToHtml)
+   1.64x faster than ox-content (renderToHtml)
+   2.23x faster than md4x.wasm (renderToHtml)
+   2.59x faster than md4w (renderToHtml)
+   3.18x faster than qip.wasm (renderToHtml)
+   3.88x faster than satteri (renderToHtml)
+   8.26x faster than markdown-exit (renderToHtml)
+   8.81x faster than markdown-it (renderToHtml)
 
-md4x.napi (parseAST) (medium)      22.56 µs/iter  23.77 µs  24.89 µs ▃█▆▁▃▃▁▃▁▃▃
-md4x.wasm (parseAST) (medium)      36.44 µs/iter  37.98 µs  58.69 µs ▅▇█▄▃▂▂▁▁▁▁
-md4w (parseAST) (medium)           29.40 µs/iter  30.76 µs  50.24 µs ▇█▇▄▂▂▁▁▁▁▁
-markdown-it (parseAST) (medium)    40.33 µs/iter  41.40 µs  73.95 µs ▃█▄▂▂▂▁▁▁▁▁
-markdown-exit (parseAST) (medium)  36.96 µs/iter  36.70 µs  38.13 µs ▃▁▁▆▃█▃▆▁▁▃
-satteri (parseAST) (medium)        21.56 µs/iter  21.86 µs  40.67 µs ▃█▃▂▂▁▁▁▁▁▁
-ox-content (parseAST) (medium)     22.75 µs/iter  23.12 µs  25.86 µs █▅▁▁▂▁▁▂▁▁▂
+md4x.napi (parseAST) (medium)      23.24 µs/iter  25.51 µs  27.39 µs █▆▁▃▆▁▁▁▃▁▆
+md4x.wasm (parseAST) (medium)      31.88 µs/iter  33.05 µs  62.20 µs ▆█▆▃▂▁▁▁▁▁▁
+md4w (parseAST) (medium)           24.94 µs/iter  26.10 µs  26.99 µs ▃▃█▃▃▃▁▁▆▁▃
+markdown-it (parseAST) (medium)    41.26 µs/iter  43.17 µs  72.22 µs ▃█▅▂▂▂▂▁▁▁▁
+markdown-exit (parseAST) (medium)  35.42 µs/iter  36.24 µs  36.58 µs ▅▅▁█▅█▁▁▅█▅
+satteri (parseAST) (medium)        22.31 µs/iter  22.85 µs  39.60 µs ▂█▃▂▂▁▁▁▁▁▁
+ox-content (parseAST) (medium)     24.21 µs/iter  26.36 µs  26.69 µs ██▁▅▁▅▅▁▅█▅
 
 summary
   satteri (parseAST) (medium)
-   1.05x faster than md4x.napi (parseAST) (medium)
-   1.06x faster than ox-content (parseAST) (medium)
-   1.36x faster than md4w (parseAST) (medium)
-   1.69x faster than md4x.wasm (parseAST) (medium)
-   1.71x faster than markdown-exit (parseAST) (medium)
-   1.87x faster than markdown-it (parseAST) (medium)
+   1.04x faster than md4x.napi (parseAST) (medium)
+   1.09x faster than ox-content (parseAST) (medium)
+   1.12x faster than md4w (parseAST) (medium)
+   1.43x faster than md4x.wasm (parseAST) (medium)
+   1.59x faster than markdown-exit (parseAST) (medium)
+   1.85x faster than markdown-it (parseAST) (medium)
 ```
 
 Notes:
 
-- The `parseAST` trio at the top (satteri, md4x.napi, ox-content) sits within ~6% of each other, which is inside run-to-run noise on this machine — repeat runs reorder them. Treat them as tied; the clear gaps are further down the list.
+- The `parseAST` group at the top (satteri, md4x.napi, ox-content, md4w) sits within ~12% of each other, which is inside run-to-run noise on this machine — repeat runs reorder them. Treat them as tied; the clear gaps are further down the list.
 - The parsers do not all return the same thing: markdown-it yields a flat array of tokens where md4x returns a nested comark AST, satteri's mdast carries full `position` data on every node, and ox-content hands back the tree as a JSON string (the bench `JSON.parse`s it so every entry ends at a materialized tree).
 - ox-content ships with GFM off, so the bench passes `{ gfm: true }` to put it on the same fixture as the rest.
+- [qip](https://qip.dev/markdown-to-html) is the `gfm-commonmark.0.31.2` WASM component, not an npm package — the bench fetches it once into `bench/.cache/` (gitignored) and skips the entry if the download fails. It renders through fixed 2 MiB in/out buffers with no imports, and exposes HTML only, so it does not appear in the `parseAST` group.
 
 </details>
 

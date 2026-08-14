@@ -6,6 +6,7 @@ import MarkdownIt from "markdown-it";
 import { createMarkdownExit } from "markdown-exit";
 import * as satteri from "satteri";
 import * as oxContent from "@ox-content/napi";
+import { load as loadQip } from "./_qip.mjs";
 import * as fixtures from "./_fixtures.mjs";
 
 const markdownIt = new MarkdownIt();
@@ -13,6 +14,10 @@ const markdownExit = createMarkdownExit();
 
 // ox-content has GFM off by default; the others enable it, so opt in to match.
 const oxOpts = { gfm: true };
+
+// qip.dev ships a bare .wasm, not a package -- fetched and cached on first run.
+// HTML only: the component has no AST entry point, so it sits out `parseAST`.
+const qipRenderToHtml = await loadQip();
 
 // Latest published md4x (C version) aliased as `md4x-c`, for old-vs-new
 // comparison. Opt-in via `MD4X_C=1` since it only matters while porting.
@@ -48,6 +53,9 @@ for (const [name, input] of Object.entries(inputs)) {
       bench(`ox-content (renderToHtml)`, () =>
         oxContent.parseAndRender(input, oxOpts),
       );
+      if (qipRenderToHtml) {
+        bench(`qip.wasm (renderToHtml)`, () => qipRenderToHtml(input));
+      }
       // const bunToHTML = global.Bun.markdown.html;
       // if (bunToHTML) {
       //   bench(`Bun.markdown.html`, () => bunToHTML(input));
