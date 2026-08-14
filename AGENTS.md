@@ -53,6 +53,7 @@ src/
     md4x-json.zig     # Shared JSON writer + YAML-to-JSON + md_yaml entry point
     md4x-diag.zig     # Shared debug-sink stderr write (the only portable `stderr`)
     md4x-slug.zig     # Shared heading text + GitHub-compatible heading slugs
+    md4x-highlight.zig # Shared per-code-block syntax-highlight hook (HTML + ANSI)
     md4x-{html,ast,ansi,meta,text,markdown}.zig
     md4x-heal.zig     # Markdown heal/completion utility (no parser dependency)
   cli/

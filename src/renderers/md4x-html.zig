@@ -38,6 +38,7 @@ const heal = @import("md4x-heal.zig");
 // frontmatter helpers below now go through the pure-Zig port in src/yaml/.
 const yaml = @import("../yaml/yaml.zig");
 const diag = @import("md4x-diag.zig");
+const hl = @import("md4x-highlight.zig");
 
 const c_allocator = std.heap.c_allocator;
 
@@ -46,7 +47,12 @@ const MD_HTML_FLAG_DEBUG: c_uint = 0x0001;
 const MD_HTML_FLAG_VERBATIM_ENTITIES: c_uint = 0x0002;
 const MD_HTML_FLAG_SKIP_UTF8_BOM: c_uint = 0x0004;
 const MD_HTML_FLAG_FULL_HTML: c_uint = 0x0008;
-const MD_HTML_FLAG_CODE_META: c_uint = 0x0010;
+// 0x0010 was MD_HTML_FLAG_CODE_META, the code-block offset trailer the JS
+// bindings used to splice highlighted blocks into the finished output. The
+// renderer now calls the highlighter itself — see md4x-highlight.zig — so the
+// flag, and the byte-offset bookkeeping it needed, are gone. The bit is left
+// unused rather than reassigned: a caller passing the old value gets a no-op
+// instead of full-document mode or heal.
 const MD_HTML_FLAG_HEAL: c_uint = 0x0100;
 
 const NEED_URL_ESC_FLAG: u8 = 0x2;
@@ -72,10 +78,15 @@ const ESCAPE_MAP: [256]u8 = blk: {
     break :blk map;
 };
 
-/// Options for `md_html_ex` (full-document mode). Re-exported by lib.zig.
+/// Options for `md_html_ex`. Re-exported by lib.zig.
+///
+/// `title` / `css_url` are full-document mode (`MD_HTML_FLAG_FULL_HTML`);
+/// `highlighter` is independent of the flags and applies to every fenced or
+/// indented code block — see md4x-highlight.zig.
 pub const MD_HTML_OPTS = extern struct {
     title: ?[*:0]const u8 = null,
     css_url: ?[*:0]const u8 = null,
+    highlighter: ?*const hl.Highlighter = null,
 };
 
 // Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn. Every sink
@@ -86,18 +97,6 @@ const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) 
 
 // AppendFn mirrors `void (*fn_append)(MD_HTML*, const MD_CHAR*, MD_SIZE)`.
 const AppendFn = *const fn (*MD_HTML, [*]const u8, c.MD_SIZE) void;
-
-// Code block metadata entry (heap-allocated when MD_HTML_FLAG_CODE_META is set).
-const MD_HTML_CODE_META = struct {
-    start: c.MD_SIZE = 0,
-    end: c.MD_SIZE = 0,
-    lang: [64]u8 = undefined,
-    lang_size: c.MD_SIZE = 0,
-    filename: [256]u8 = undefined,
-    filename_size: c.MD_SIZE = 0,
-    highlights: ?[*]c_uint = null,
-    highlight_count: c_uint = 0,
-};
 
 const MD_HTML = struct {
     process_output: ProcessOutputFn,
@@ -128,12 +127,13 @@ const MD_HTML = struct {
     fm_size: c.MD_SIZE = 0,
     fm_cap: c.MD_SIZE = 0,
 
-    // Code block metadata tracking.
-    output_offset: c.MD_SIZE = 0,
-    in_code_block: bool = false,
-    code_blocks: ?[*]MD_HTML_CODE_META = null,
-    n_code_blocks: c_int = 0,
-    code_blocks_cap: c_int = 0,
+    // Syntax-highlight hook. While a code block is rendered with a highlighter
+    // installed, nothing is emitted: the block's text accumulates in `hl_code`
+    // and leave_block either emits what the highlighter returned or renders the
+    // block from `hl_code` -- see hl_end.
+    highlighter: ?*const hl.Highlighter = null,
+    hl_active: bool = false,
+    hl_code: hl.Buf = .{},
 
     // Internal output buffer: batches render_verbatim appends into a single
     // process_output callback to reduce per-call overhead. `real_process_output`
@@ -148,35 +148,10 @@ const MD_HTML = struct {
 // Flush threshold: when the internal buffer reaches this size, emit it.
 const OUT_BUF_THRESHOLD: c.MD_SIZE = 8 * 1024;
 
-// ***  `output_offset` invariant  ***
-//
-// `output_offset` is the number of BODY bytes committed to the caller's output
-// stream so far; MD_HTML_CODE_META.start/.end are snapshots of it. Every byte
-// must be counted EXACTLY ONCE, at the moment it is committed to the
-// caller-bound stream — that is, in `out_buf_append` (buffered or the direct
-// OOM fallback) and in `emit` (direct). Consequently:
-//
-//   * `flush_output` does NOT count: it only drains bytes `out_buf_append`
-//     already counted.
-//   * `render_verbatim` does NOT count: when it is not diverted it delegates to
-//     `out_buf_append`, and when `process_output` HAS been swapped to a capture
-//     callback the bytes are going into `comp_fm_tag`, not to the caller — they
-//     are counted when that buffer is later handed to `emit`. Counting there
-//     too would count them twice.
-//   * `render_code_meta_json` deliberately bypasses both helpers. It is the
-//     trailer emitted after the body, once every recorded offset is final.
-//
-// Counting used to live in `render_verbatim` alone, which missed the bytes
-// `render_open_block_component` appends straight into `comp_fm_tag` ("<", the
-// tag name, ` title="` and `"`) — so every code block after a block component
-// reported offsets short by those bytes, cumulatively.
-
 // Append bytes to the internal output buffer, flushing to real_process_output
 // when the threshold is exceeded. Falls back to a direct call on OOM so output
 // is never silently dropped.
 fn out_buf_append(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
-    if (r.flags & MD_HTML_FLAG_CODE_META != 0)
-        r.output_offset += size;
     if (r.out_size + size > r.out_cap) {
         const new_cap: c.MD_SIZE = r.out_cap + r.out_cap / 2 + size + OUT_BUF_THRESHOLD;
         const p = buf_realloc(r.out_buf, r.out_cap, new_cap);
@@ -205,12 +180,9 @@ fn flush_output(r: *MD_HTML) void {
 
 // Flush the internal buffer, then emit bytes directly via the real callback.
 // Used by direct-output paths (comp_fm_flush_tag) so their output lands in the
-// correct position relative to buffered body content. Counts towards
-// `output_offset` — see the invariant above.
+// correct position relative to buffered body content.
 fn emit(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     flush_output(r);
-    if (r.flags & MD_HTML_FLAG_CODE_META != 0)
-        r.output_offset += size;
     r.real_process_output(@ptrCast(text), size, r.userdata);
 }
 
@@ -246,13 +218,9 @@ inline fn ISALNUM(ch: u8) bool {
 
 fn render_verbatim(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     // When process_output has been temporarily swapped away from the caller's
-    // original callback (e.g. component-frontmatter capture), bypass the
-    // internal buffer and call the swapped callback directly. Otherwise batch
-    // into out_buf.
-    //
-    // Note this function does NOT touch `output_offset`: the buffered branch is
-    // counted by out_buf_append, and the swapped branch is not reaching the
-    // caller at all (it is counted when the capture buffer is emit()-ed).
+    // original callback (component-frontmatter capture), bypass the internal
+    // buffer and call the swapped callback directly. Otherwise batch into
+    // out_buf.
     if (r.process_output == r.real_process_output) {
         out_buf_append(r, text, size);
     } else {
@@ -903,110 +871,51 @@ fn render_close_block_component(r: *MD_HTML, det: *const c.BlockComponentDetail)
 }
 
 // *****************************************
-// ***  Code block metadata tracking     ***
+// ***  Syntax-highlight hook            ***
 // *****************************************
+//
+// See md4x-highlight.zig. With a highlighter installed a code block emits
+// nothing while it is being processed: `hl_begin` starts collecting the block's
+// text in `hl_code`, and `hl_end` either emits the highlighter's replacement or
+// renders the block itself.
+//
+// The default rendering is deferred rather than captured-and-discarded because
+// the accepted case is the common one, and escaping a block into a scratch
+// buffer only to throw it away is the single largest avoidable cost on this
+// path. Deferring is exact: the decline branch calls the same two functions the
+// normal path calls, over the same detail and the same bytes.
 
-fn code_meta_push(r: *MD_HTML) ?*MD_HTML_CODE_META {
-    if (r.code_blocks == null) {
-        const p = c_allocator.alloc(MD_HTML_CODE_META, 8) catch return null;
-        r.code_blocks = p.ptr;
-        r.code_blocks_cap = 8;
-    } else if (r.n_code_blocks >= r.code_blocks_cap) {
-        const new_cap: usize = @intCast(r.code_blocks_cap * 2);
-        const old = r.code_blocks.?[0..@intCast(r.code_blocks_cap)];
-        const p = c_allocator.realloc(old, new_cap) catch return null;
-        r.code_blocks = p.ptr;
-        r.code_blocks_cap = @intCast(new_cap);
-    }
-    const idx: usize = @intCast(r.n_code_blocks);
-    r.code_blocks.?[idx] = .{};
-    return &r.code_blocks.?[idx];
+fn hl_begin(r: *MD_HTML) void {
+    r.hl_code.reset();
+    r.hl_active = true;
 }
 
-fn code_meta_cleanup(r: *MD_HTML) void {
-    if (r.code_blocks) |blocks| {
-        // Free committed entries + the in-progress entry if parse was aborted.
-        const count: usize = @intCast(r.n_code_blocks + @as(c_int, @intFromBool(r.in_code_block)));
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            if (blocks[i].highlights) |h|
-                c_allocator.free(h[0..blocks[i].highlight_count]);
-        }
-        c_allocator.free(blocks[0..@intCast(r.code_blocks_cap)]);
+fn hl_end(r: *MD_HTML, det: *const c.BlockCodeDetail) void {
+    r.hl_active = false;
+
+    // A collection that hit OOM holds a prefix of the block, not the block:
+    // render what there is rather than hand the highlighter a truncated program
+    // (see the `err` note in md4x-highlight.zig).
+    const h = r.highlighter.?;
+    const code = r.hl_code.slice();
+    const replacement: ?[]const u8 = if (r.hl_code.err) null else h.highlight(h.ctx, &.{
+        .code = code,
+        .lang = det.lang.text,
+        .filename = det.filename.text,
+        .highlights = det.highlights,
+    });
+
+    if (replacement) |text| {
+        if (text.len > 0)
+            render_verbatim(r, text.ptr, @intCast(text.len));
+        h.release(h.ctx, text);
+        return;
     }
-}
 
-fn emit_json_str(out: ProcessOutputFn, ud: ?*anyopaque, str: [*]const u8, size: c.MD_SIZE) void {
-    var i: c.MD_SIZE = 0;
-    var beg: c.MD_SIZE = 0;
-    out("\"", 1, ud);
-    while (i < size) : (i += 1) {
-        const ch: u8 = str[i];
-        if (ch == '"' or ch == '\\' or ch < 0x20) {
-            if (i > beg)
-                out(@ptrCast(str + beg), i - beg, ud);
-            if (ch == '"' or ch == '\\') {
-                out("\\", 1, ud);
-                out(@ptrCast(str + i), 1, ud);
-            } else if (ch == '\n') {
-                out("\\n", 2, ud);
-            } else if (ch == '\r') {
-                out("\\r", 2, ud);
-            } else if (ch == '\t') {
-                out("\\t", 2, ud);
-            } else {
-                // Other control chars: \u00XX
-                const hex = "0123456789abcdef";
-                const esc = [_]u8{ '\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0xf] };
-                out(&esc, 6, ud);
-            }
-            beg = i + 1;
-        }
-    }
-    if (i > beg)
-        out(@ptrCast(str + beg), i - beg, ud);
-    out("\"", 1, ud);
-}
-
-fn render_code_meta_json(r: *MD_HTML) void {
-    // Flush buffered body content so the code-meta JSON (and the NUL byte that
-    // precedes it) lands after the body in the final byte stream.
-    flush_output(r);
-    const out = r.real_process_output;
-    const ud = r.userdata;
-    var buf: [64]u8 = undefined;
-
-    out("\x00", 1, ud);
-    out("[", 1, ud);
-    var i: usize = 0;
-    while (i < @as(usize, @intCast(r.n_code_blocks))) : (i += 1) {
-        const m = &r.code_blocks.?[i];
-        if (i > 0) out(",", 1, ud);
-
-        var s = std.fmt.bufPrint(&buf, "{{\"s\":{d},\"e\":{d}", .{ m.start, m.end }) catch unreachable;
-        out(s.ptr, @intCast(s.len), ud);
-
-        if (m.lang_size > 0) {
-            out(",\"l\":", 5, ud);
-            emit_json_str(out, ud, &m.lang, m.lang_size);
-        }
-        if (m.filename_size > 0) {
-            out(",\"f\":", 5, ud);
-            emit_json_str(out, ud, &m.filename, m.filename_size);
-        }
-        if (m.highlight_count > 0) {
-            out(",\"h\":[", 6, ud);
-            var j: c_uint = 0;
-            while (j < m.highlight_count) : (j += 1) {
-                if (j > 0) out(",", 1, ud);
-                s = std.fmt.bufPrint(&buf, "{d}", .{m.highlights.?[j]}) catch unreachable;
-                out(s.ptr, @intCast(s.len), ud);
-            }
-            out("]", 1, ud);
-        }
-        out("}", 1, ud);
-    }
-    out("]", 1, ud);
+    render_open_code_block(r, det);
+    if (code.len > 0)
+        render_html_escaped(r, code.ptr, @intCast(code.len));
+    render_verbatim_lit(r, "</code></pre>\n");
 }
 
 fn render_open_alert_block(r: *MD_HTML, det: *const c.BlockAlertDetail) void {
@@ -1020,9 +929,8 @@ fn render_open_alert_block(r: *MD_HTML, det: *const c.BlockAlertDetail) void {
     // over the buffer rather than assuming the name fits in it — a longer name
     // takes several chunks and is never truncated.
     //
-    // The total byte count is unchanged, which is what `output_offset` (see the
-    // invariant above) counts: N one-byte appends and ceil(N/64) chunked ones
-    // both commit exactly N bytes.
+    // The total byte count is unchanged either way: N one-byte appends and
+    // ceil(N/64) chunked ones commit exactly the same N bytes.
     const name = det.type_name.text;
     var i: usize = 0;
     while (i < name.len) {
@@ -1258,34 +1166,12 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             render_verbatim_lit_runtime(r, head[d.level - 1]);
         },
         .code => |*det| {
-            render_open_code_block(r, det);
-            if (r.flags & MD_HTML_FLAG_CODE_META != 0) {
-                const meta = code_meta_push(r);
-                if (meta != null) {
-                    const m = meta.?;
-                    m.start = r.output_offset;
-                    if (det.lang.text.len > 0) {
-                        const lang_size = det.lang.size();
-                        const sz: c.MD_SIZE = if (lang_size < m.lang.len) lang_size else @intCast(m.lang.len - 1);
-                        @memcpy(m.lang[0..sz], det.lang.text[0..sz]);
-                        m.lang_size = sz;
-                    }
-                    if (det.filename.text.len > 0) {
-                        const fn_size = det.filename.size();
-                        const sz: c.MD_SIZE = if (fn_size < m.filename.len) fn_size else @intCast(m.filename.len - 1);
-                        @memcpy(m.filename[0..sz], det.filename.text[0..sz]);
-                        m.filename_size = sz;
-                    }
-                    if (det.highlights.len > 0) {
-                        const h = c_allocator.alloc(c_uint, det.highlights.len) catch null;
-                        if (h) |hp| {
-                            @memcpy(hp, det.highlights);
-                            m.highlights = hp.ptr;
-                            m.highlight_count = @intCast(det.highlights.len);
-                        }
-                    }
-                    r.in_code_block = true;
-                }
+            // With a highlighter installed the opening tag is deferred to
+            // leave_block, which knows whether the block is being replaced.
+            if (r.highlighter != null) {
+                hl_begin(r);
+            } else {
+                render_open_code_block(r, det);
             }
         },
         .html => {}, // noop
@@ -1349,13 +1235,12 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .h => |*d| {
             render_verbatim_lit_runtime(r, head[d.level - 1]);
         },
-        .code => {
-            if ((r.flags & MD_HTML_FLAG_CODE_META != 0) and r.in_code_block) {
-                r.code_blocks.?[@intCast(r.n_code_blocks)].end = r.output_offset;
-                r.n_code_blocks += 1;
-                r.in_code_block = false;
+        .code => |*det| {
+            if (r.hl_active) {
+                hl_end(r, det);
+            } else {
+                render_verbatim_lit(r, "</code></pre>\n");
             }
-            render_verbatim_lit(r, "</code></pre>\n");
         },
         .html => {}, // noop
         .p => render_verbatim_lit(r, "</p>\n"),
@@ -1445,6 +1330,24 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
             _ = comp_fm_text_append(r, text, size)
         else if ((r.flags & MD_HTML_FLAG_FULL_HTML != 0) and r.component_nesting == 0)
             _ = fm_append(r, text, size);
+        return 0;
+    }
+
+    // Inside a code block with a highlighter installed, collect the text
+    // instead of emitting it; hl_end escapes it if the block is not replaced.
+    // What the hook sees is the pre-escaping text: exactly what the old JS
+    // postprocess got after un-escaping the rendered block, U+0000 included
+    // (the renderer substitutes U+FFFD for it, and so does this).
+    //
+    // Every text type is routed here rather than only `.code`, because a NUL
+    // byte inside a fenced block arrives as `.nullchar`: letting that fall
+    // through would emit it into the stream ahead of the deferred block and
+    // leave it out of what the highlighter sees.
+    if (r.hl_active) {
+        if (text_type == c.TextType.nullchar)
+            r.hl_code.append(&[_]u8{ 0xef, 0xbf, 0xbd }, 3)
+        else
+            r.hl_code.append(text, size);
         return 0;
     }
 
@@ -1559,6 +1462,7 @@ pub fn md_html_ex(
     render.userdata = userdata;
     render.flags = renderer_flags;
     render.opts = opts;
+    if (opts) |o| render.highlighter = o.highlighter;
 
     const parser: c.Parser = .{
         .flags = parser_flags,
@@ -1581,15 +1485,11 @@ pub fn md_html_ex(
 
     const ret = md4x.md_parse(@ptrCast(input_ptr), size, &parser, @ptrCast(&render));
 
-    if (renderer_flags & MD_HTML_FLAG_CODE_META != 0) {
-        if (ret == 0)
-            render_code_meta_json(&render); // flushes out_buf internally before JSON
-        code_meta_cleanup(&render);
-    }
-
-    // Flush any remaining buffered body bytes (render_code_meta_json already
-    // flushed the body before appending JSON when CODE_META is set).
+    // Flush any remaining buffered body bytes. A parse aborted inside a code
+    // block drops that block's collected text with the buffer -- the output is
+    // truncated at the abort either way.
     flush_output(&render);
+    render.hl_code.deinit();
     if (render.out_buf) |p| c_allocator.free(p[0..render.out_cap]);
 
     if (render.fm_text) |p| c_allocator.free(p[0..render.fm_cap]);

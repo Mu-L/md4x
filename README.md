@@ -193,27 +193,22 @@ Notes:
 
 ### Code Highlighting
 
-`renderToHtml` supports a `highlighter` option for custom syntax highlighting of fenced code blocks. The highlighter receives the raw code (HTML-unescaped) and block metadata (language, filename, highlighted lines), and returns a replacement HTML string or `undefined` to keep the default.
+`renderToHtml` and `renderToAnsi` support a `highlighter` option for custom syntax highlighting of fenced code blocks. It receives the raw code (HTML-unescaped) and the block's metadata (language, filename, highlighted lines), and returns a replacement string or `undefined` to keep the default rendering.
 
 ````js
 import { renderToHtml } from "md4x";
-import { createHighlighter } from "shiki";
-
-const highlighter = await createHighlighter({
-  themes: ["github-dark"],
-  langs: ["js", "ts", "html", "css"],
-});
+import { codeToHtml } from "rangi";
+import { githubDark } from "rangi/themes";
 
 const html = renderToHtml("```js\nconst x = 1;\n```", {
   highlighter: (code, block) => {
-    if (!block.lang) return; // keep default for unknown languages
-    return highlighter.codeToHtml(code, {
-      lang: block.lang,
-      theme: "github-dark",
-    });
+    if (!block.lang) return; // keep default for fences with no language
+    return codeToHtml(code, { lang: block.lang, theme: githubDark });
   },
 });
 ````
+
+Any synchronous highlighter works. These examples use [rangi](https://github.com/pi0/rangi) (a separate install: `npm i rangi`) because it needs no async setup and inlines its theme colors, so the markup is self-contained.
 
 Code block metadata from the info string is parsed automatically:
 
@@ -224,6 +219,32 @@ Code block metadata from the info string is parsed automatically:
 // block.highlights = [1, 3, 4, 5]
 ```
 ````
+
+### Terminal Output (TUI)
+
+`renderToAnsi` renders a document straight to ANSI escape sequences — headings, emphasis, tables, lists, blockquotes, alerts and OSC 8 clickable links — ready to `console.log` in a CLI or TUI.
+
+```js
+import { renderToAnsi } from "md4x";
+import { codeToAnsi } from "rangi";
+
+console.log(
+  renderToAnsi(doc, {
+    highlighter: (code, block) =>
+      block.lang ? codeToAnsi(code, { lang: block.lang }) : undefined,
+  }),
+);
+```
+
+The highlighter is the same hook as for HTML, returning terminal escapes instead of markup. Code arrives with the block's indentation stripped, and md4x re-applies it to every line that comes back — so a block nested in a blockquote or list keeps its bars and indent without the highlighter knowing anything about the surrounding document. Control bytes in the source are neutralized before the code is handed over, so a fenced block cannot smuggle escape sequences into the terminal.
+
+Options: `showUrls` prints link targets after the text (for terminals without OSC 8 support), `showFrontmatter` renders frontmatter as dim text instead of hiding it, and `heal: true` closes unterminated markup — the combination that makes streaming LLM output render cleanly frame by frame.
+
+```js
+renderToAnsi(chunk, { heal: true, showUrls: true });
+```
+
+The CLI is this renderer with a file argument: `npx md4x README.md` previews any document in the terminal, since it defaults to `ansi` when stdout is a TTY (and `text` when piped — pass `--format=ansi` to force escapes into a pipe).
 
 ### Markdown Healing
 

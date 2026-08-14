@@ -1,8 +1,4 @@
-import {
-  applyTitle,
-  parseHtmlWithHighlighting,
-  parseAnsiWithHighlighting,
-} from "./_shared.mjs";
+import { applyTitle } from "./_shared.mjs";
 
 // --- internal ---
 
@@ -46,14 +42,10 @@ const HEAL_FLAG = 0x0100;
 export function renderToHtml(input, opts) {
   let flags = opts?.full ? 0x0008 : 0;
   if (opts?.heal) flags |= HEAL_FLAG;
-  if (!opts?.highlighter) {
-    return getBinding().renderToHtml(str(input), flags);
-  }
-  const buf = getBinding().renderToHtmlMeta(str(input));
-  return parseHtmlWithHighlighting(
-    new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
-    opts.highlighter,
-  );
+  // The addon calls `opts.highlighter` synchronously, once per code block, from
+  // inside the render — see the hook in src/md4x-napi.zig. A non-function third
+  // argument (including undefined) renders without one.
+  return getBinding().renderToHtml(str(input), flags, opts?.highlighter);
 }
 
 export function renderToAST(input, opts) {
@@ -71,15 +63,7 @@ export function renderToAnsi(input, opts) {
   let flags = opts?.heal ? HEAL_FLAG : 0;
   if (opts?.showUrls) flags |= 0x0010;
   if (opts?.showFrontmatter) flags |= 0x0020;
-  if (!opts?.highlighter) {
-    return getBinding().renderToAnsi(str(input), flags);
-  }
-  const s = opts?.heal ? getBinding().heal(str(input)) : str(input);
-  const buf = getBinding().renderToAnsiMeta(s);
-  return parseAnsiWithHighlighting(
-    new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
-    opts.highlighter,
-  );
+  return getBinding().renderToAnsi(str(input), flags, opts?.highlighter);
 }
 
 export function renderToMeta(input, opts) {

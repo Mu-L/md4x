@@ -23,9 +23,7 @@ export async function init(opts) {
   if (input instanceof ArrayBuffer || input instanceof Uint8Array) {
     bytes = input;
   } else if (input instanceof WebAssembly.Module) {
-    const { instance } = await WebAssembly.instantiate(input, {
-      wasi_snapshot_preview1: wasiStub,
-    });
+    const { instance } = await WebAssembly.instantiate(input, _imports);
     _setInstance(instance);
     return;
   } else if (

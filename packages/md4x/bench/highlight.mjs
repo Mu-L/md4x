@@ -1,4 +1,5 @@
 import { bench, compact, run, summary } from "mitata";
+import { codeToHtml } from "rangi";
 import * as napi from "../lib/napi.mjs";
 import * as wasm from "../lib/wasm/default.mjs";
 import MarkdownIt from "markdown-it";
@@ -7,6 +8,11 @@ import { medium } from "./_fixtures.mjs";
 
 await wasm.init();
 await napi.init();
+
+// md4x calls the highlighter from inside the renderer (once per code block, in
+// document order) rather than splicing highlighted blocks into the finished
+// string, so what this measures is the whole pipeline: parse, per-block
+// callback, and the replacement landing in the output.
 
 function fakeHighlight(code, lang) {
   return code.replace(
@@ -20,6 +26,13 @@ const highlighter = (code, block) =>
 
 const hlOption = (code, lang) =>
   `<pre class="language-${lang}"><code>${fakeHighlight(code, lang)}</code></pre>`;
+
+// A real highlighter, for a number that is not dominated by a regex.
+const rangi = (code, block) => codeToHtml(code, { lang: block.lang || "text" });
+
+// Highlighting cost grows with the number of code blocks, not the page size:
+// the medium fixture 50x over is 50 fenced blocks.
+const many = medium.repeat(50);
 
 const markdownIt = new MarkdownIt({ highlight: hlOption });
 const markdownExit = createMarkdownExit({ highlight: hlOption });
@@ -75,6 +88,30 @@ compact(() => {
     );
     bench("markdown-it + highlight", () => markdownIt.render(medium));
     bench("markdown-exit + highlight", () => markdownExit.render(medium));
+  });
+
+  // 50 code blocks: the per-block callback dominates, which is where a
+  // postprocessing splice used to pay for re-walking the output per block.
+  summary(() => {
+    bench("napi.renderToHtml (50 blocks)", () => napi.renderToHtml(many));
+    bench("napi.renderToHtml + highlight (50 blocks)", () =>
+      napi.renderToHtml(many, { highlighter }),
+    );
+    bench("wasm.renderToHtml + highlight (50 blocks)", () =>
+      wasm.renderToHtml(many, { highlighter }),
+    );
+  });
+
+  summary(() => {
+    bench("napi.renderToHtml + rangi", () =>
+      napi.renderToHtml(medium, { highlighter: rangi }),
+    );
+    bench("wasm.renderToHtml + rangi", () =>
+      wasm.renderToHtml(medium, { highlighter: rangi }),
+    );
+    bench("napi.renderToAnsi + highlight", () =>
+      napi.renderToAnsi(medium, { highlighter }),
+    );
   });
 });
 

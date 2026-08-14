@@ -37,6 +37,7 @@ const entity = @import("../entity.zig");
 const heal = @import("md4x-heal.zig");
 const scan = @import("../scan.zig");
 const diag = @import("md4x-diag.zig");
+const hl = @import("md4x-highlight.zig");
 
 // Shared component property parser, from the shared md4x-props.zig module
 // (previously reimplemented inline here). The ANSI renderer only consumes the
@@ -54,7 +55,12 @@ const c_allocator = std.heap.c_allocator;
 const MD_ANSI_FLAG_DEBUG: c_uint = 0x0001;
 const MD_ANSI_FLAG_SKIP_UTF8_BOM: c_uint = 0x0002;
 const MD_ANSI_FLAG_NO_COLOR: c_uint = 0x0004;
-const MD_ANSI_FLAG_CODE_META: c_uint = 0x0008;
+// 0x0008 was MD_ANSI_FLAG_CODE_META, the code-block offset trailer the JS
+// bindings used to splice highlighted blocks into the finished output. The
+// renderer now calls the highlighter itself -- see md4x-highlight.zig -- so the
+// flag, and the byte-offset bookkeeping it needed, are gone. The bit is left
+// unused rather than reassigned, so a caller passing the old value gets a
+// no-op instead of NO_COLOR or SHOW_URLS.
 const MD_ANSI_FLAG_SHOW_URLS: c_uint = 0x0010;
 const MD_ANSI_FLAG_SHOW_FRONTMATTER: c_uint = 0x0020;
 const MD_ANSI_FLAG_HEAL: c_uint = 0x0100;
@@ -108,19 +114,18 @@ const ALERT_BAR = "\xe2\x96\x8c";
 // Non-optional — see the note on `md4x-json.zig`'s ProcessOutputFn.
 const ProcessOutputFn = *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void;
 
-// Code block metadata entry (heap-allocated when MD_ANSI_FLAG_CODE_META is set)
-const MD_ANSI_CODE_META = struct {
-    start: c.MD_SIZE, // Byte offset: start of code block (before ANSI_DIM)
-    end: c.MD_SIZE, // Byte offset: end of code block (after ANSI_DIM_OFF)
-    lang: [64]u8,
-    lang_size: c.MD_SIZE,
-    filename: [256]u8,
-    filename_size: c.MD_SIZE,
-    highlights: ?[*]c_uint,
-    highlight_count: c_uint,
-    prefix: [256]u8, // Line indent prefix (captured from render_indent + "  ")
-    prefix_size: c.MD_SIZE,
+/// Options for `md_ansi_ex`. Re-exported by lib.zig. The plain `md_ansi` entry
+/// point is this with no options at all.
+pub const MD_ANSI_OPTS = extern struct {
+    /// Called once per fenced/indented code block -- see md4x-highlight.zig.
+    highlighter: ?*const hl.Highlighter = null,
 };
+
+// Longest line indent (blockquote bars, alert bar, list indent, plus the code
+// block's own two spaces) handed to a highlighter and re-applied to its output.
+// A deeper nesting than this truncates the prefix rather than growing a buffer
+// per code block; the same 256 bytes the code-meta JSON used to carry.
+const MAX_CODE_PREFIX = 256;
 
 const MD_ANSI = struct {
     process_output: ProcessOutputFn,
@@ -139,11 +144,16 @@ const MD_ANSI = struct {
     component_nesting: c_int, // block component nesting depth
     in_comp_frontmatter: bool, // inside component frontmatter (suppress output)
 
-    // Code block metadata tracking (only active when MD_ANSI_FLAG_CODE_META is set)
-    output_offset: c.MD_SIZE,
-    code_blocks: ?[*]MD_ANSI_CODE_META,
-    n_code_blocks: c_int,
-    code_blocks_cap: c_int,
+    // Syntax-highlight hook. While a code block is rendered with a highlighter
+    // installed, nothing is emitted: the block's sanitized text accumulates in
+    // `hl_code` and leave_block either emits the highlighter's reply or renders
+    // the block itself. `hl_prefix` is the per-line indent, captured once at
+    // the top of the block and applied to either.
+    highlighter: ?*const hl.Highlighter,
+    hl_active: bool,
+    hl_code: hl.Buf,
+    hl_prefix: [MAX_CODE_PREFIX]u8,
+    hl_prefix_size: c.MD_SIZE,
 };
 
 // AppendFn mirrors the C `void (*fn_append)(MD_ANSI*, const MD_CHAR*, MD_SIZE)`.
@@ -153,20 +163,11 @@ const AppendFn = *const fn (*MD_ANSI, [*]const u8, c.MD_SIZE) void;
 // ***  ANSI rendering helper functions  ***
 // *********************************************
 
-// ***  `output_offset` invariant  ***
-//
-// `output_offset` counts the body bytes committed to the caller's output stream;
-// MD_ANSI_CODE_META.start/.end are snapshots of it. render_verbatim is the only
-// sink, so every byte is counted here exactly once -- with one exception: while
-// `process_output` is swapped to a capture callback the bytes go to a scratch
-// buffer, not to the caller, so whoever diverts the output must restore
-// `output_offset` afterwards (see the prefix capture in the `.code` enter path).
-// Skipping that restore made every code block's `end`, and every later block's
-// `start`/`end`, drift by the prefix length -- once per code block.
+// The renderer's single sink. `process_output` is swapped to a capture callback
+// while the indent prefix or a highlighted code block is being collected, which
+// is why every write goes through here rather than the caller's callback.
 fn render_verbatim(r: *MD_ANSI, text: [*]const u8, size: c.MD_SIZE) void {
     r.process_output(@ptrCast(text), size, r.userdata);
-    if (r.flags & MD_ANSI_FLAG_CODE_META != 0)
-        r.output_offset += size;
 }
 
 fn render_verbatim_lit(r: *MD_ANSI, comptime lit: []const u8) void {
@@ -430,37 +431,14 @@ fn alert_type_color(name: [*c]const c.MD_CHAR, size: c.MD_SIZE) ?[*:0]const u8 {
 }
 
 // *****************************************
-// ***  Code block metadata tracking     ***
+// ***  Syntax-highlight hook            ***
 // *****************************************
-
-fn ansi_code_meta_push(r: *MD_ANSI) ?*MD_ANSI_CODE_META {
-    if (r.code_blocks == null) {
-        const mem = c_allocator.alloc(MD_ANSI_CODE_META, 8) catch return null;
-        r.code_blocks = mem.ptr;
-        r.code_blocks_cap = 8;
-    } else if (r.n_code_blocks >= r.code_blocks_cap) {
-        const new_cap: usize = @intCast(r.code_blocks_cap * 2);
-        const old = r.code_blocks.?[0..@intCast(r.code_blocks_cap)];
-        const mem = c_allocator.realloc(old, new_cap) catch return null;
-        r.code_blocks = mem.ptr;
-        r.code_blocks_cap = @intCast(new_cap);
-    }
-    const slot = &r.code_blocks.?[@intCast(r.n_code_blocks)];
-    @memset(std.mem.asBytes(slot), 0);
-    return slot;
-}
-
-fn ansi_code_meta_cleanup(r: *MD_ANSI) void {
-    if (r.code_blocks) |blocks| {
-        const count: usize = @intCast(r.n_code_blocks + @as(c_int, @intFromBool(r.in_code_block)));
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            if (blocks[i].highlights) |h|
-                c_allocator.free(h[0..blocks[i].highlight_count]);
-        }
-        c_allocator.free(blocks[0..@intCast(r.code_blocks_cap)]);
-    }
-}
+//
+// See md4x-highlight.zig. `hl_begin` captures the code block's line indent and
+// diverts the renderer's sink for the rest of the block, so `hl_end` can either
+// hand the block to the highlighter -- re-applying that indent to the reply --
+// or write the captured default rendering out unchanged. A declining
+// highlighter therefore reproduces the no-highlighter output byte for byte.
 
 // Capture buffer for redirecting output to capture the indent prefix.
 const ANSI_CAPTURE_BUF = struct {
@@ -478,79 +456,135 @@ fn ansi_capture_append(text: [*c]const c.MD_CHAR, size: c.MD_SIZE, userdata: ?*a
     }
 }
 
-fn ansi_emit_json_str(out: ProcessOutputFn, ud: ?*anyopaque, str: [*]const u8, size: c.MD_SIZE) void {
-    var i: c.MD_SIZE = 0;
-    var beg: c.MD_SIZE = 0;
-    out("\"", 1, ud);
-    while (i < size) : (i += 1) {
-        const ch: u8 = str[i];
-        if (ch == '"' or ch == '\\' or ch < 0x20) {
-            if (i > beg)
-                out(@ptrCast(str + beg), i - beg, ud);
-            if (ch == '"' or ch == '\\') {
-                out("\\", 1, ud);
-                out(@ptrCast(str + i), 1, ud);
-            } else if (ch == '\n') {
-                out("\\n", 2, ud);
-            } else if (ch == '\r') {
-                out("\\r", 2, ud);
-            } else if (ch == '\t') {
-                out("\\t", 2, ud);
-            } else if (ch == 0x1b) {
-                out("\\u001b", 6, ud);
-            } else {
-                const hex = "0123456789abcdef";
-                const esc = [_]u8{ '\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0xf] };
-                out(&esc, 6, ud);
-            }
-            beg = i + 1;
-        }
-    }
-    if (i > beg)
-        out(@ptrCast(str + beg), i - beg, ud);
-    out("\"", 1, ud);
+// Enter a code block with a highlighter installed: snapshot the line indent the
+// block's lines will carry, then start collecting the block instead of emitting
+// it. The default rendering is deferred rather than captured-and-discarded --
+// see the same note in md4x-html.zig.
+fn hl_begin(r: *MD_ANSI) void {
+    r.hl_code.reset();
+
+    // The prefix is what render_indent + the code block's own two spaces emit,
+    // which depends on the current quote/list/alert nesting. Rendering it into
+    // a scratch buffer is how the renderer already measured it for the
+    // code-meta JSON; these bytes never reach the caller.
+    var cap = ANSI_CAPTURE_BUF{ .buf = &r.hl_prefix, .size = 0, .cap = r.hl_prefix.len };
+    const saved_out = r.process_output;
+    const saved_ud = r.userdata;
+    r.process_output = ansi_capture_append;
+    r.userdata = &cap;
+    render_indent(r);
+    render_verbatim_lit(r, "  ");
+    r.process_output = saved_out;
+    r.userdata = saved_ud;
+    r.hl_prefix_size = cap.size;
+
+    r.hl_active = true;
 }
 
-fn render_ansi_code_meta_json(r: *MD_ANSI) void {
-    const out = r.process_output;
-    const ud = r.userdata;
-    var buf: [64]u8 = undefined;
-
-    out(&[_]u8{0}, 1, ud);
-    out("[", 1, ud);
-    var i: c_int = 0;
-    while (i < r.n_code_blocks) : (i += 1) {
-        const m = &r.code_blocks.?[@intCast(i)];
-        if (i > 0) out(",", 1, ud);
-
-        var s = std.fmt.bufPrint(&buf, "{{\"s\":{d},\"e\":{d}", .{ @as(c_uint, @intCast(m.start)), @as(c_uint, @intCast(m.end)) }) catch unreachable;
-        out(s.ptr, @intCast(s.len), ud);
-
-        if (m.lang_size > 0) {
-            out(",\"l\":", 5, ud);
-            ansi_emit_json_str(out, ud, &m.lang, m.lang_size);
-        }
-        if (m.filename_size > 0) {
-            out(",\"f\":", 5, ud);
-            ansi_emit_json_str(out, ud, &m.filename, m.filename_size);
-        }
-        if (m.highlight_count > 0) {
-            out(",\"h\":[", 6, ud);
-            var j: c_uint = 0;
-            while (j < m.highlight_count) : (j += 1) {
-                if (j > 0) out(",", 1, ud);
-                s = std.fmt.bufPrint(&buf, "{d}", .{m.highlights.?[j]}) catch unreachable;
-                out(s.ptr, @intCast(s.len), ud);
-            }
-            out("]", 1, ud);
-        }
-        if (m.prefix_size > 0) {
-            out(",\"i\":", 5, ud);
-            ansi_emit_json_str(out, ud, &m.prefix, m.prefix_size);
-        }
-        out("}", 1, ud);
+// Collect one chunk of a code block's text instead of emitting it.
+//
+// The chunk is written through the renderer's own text handling, into the
+// buffer rather than the terminal: sanitized for `.code`, U+FFFD for a U+0000.
+// Handing over the raw document bytes instead would let a `\x1b[…` sequence
+// written inside a fenced block reach the terminal through a highlighter that
+// echoes its input -- the one thing render_sanitized exists to prevent -- and
+// the decline path renders straight from this buffer, so the sanitizing has to
+// happen here either way.
+//
+// Every text type is routed here, not just `.code`: a NUL byte inside a fenced
+// block arrives as `.nullchar`, and letting that one fall through to the switch
+// below emitted it into the output stream *before* the deferred block, and left
+// it out of what the highlighter saw.
+fn hl_capture(r: *MD_ANSI, text_type: c.TextType, text: [*]const u8, size: c.MD_SIZE) void {
+    // The parser sends each line's newline as its own callback; it needs no
+    // sanitizing and no indent (hl_emit_code re-derives the indent per line).
+    if (text_type == c.TextType.code and size == 1 and text[0] == '\n') {
+        r.hl_code.append("\n", 1);
+        return;
     }
-    out("]", 1, ud);
+    const saved_out = r.process_output;
+    const saved_ud = r.userdata;
+    r.process_output = hl.Buf.sink;
+    r.userdata = &r.hl_code;
+    if (text_type == c.TextType.nullchar)
+        render_utf8_codepoint(r, 0x0000, render_verbatim)
+    else
+        render_sanitized(r, text, size);
+    r.process_output = saved_out;
+    r.userdata = saved_ud;
+}
+
+fn hl_end(r: *MD_ANSI, det: *const c.BlockCodeDetail) void {
+    r.hl_active = false;
+
+    // A collection that hit OOM holds a prefix of the block, not the block:
+    // render what there is rather than hand the highlighter a truncated
+    // program (see the `err` note in md4x-highlight.zig).
+    const h = r.highlighter.?;
+    const code = r.hl_code.slice();
+    const replacement: ?[]const u8 = if (r.hl_code.err) null else h.highlight(h.ctx, &.{
+        .code = code,
+        .lang = det.lang.text,
+        .filename = det.filename.text,
+        .highlights = det.highlights,
+        .prefix = r.hl_prefix[0..r.hl_prefix_size],
+    });
+
+    if (replacement) |text| {
+        hl_emit_replacement(r, text);
+        h.release(h.ctx, text);
+        return;
+    }
+
+    render_ansi(r, ANSI_DIM);
+    hl_emit_code(r, code);
+    render_ansi(r, ANSI_DIM_OFF);
+}
+
+fn hl_emit_prefix(r: *MD_ANSI) void {
+    if (r.hl_prefix_size > 0)
+        render_verbatim(r, &r.hl_prefix, r.hl_prefix_size);
+}
+
+// Emit the block's own text where the deferred rendering would have put it.
+// This reproduces the `need_indent` walk in the text callback: the indent goes
+// in front of every non-empty line, and an empty line is just its newline.
+fn hl_emit_code(r: *MD_ANSI, code: []const u8) void {
+    var rest = code;
+    while (rest.len > 0) {
+        const nl = std.mem.indexOfScalar(u8, rest, '\n') orelse {
+            hl_emit_prefix(r);
+            render_verbatim(r, rest.ptr, @intCast(rest.len));
+            return;
+        };
+        if (nl > 0) {
+            hl_emit_prefix(r);
+            render_verbatim(r, rest.ptr, @intCast(nl));
+        }
+        render_newline(r);
+        rest = rest[nl + 1 ..];
+    }
+}
+
+// Write the highlighter's reply where the block's `DIM … DIM_OFF` region would
+// have gone: every non-empty line gets the block's indent, and the block always
+// ends in a newline (the default rendering does, and the paragraph after it
+// relies on that). The reply is NOT sanitized -- ANSI escapes are what a
+// terminal highlighter returns.
+fn hl_emit_replacement(r: *MD_ANSI, text: []const u8) void {
+    var it = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (it.next()) |line| {
+        if (!first)
+            render_newline(r);
+        first = false;
+        if (line.len > 0) {
+            hl_emit_prefix(r);
+            render_verbatim(r, line.ptr, @intCast(line.len));
+        }
+    }
+    if (!std.mem.endsWith(u8, text, "\n"))
+        render_newline(r);
 }
 
 // **************************************
@@ -637,63 +671,20 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             render_ansi(r, ANSI_HEADING);
         },
 
-        .code => |*code_det| {
+        .code => {
             if (r.need_newline) {
                 render_separator(r);
                 r.need_newline = false;
             }
             r.in_code_block = true;
             r.need_indent = true;
-            if (r.flags & MD_ANSI_FLAG_CODE_META != 0) {
-                const meta_opt = ansi_code_meta_push(r);
-                if (meta_opt) |meta| {
-                    const det = code_det;
-                    meta.start = r.output_offset;
-                    if (det.lang.text.len > 0) {
-                        const lang_size = det.lang.size();
-                        const sz: c.MD_SIZE = if (lang_size < meta.lang.len) lang_size else meta.lang.len - 1;
-                        @memcpy(meta.lang[0..sz], det.lang.text[0..sz]);
-                        meta.lang_size = sz;
-                    }
-                    if (det.filename.text.len > 0) {
-                        const fn_size = det.filename.size();
-                        const sz: c.MD_SIZE = if (fn_size < meta.filename.len) fn_size else meta.filename.len - 1;
-                        @memcpy(meta.filename[0..sz], det.filename.text[0..sz]);
-                        meta.filename_size = sz;
-                    }
-                    if (det.highlights.len > 0) {
-                        const h = c_allocator.alloc(c_uint, det.highlights.len) catch null;
-                        if (h) |hl| {
-                            @memcpy(hl, det.highlights);
-                            meta.highlights = hl.ptr;
-                            meta.highlight_count = @intCast(det.highlights.len);
-                        }
-                    }
-                    // Capture the indent prefix by temporarily redirecting output.
-                    // These bytes never reach the caller, so `output_offset` is
-                    // restored along with the sink -- see the invariant above
-                    // render_verbatim.
-                    {
-                        var pfx_buf: [256]u8 = undefined;
-                        var cap = ANSI_CAPTURE_BUF{ .buf = &pfx_buf, .size = 0, .cap = pfx_buf.len };
-                        const saved_out = r.process_output;
-                        const saved_ud = r.userdata;
-                        const saved_offset = r.output_offset;
-                        r.process_output = ansi_capture_append;
-                        r.userdata = &cap;
-                        render_indent(r);
-                        render_verbatim_lit(r, "  ");
-                        r.process_output = saved_out;
-                        r.userdata = saved_ud;
-                        r.output_offset = saved_offset;
-                        if (cap.size <= meta.prefix.len) {
-                            @memcpy(meta.prefix[0..cap.size], pfx_buf[0..cap.size]);
-                            meta.prefix_size = cap.size;
-                        }
-                    }
-                }
+            // With a highlighter installed the block is collected instead of
+            // emitted, dim wrapper included -- see hl_begin.
+            if (r.highlighter != null) {
+                hl_begin(r);
+            } else {
+                render_ansi(r, ANSI_DIM);
             }
-            render_ansi(r, ANSI_DIM);
         },
 
         .html => {},
@@ -875,10 +866,12 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         },
 
         .code => {
-            render_ansi(r, ANSI_DIM_OFF);
-            if (r.flags & MD_ANSI_FLAG_CODE_META != 0 and r.n_code_blocks < r.code_blocks_cap) {
-                r.code_blocks.?[@intCast(r.n_code_blocks)].end = r.output_offset;
-                r.n_code_blocks += 1;
+            // `switch (activeTag(...))` above yields no payload, so the block's
+            // own detail (lang/filename/highlights) is read back from the union.
+            if (r.hl_active) {
+                hl_end(r, &detail.code);
+            } else {
+                render_ansi(r, ANSI_DIM_OFF);
             }
             r.in_code_block = false;
             r.need_newline = true;
@@ -1057,6 +1050,13 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
     if (r.in_comp_frontmatter)
         return 0;
 
+    // A code block being collected for the highlighter emits nothing here --
+    // see hl_capture.
+    if (r.hl_active) {
+        hl_capture(r, text_type, text, size);
+        return 0;
+    }
+
     switch (text_type) {
         .nullchar => {
             render_utf8_codepoint(r, 0x0000, render_verbatim);
@@ -1183,6 +1183,18 @@ pub fn md_ansi(
     parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int {
+    return md_ansi_ex(input, input_size, process_output, userdata, parser_flags, renderer_flags, null);
+}
+
+pub fn md_ansi_ex(
+    input: [*c]const c.MD_CHAR,
+    input_size: c.MD_SIZE,
+    process_output: ProcessOutputFn,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+    opts: ?*const MD_ANSI_OPTS,
+) c_int {
     var input_ptr = input;
     var size = input_size;
 
@@ -1193,7 +1205,7 @@ pub fn md_ansi(
             heal_buf_free(&hbuf);
             return -1;
         }
-        const ret = md_ansi(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, parser_flags, renderer_flags & ~MD_ANSI_FLAG_HEAL);
+        const ret = md_ansi_ex(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, parser_flags, renderer_flags & ~MD_ANSI_FLAG_HEAL, opts);
         heal_buf_free(&hbuf);
         return ret;
     }
@@ -1213,6 +1225,7 @@ pub fn md_ansi(
     var render: MD_ANSI = std.mem.zeroInit(MD_ANSI, .{ .process_output = process_output });
     render.userdata = userdata;
     render.flags = renderer_flags;
+    if (opts) |o| render.highlighter = o.highlighter;
 
     // Consider skipping UTF-8 byte order mark (BOM).
     if (renderer_flags & MD_ANSI_FLAG_SKIP_UTF8_BOM != 0 and @sizeOf(c.MD_CHAR) == 1) {
@@ -1225,11 +1238,9 @@ pub fn md_ansi(
 
     const ret = md4x.md_parse(@ptrCast(input_ptr), size, &parser, @ptrCast(&render));
 
-    if (renderer_flags & MD_ANSI_FLAG_CODE_META != 0) {
-        if (ret == 0)
-            render_ansi_code_meta_json(&render);
-        ansi_code_meta_cleanup(&render);
-    }
+    // A parse aborted inside a code block drops that block's collected text
+    // with the buffer -- the output is truncated at the abort either way.
+    render.hl_code.deinit();
 
     return ret;
 }

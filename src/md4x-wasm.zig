@@ -113,6 +113,71 @@ export fn md4x_result_size() callconv(.c) c_uint {
     return g_result_size;
 }
 
+// --- Syntax highlighting hook ---
+//
+// `md4x_to_html_hl` / `md4x_to_ansi_hl` render with a highlighter installed (see
+// src/renderers/md4x-highlight.zig): the renderer stops at every fenced or
+// indented code block and asks the host what to emit for it. The host is JS, so
+// the call leaves the module through an import — the module therefore does not
+// instantiate without it, and `packages/md4x/lib/wasm/common.mjs` supplies it
+// unconditionally, highlighting or not.
+//
+// Every argument is a linear-memory address plus a length, so nothing crosses
+// the boundary but integers. The reply is one address:
+//
+//   0 — decline; the renderer emits its own default rendering for the block.
+//   p — a buffer holding a u32 little-endian byte length followed by that many
+//       UTF-8 bytes. It stays JS-owned: the renderer copies the bytes out
+//       immediately, so the loader reuses one buffer for every block instead of
+//       allocating and freeing per code block, and `release` is a no-op.
+//
+// Length-prefixing is what keeps this to a single import call: a wasm function
+// returns one value, and returning an i64 pair would drag BigInt conversion
+// into the hot path.
+extern "env" fn md4x_highlight(
+    code_ptr: u32,
+    code_len: u32,
+    lang_ptr: u32,
+    lang_len: u32,
+    filename_ptr: u32,
+    filename_len: u32,
+    highlights_ptr: u32,
+    highlights_len: u32,
+    prefix_ptr: u32,
+    prefix_len: u32,
+) u32;
+
+fn js_highlight(ctx: ?*anyopaque, req: *const lib.highlight.Request) ?[]const u8 {
+    _ = ctx;
+    const ret = md4x_highlight(
+        @intCast(@intFromPtr(req.code.ptr)),
+        @intCast(req.code.len),
+        @intCast(@intFromPtr(req.lang.ptr)),
+        @intCast(req.lang.len),
+        @intCast(@intFromPtr(req.filename.ptr)),
+        @intCast(req.filename.len),
+        @intCast(@intFromPtr(req.highlights.ptr)),
+        @intCast(req.highlights.len),
+        @intCast(@intFromPtr(req.prefix.ptr)),
+        @intCast(req.prefix.len),
+    );
+    if (ret == 0) return null;
+    const base: [*]const u8 = @ptrFromInt(ret);
+    const len = std.mem.readInt(u32, base[0..4], .little);
+    return base[4..][0..len];
+}
+
+fn js_highlight_release(ctx: ?*anyopaque, text: []const u8) void {
+    _ = ctx;
+    _ = text;
+    // The reply buffer belongs to the JS loader, which reuses it — see above.
+}
+
+const js_highlighter: lib.highlight.Highlighter = .{
+    .highlight = js_highlight,
+    .release = js_highlight_release,
+};
+
 // --- Renderer wrappers ---
 
 const md4x_render_fn = *const fn (
@@ -143,9 +208,10 @@ export fn md4x_to_html(input: [*c]const u8, input_size: c_uint, renderer_flags: 
     return render(lib.md_html, input, input_size, renderer_flags);
 }
 
-export fn md4x_to_html_meta(input: [*c]const u8, input_size: c_uint) callconv(.c) c_int {
+export fn md4x_to_html_hl(input: [*c]const u8, input_size: c_uint, renderer_flags: c_uint) callconv(.c) c_int {
     var buf = md4x_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
-    const ret = lib.md_html(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, c.MD_HTML_FLAG_CODE_META);
+    const opts: lib.MD_HTML_OPTS = .{ .highlighter = &js_highlighter };
+    const ret = lib.md_html_ex(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, renderer_flags, &opts);
     if (ret != 0 or buf.err != 0) {
         std.c.free(buf.data);
         g_result_data = null;
@@ -165,9 +231,10 @@ export fn md4x_to_ansi(input: [*c]const u8, input_size: c_uint, renderer_flags: 
     return render(lib.md_ansi, input, input_size, renderer_flags);
 }
 
-export fn md4x_to_ansi_meta(input: [*c]const u8, input_size: c_uint) callconv(.c) c_int {
+export fn md4x_to_ansi_hl(input: [*c]const u8, input_size: c_uint, renderer_flags: c_uint) callconv(.c) c_int {
     var buf = md4x_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
-    const ret = lib.md_ansi(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, c.MD_ANSI_FLAG_CODE_META);
+    const opts: lib.MD_ANSI_OPTS = .{ .highlighter = &js_highlighter };
+    const ret = lib.md_ansi_ex(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, renderer_flags, &opts);
     if (ret != 0 or buf.err != 0) {
         std.c.free(buf.data);
         g_result_data = null;

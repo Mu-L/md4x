@@ -435,13 +435,14 @@ pub const MD_HTML_FLAG_DEBUG: c_uint = 0x0001;
 pub const MD_HTML_FLAG_VERBATIM_ENTITIES: c_uint = 0x0002;
 pub const MD_HTML_FLAG_SKIP_UTF8_BOM: c_uint = 0x0004;
 pub const MD_HTML_FLAG_FULL_HTML: c_uint = 0x0008;
-pub const MD_HTML_FLAG_CODE_META: c_uint = 0x0010;
+// 0x0010 (MD_HTML_FLAG_CODE_META) retired with the code-block offset trailer;
+// highlighting is a renderer hook now — see src/renderers/md4x-highlight.zig.
 pub const MD_HTML_FLAG_HEAL: c_uint = 0x0100;
 
 pub const MD_ANSI_FLAG_DEBUG: c_uint = 0x0001;
 pub const MD_ANSI_FLAG_SKIP_UTF8_BOM: c_uint = 0x0002;
 pub const MD_ANSI_FLAG_NO_COLOR: c_uint = 0x0004;
-pub const MD_ANSI_FLAG_CODE_META: c_uint = 0x0008;
+// 0x0008 (MD_ANSI_FLAG_CODE_META) retired — see the HTML note above.
 pub const MD_ANSI_FLAG_SHOW_URLS: c_uint = 0x0010;
 pub const MD_ANSI_FLAG_SHOW_FRONTMATTER: c_uint = 0x0020;
 pub const MD_ANSI_FLAG_HEAL: c_uint = 0x0100;

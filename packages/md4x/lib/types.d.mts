@@ -57,8 +57,8 @@ export interface RenderOptions {
 
 export interface AnsiOptions extends RenderOptions {
   /**
-   * Custom highlighter function for fenced code blocks. If provided, code blocks
-   * are passed through this callback which can return custom ANSI-highlighted output.
+   * Highlighter for fenced code blocks, called during the render — see
+   * {@link AnsiCodeBlockHighlighter}.
    */
   highlighter?: AnsiCodeBlockHighlighter;
   /** Show link URLs after link text (e.g. `text (url)`). Default: false (links are clickable via OSC 8). */
@@ -72,17 +72,13 @@ export interface HtmlOptions extends RenderOptions {
   full?: boolean;
 
   /**
-   * Custom highlighter function for fenced code blocks. If provided, code blocks
-   * are passed through this callback which can return custom HTML-highlighted output.
+   * Highlighter for fenced code blocks, called during the render — see
+   * {@link CodeBlockHighlighter}.
    */
   highlighter?: CodeBlockHighlighter;
 }
 
 export interface CodeBlock {
-  /** Character offset in HTML string where code content starts (after `<code...>`) */
-  start: number;
-  /** Character offset in HTML string where code content ends (before `</code>`) */
-  end: number;
   /** Language identifier (empty string if none) */
   lang: string;
   /** Filename from `[filename]` syntax */
@@ -91,38 +87,42 @@ export interface CodeBlock {
   highlights?: number[];
 }
 
+/**
+ * Called once per fenced or indented code block, **synchronously, during the
+ * render** — the renderer emits what it returns in place of its own
+ * `<pre><code>…</code></pre>`, so there is nothing to splice and no offsets to
+ * track. Returning `undefined` keeps the default rendering for that block.
+ *
+ * Because it runs inside the renderer it cannot be `async`: a returned Promise
+ * throws a `TypeError` rather than being stringified into the output.
+ */
 export type CodeBlockHighlighter = (
   /** Raw code content (HTML entities unescaped) */
   code: string,
-  /** Code block metadata (lang, filename, highlights, offsets) */
+  /** Code block metadata (lang, filename, highlights) */
   block: CodeBlock,
 ) => string | undefined;
 
-export interface HtmlWithCodeBlocks {
-  /** The HTML string */
-  html: string;
-  /** Metadata for each fenced code block in document order */
-  codeBlocks: CodeBlock[];
-}
-
 export interface AnsiCodeBlock {
-  /** Character offset in ANSI string where code block starts (including DIM escape) */
-  start: number;
-  /** Character offset in ANSI string where code block ends (including DIM_OFF escape) */
-  end: number;
   /** Language identifier (empty string if none) */
   lang: string;
   /** Filename from `[filename]` syntax */
   filename?: string;
   /** Highlighted line numbers from `{1-3,5}` syntax */
   highlights?: number[];
-  /** Line indent prefix (includes ANSI escapes for colored bars in nested contexts) */
+  /**
+   * Line indent the renderer puts in front of every code line (includes ANSI
+   * escapes for the colored bars of a blockquote or alert). Informational: the
+   * renderer re-applies it to the returned lines, so a highlighter neither
+   * receives it in `code` nor has to emit it.
+   */
   prefix?: string;
 }
 
+/** {@link CodeBlockHighlighter} for `renderToAnsi`. Returns terminal escapes. */
 export type AnsiCodeBlockHighlighter = (
-  /** Raw code content (indentation stripped) */
+  /** Raw code content (indentation stripped, terminal control bytes neutralized) */
   code: string,
-  /** Code block metadata (lang, filename, highlights, offsets) */
+  /** Code block metadata (lang, filename, highlights, prefix) */
   block: AnsiCodeBlock,
 ) => string | undefined;

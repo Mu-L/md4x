@@ -57,7 +57,10 @@ Two rules the build graph enforces the hard way:
   declarations belong in `src/lib.zig`.
 
 The WASM JS loader (`packages/md4x/lib/wasm/common.mjs`) provides no-op `args_`/`environ_` WASI
-import stubs that Zig's `wasm32-wasi` startup references.
+import stubs that Zig's `wasm32-wasi` startup references, **plus `env.md4x_highlight`** — the
+syntax-highlight hook the HTML/ANSI renderers call per code block. That one is a hard import: a
+loader that instantiates the module without passing `_imports` fails with a `LinkError`, whether or
+not anything highlights.
 
 ## Regenerating JS artifacts
 

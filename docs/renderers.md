@@ -32,12 +32,13 @@ pub fn md_html(
 
 Only `<body>` contents are generated. Frontmatter blocks are suppressed from output.
 
-Extended API with full-HTML document generation:
+Extended API with full-HTML document generation and the syntax-highlight hook:
 
 ```zig
 pub const MD_HTML_OPTS = extern struct {
     title: ?[*:0]const u8 = null,   // Document title override (null = use frontmatter)
     css_url: ?[*:0]const u8 = null, // CSS stylesheet URL (null = omit)
+    highlighter: ?*const Highlighter = null, // Per-code-block hook (null = default rendering)
 };
 
 pub fn md_html_ex(
@@ -61,23 +62,12 @@ When `MD_HTML_FLAG_FULL_HTML` is set, `md_html_ex()` generates a complete HTML d
 | `MD_HTML_FLAG_VERBATIM_ENTITIES` | `0x0002` | Do not translate HTML entities                             |
 | `MD_HTML_FLAG_SKIP_UTF8_BOM`     | `0x0004` | Skip UTF-8 BOM at input start                              |
 | `MD_HTML_FLAG_FULL_HTML`         | `0x0008` | Generate full HTML document (requires `md_html_ex`)        |
-| `MD_HTML_FLAG_CODE_META`         | `0x0010` | Append a code-block metadata JSON array after a NUL byte   |
 | `MD_HTML_FLAG_HEAL`              | `0x0100` | Run `md_heal()` on the input first, then render the result |
 
-`MD_HTML_FLAG_CODE_META` makes the renderer record, for every fenced/indented
-code block, the byte range its rendered output occupies plus the block's
-metadata. After a successful parse it flushes the body and appends a `NUL` byte
-followed by a JSON array — one object per code block, in document order:
-
-```json
-[{ "s": 0, "e": 42, "l": "js", "f": "app.js", "h": [1, 2] }]
-```
-
-`s`/`e` are the start/end byte offsets in the emitted HTML; `l` (language), `f`
-(filename) and `h` (highlight line numbers) are omitted when absent. The JS
-bindings use this to support the `highlighter` callback — `md4x_to_html` (wasm)
-and `renderToHtml` (napi) always pass this flag. `l` is capped at 64 bytes and
-`f` at 256 bytes (fixed-size capture buffers).
+`0x0010` is retired: it used to be `MD_HTML_FLAG_CODE_META`, which appended a
+JSON array of per-code-block byte offsets after the body so a caller could
+splice highlighted blocks into the finished output. Highlighting is a renderer
+hook now (see below), so nothing computes those offsets any more.
 
 `MD_HTML_FLAG_HEAL` is a pre-pass, not a rendering mode: `md_html_ex()` runs
 `md_heal()` over the input, then re-enters itself with the healed buffer and the
@@ -94,6 +84,44 @@ flag cleared. It is what the CLI's `--heal` option sets for HTML output.
 - Attribute **names** synthesized from a component key — a `{props}` key or a component-frontmatter YAML key — are emitted through `render_html_attr_name`, not the value escaper. An attribute name ends at whitespace, `/`, `=` or `>`, none of which entity-escaping covers, so a key like `x onload=alert(1)//` would otherwise tokenize into several attributes. Bytes `<= 0x20`, DEL, `/` and `=` are percent-encoded (`a b` → `a%20b`); `& < > "` keep their entity spelling; bytes `>= 0x80` pass through, so non-ASCII keys are unaffected. An **empty** key is dropped — HTML has no spelling for a zero-length attribute name. The AST renderer keeps every such key verbatim (it is a JSON string there), so the two renderers agree on which keys are acceptable; only the spelling differs
 - Alerts render as `<blockquote class="alert alert-{type}">` (type lowercased in class)
 - Footnote references render as `<sup><a href="#fn-N" id="fnref-N-K">N</a></sup>`; the deferred definitions render as `<section class="footnotes"><ol><li id="fn-N">…</li></ol></section>`, each `<li>` ending in one `&#8617;` back-reference anchor per reference
+
+## Syntax-highlight hook (`src/renderers/md4x-highlight.zig`)
+
+The HTML and ANSI renderers can hand every fenced or indented code block to a
+host-supplied highlighter **during** the render, and emit what it returns in
+place of their own rendering of that block:
+
+````zig
+pub const Request = struct {
+    code: []const u8,               // block content, before the renderer escapes/sanitizes it
+    lang: []const u8 = &.{},        // info-string language
+    filename: []const u8 = &.{},    // ```js [app.js]
+    highlights: []const c_uint = &.{}, // ```js {1-3,5}, expanded
+    prefix: []const u8 = &.{},      // ANSI only: the per-line indent
+};
+
+pub const Highlighter = struct {
+    ctx: ?*anyopaque = null,
+    highlight: *const fn (ctx: ?*anyopaque, req: *const Request) ?[]const u8,
+    release: *const fn (ctx: ?*anyopaque, text: []const u8) void,
+};
+````
+
+- Returning **null declines** the block: the renderer emits its own default
+  rendering, byte for byte. Declining every block therefore reproduces the
+  no-highlighter output exactly — which is how the JS suite asserts it.
+- The replacement **replaces the whole block**: `<pre><code …>` through
+  `</code></pre>\n` for HTML, the `DIM … DIM_OFF` region for ANSI. The ANSI
+  renderer re-applies `prefix` to each returned line and guarantees the trailing
+  newline, so a highlighter never has to know it sits in a blockquote.
+- `code` is what the renderer received before its own escaping: raw document
+  bytes for HTML (with U+0000 already replaced by U+FFFD), control-sanitized
+  text for ANSI. The replacement itself is emitted verbatim in both.
+- The renderer never allocates the reply; `release` hands it back to the host
+  once it has been copied out.
+
+Mechanically, the renderer diverts its output sink for the duration of the
+block, so both outcomes are decided after the block has been rendered once.
 
 ## Shared Property Parser (`src/renderers/md4x-props.zig`)
 
@@ -179,7 +207,25 @@ pub fn md_ansi(
     parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
+
+// Same, plus the syntax-highlight hook.
+pub const MD_ANSI_OPTS = extern struct {
+    highlighter: ?*const Highlighter = null,
+};
+
+pub fn md_ansi_ex(
+    input: [*c]const MD_CHAR,
+    input_size: MD_SIZE,
+    process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
+    userdata: ?*anyopaque,
+    parser_flags: c_uint,
+    renderer_flags: c_uint,
+    opts: ?*const MD_ANSI_OPTS,
+) c_int;
 ```
+
+`0x0008` is retired here too — it was `MD_ANSI_FLAG_CODE_META`, the ANSI half of
+the offset trailer described under the HTML flags.
 
 ### Renderer Flags (`MD_ANSI_FLAG_*`)
 
@@ -188,7 +234,6 @@ pub fn md_ansi(
 | `MD_ANSI_FLAG_DEBUG`            | `0x0001` | Send debug output from `md_parse()` to stderr              |
 | `MD_ANSI_FLAG_SKIP_UTF8_BOM`    | `0x0002` | Skip UTF-8 BOM at input start                              |
 | `MD_ANSI_FLAG_NO_COLOR`         | `0x0004` | Suppress ANSI escape codes (plain text output)             |
-| `MD_ANSI_FLAG_CODE_META`        | `0x0008` | Append code block metadata after null byte                 |
 | `MD_ANSI_FLAG_SHOW_URLS`        | `0x0010` | Show link URLs after link text (default: OSC 8 only)       |
 | `MD_ANSI_FLAG_SHOW_FRONTMATTER` | `0x0020` | Show frontmatter as dim text (default: suppressed)         |
 | `MD_ANSI_FLAG_HEAL`             | `0x0100` | Run `md_heal()` on the input first, then render the result |

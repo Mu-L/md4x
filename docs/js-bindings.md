@@ -61,18 +61,20 @@ Reading it:
 
 **Exported functions:**
 
-| Function                         | Description                              |
-| -------------------------------- | ---------------------------------------- |
-| `md4x_alloc(size) -> ptr`        | Allocate memory in WASM linear memory    |
-| `md4x_free(ptr)`                 | Free previously allocated memory         |
-| `md4x_to_html(ptr, size) -> int` | Render to HTML (0=ok, -1=error)          |
-| `md4x_to_ast(ptr, size) -> int`  | Render to JSON AST                       |
-| `md4x_to_ansi(ptr, size) -> int` | Render to ANSI                           |
-| `md4x_to_meta(ptr, size) -> int` | Render to meta JSON                      |
-| `md4x_to_text(ptr, size) -> int` | Render to plain text                     |
-| `md4x_heal(ptr, size) -> int`    | Heal incomplete streaming markdown       |
-| `md4x_result_ptr() -> ptr`       | Get output buffer pointer (after render) |
-| `md4x_result_size() -> size`     | Get output buffer size (after render)    |
+| Function                                   | Description                                                            |
+| ------------------------------------------ | ---------------------------------------------------------------------- |
+| `md4x_alloc(size) -> ptr`                  | Allocate memory in WASM linear memory                                  |
+| `md4x_free(ptr)`                           | Free previously allocated memory                                       |
+| `md4x_to_html(ptr, size) -> int`           | Render to HTML (0=ok, -1=error)                                        |
+| `md4x_to_html_hl(ptr, size, flags) -> int` | Render to HTML, calling the `env.md4x_highlight` import per code block |
+| `md4x_to_ast(ptr, size) -> int`            | Render to JSON AST                                                     |
+| `md4x_to_ansi(ptr, size) -> int`           | Render to ANSI                                                         |
+| `md4x_to_ansi_hl(ptr, size, flags) -> int` | Render to ANSI, calling the `env.md4x_highlight` import per code block |
+| `md4x_to_meta(ptr, size) -> int`           | Render to meta JSON                                                    |
+| `md4x_to_text(ptr, size) -> int`           | Render to plain text                                                   |
+| `md4x_heal(ptr, size) -> int`              | Heal incomplete streaming markdown                                     |
+| `md4x_result_ptr() -> ptr`                 | Get output buffer pointer (after render)                               |
+| `md4x_result_size() -> size`               | Get output buffer size (after render)                                  |
 
 **Usage from JS (via `lib/wasm.mjs` wrapper):**
 
@@ -138,7 +140,7 @@ Z85 encodes 4 bytes as 5 ASCII characters (**+25%** overhead, vs +33% for base64
 | `\0md4x:standalone`   | virtual | Entry — re-exports the renderers, defines `init()` (gunzip + instantiate) |
 | `\0md4x:z85`          | virtual | `z85Decode()` + the `WASM_GZIP_Z85` / `GZIP_SIZE` payload constants       |
 | `lib/wasm/common.mjs` | on disk | Shared render functions (same source as `md4x/wasm`)                      |
-| `lib/_shared.mjs`     | on disk | Highlighter/code-meta helpers                                             |
+| `lib/_shared.mjs`     | on disk | Shared post-parse helpers (`applyTitle`)                                  |
 
 Output files:
 
@@ -252,19 +254,30 @@ All extensions (`MD_DIALECT_ALL`) are enabled by default. No parser/renderer fla
 
 `parseYAML` converts a standalone YAML document (not Markdown frontmatter) to a JS value, reaching the libyaml the frontmatter path already links in. Any root node is accepted — mapping, sequence or bare scalar — and an empty document yields `null`. `yamlToJson` is the same thing without the `JSON.parse`.
 
-Both `renderToHtml` and `renderToAnsi` accept an optional `highlighter` callback for custom code block highlighting:
+### Code block highlighting
+
+Both `renderToHtml` and `renderToAnsi` accept an optional `highlighter` callback:
 
 ````js
-const ansi = renderToAnsi("```js\nconst x = 1;\n```", {
+import { codeToHtml } from "rangi";
+
+const html = renderToHtml("```js [app.js] {1}\nconst x = 1;\n```", {
   highlighter: (code, block) => {
-    // code = "const x = 1;"
-    // block = { lang: "js", filename?: string, highlights?: number[], prefix: "  " }
-    return "\x1b[33mconst\x1b[0m x = 1;"; // custom ANSI highlighted
+    // code  = "const x = 1;\n"
+    // block = { lang: "js", filename?: "app.js", highlights?: [1], prefix?: "  " }
+    return codeToHtml(code, { lang: block.lang });
   },
 });
 ````
 
-When `highlighter` is provided, code blocks are rendered with metadata tracking. For each fenced code block, the highlighter receives the raw code text (with indentation stripped) and a metadata object containing `lang`, optional `filename`, optional `highlights` array, and the `prefix` string used for line indentation (including ANSI escapes for nested contexts like blockquotes). If the highlighter returns a string, the code block content is replaced with the highlighted output (automatically re-indented with the prefix). If it returns `undefined`, the default dim rendering is used.
+The callback runs **inside the renderer**, once per fenced or indented code block, in document order:
+
+- Returning a string replaces the block's entire rendering — `<pre><code …>…</code></pre>` for HTML, the dim region for ANSI. For ANSI the renderer re-indents the returned lines with the block's `prefix` (blockquote bars and list indentation included), so a highlighter emits bare lines.
+- Returning `undefined` keeps the default rendering for that block, byte for byte. A highlighter may decline per block (unknown language) without any special-casing.
+- `code` is the un-escaped block content, trailing newline included. For ANSI it is control-sanitized first, so a fenced block cannot smuggle escape sequences to the terminal through a highlighter that echoes its input.
+- The callback **cannot be async**: it runs mid-render, so a returned Promise throws a `TypeError` rather than being stringified into the output. Anything it throws is rethrown from `renderToHtml`/`renderToAnsi` after the renderer has unwound cleanly; the remaining blocks keep their default rendering.
+
+It is a native hook on both bindings — NAPI calls the JS function directly, WASM through the `env.md4x_highlight` import — not a postprocessing pass over the finished string. Inline code spans (`` `x` ``) are never passed to it.
 
 ## TypeScript Types (`lib/types.d.ts`)
 

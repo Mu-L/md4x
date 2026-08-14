@@ -4,6 +4,8 @@ import type {
   HtmlOptions,
   AnsiOptions,
   RenderOptions,
+  CodeBlockHighlighter,
+  AnsiCodeBlockHighlighter,
 } from "./types.mjs";
 
 export type {
@@ -22,11 +24,17 @@ export type {
 export type * from "./types.mjs";
 
 export interface NAPIBinding {
-  renderToHtml(input: string, flags?: number): string;
-  renderToHtmlMeta(input: string): Buffer;
+  renderToHtml(
+    input: string,
+    flags?: number,
+    highlighter?: CodeBlockHighlighter,
+  ): string;
   renderToAST(input: string, flags?: number): string;
-  renderToAnsi(input: string, flags?: number): string;
-  renderToAnsiMeta(input: string): Buffer;
+  renderToAnsi(
+    input: string,
+    flags?: number,
+    highlighter?: AnsiCodeBlockHighlighter,
+  ): string;
   renderToMeta(input: string, flags?: number): string;
   renderToText(input: string, flags?: number): string;
   renderToMarkdown(input: string, flags?: number): string;

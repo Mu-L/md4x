@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { codeToHtml, codeToAnsi } from "rangi";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -8,6 +9,20 @@ const nitroIndex = readFileSync(
   join(__dirname, "fixtures/nitro-index.md"),
   "utf-8",
 );
+
+// The repo's own corpus, for the decline-parity sweep below: the spec suites
+// and every fuzzer seed (which is where the awkward inputs live -- NUL bytes,
+// lone surrogates, unterminated fences).
+const repoRoot = join(__dirname, "../../..");
+const seedDir = join(repoRoot, "test/fuzzers/seed-corpus");
+const corpus = [
+  ...["spec.txt", "regressions.txt", "coverage.txt", "spec-components.txt"].map(
+    (f) => join(repoRoot, "test", f),
+  ),
+  ...readdirSync(seedDir)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => join(seedDir, f)),
+].map((path) => [path.slice(repoRoot.length + 1), readFileSync(path, "utf-8")]);
 
 // Frontmatter that libyaml cannot parse to the end. It reports the error only
 // after emitting the events before it, and the JSON writer streams straight
@@ -1606,6 +1621,80 @@ export function defineSuite({
       expect(html).toBe('<pre class="custom">highlighted</pre>');
     });
 
+    it("handles an indented code block (no info string)", async () => {
+      const { blocks } = await collectBlocks("    indented\n");
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].lang).toBe("");
+      expect(blocks[0].code).toBe("indented\n");
+      expect(blocks[0].filename).toBeUndefined();
+    });
+
+    it("replaces blocks nested in a list or blockquote", async () => {
+      const html = await renderToHtml(
+        "- x\n\n  ```js\na\n  ```\n\n> ```py\n> b\n> ```\n",
+        {
+          highlighter: () => "<HL>",
+        },
+      );
+      expect(html).not.toContain("<pre>");
+      expect(html.match(/<HL>/g)).toHaveLength(2);
+    });
+
+    it("an empty replacement removes the block", async () => {
+      expect(
+        await renderToHtml("```js\na\n```", { highlighter: () => "" }),
+      ).toBe("");
+    });
+
+    it("works with full-document mode", async () => {
+      const html = await renderToHtml("# T\n\n```js\na\n```", {
+        full: true,
+        highlighter: () => "<HL>",
+      });
+      expect(html).toContain("<!DOCTYPE html>");
+      expect(html).toContain("<HL>");
+      expect(html).not.toContain("<pre><code");
+    });
+
+    it("works with heal", async () => {
+      const html = await renderToHtml("```js\nconst a = 1;", {
+        heal: true,
+        highlighter: (code) => `<HL>${code}</HL>`,
+      });
+      expect(html).toBe("<HL>const a = 1;\n</HL>");
+    });
+
+    it("is not called for inline code spans", async () => {
+      const { html, blocks } = await collectBlocks("a `x` b");
+      expect(html).toBe("<p>a <code>x</code> b</p>\n");
+      expect(blocks).toEqual([]);
+    });
+
+    it("declining leaves the output byte-identical", async () => {
+      const md = "# T\n\n```js\na\n```\n\ntext\n\n```\nb\n```\n";
+      const { html } = await collectBlocks(md);
+      expect(html).toBe(await renderToHtml(md));
+    });
+
+    it("a throwing highlighter surfaces its error", async () => {
+      const boom = new Error("boom");
+      await expect(async () =>
+        renderToHtml("```js\na\n```", {
+          highlighter: () => {
+            throw boom;
+          },
+        }),
+      ).rejects.toBe(boom);
+    });
+
+    // The hook runs inside the renderer, so there is nothing to await it: the
+    // alternative to refusing is "[object Promise]" in the output.
+    it("rejects an async highlighter", async () => {
+      await expect(async () =>
+        renderToHtml("```js\na\n```", { highlighter: async () => "x" }),
+      ).rejects.toThrow(TypeError);
+    });
+
     it("highlight ranges metadata is preserved", async () => {
       const { blocks } = await collectBlocks(
         "```js {1-3,5,7-9}\na\nb\nc\nd\ne\nf\ng\nh\ni\n```",
@@ -1777,14 +1866,97 @@ export function defineSuite({
     });
   });
 
-  // Regression (#19): the ANSI renderer captures a code block's line prefix by
-  // pointing `process_output` at a scratch buffer, but `output_offset` -- the
-  // counter MD_ANSI_CODE_META.start/.end snapshot -- kept advancing over those
-  // captured bytes. They never reach the caller, so every block's `end` and
-  // every later block's `start`/`end` drifted by the prefix length, once per
-  // code block: the second block's slice began mid-`ESC[2m` (so the DIM strip
-  // and the prefix strip both missed) and each slice ran past DIM_OFF into the
-  // following paragraph.
+  // A highlighter that declines every block must reproduce the no-highlighter
+  // output byte for byte: the renderers defer a code block's own rendering
+  // while a hook is installed, so any text the deferral misses shows up here.
+  //
+  // Regression: a NUL byte inside a fenced block arrives as a `nullchar` text
+  // event, not a `code` one. The ANSI renderer's collector only looked at
+  // `code`, so the U+FFFD escaped straight to the output -- landing *before*
+  // the deferred block -- and never reached the highlighter.
+  describe("declining highlighter == no highlighter", () => {
+    const decline = () => undefined;
+
+    it("NUL byte inside a code block", async () => {
+      const md = "```js\ncode \0 body\n```\n";
+      expect(await renderToHtml(md, { highlighter: decline })).toBe(
+        await renderToHtml(md),
+      );
+      expect(await renderToAnsi(md, { highlighter: decline })).toBe(
+        await renderToAnsi(md),
+      );
+      const seen = [];
+      await renderToHtml(md, {
+        highlighter: (code) => (seen.push(code), undefined),
+      });
+      expect(seen[0]).toBe("code \uFFFD body\n");
+    });
+
+    it.each(corpus)("%s", async (_name, src) => {
+      expect(await renderToHtml(src, { highlighter: decline })).toBe(
+        await renderToHtml(src),
+      );
+      expect(await renderToAnsi(src, { highlighter: decline })).toBe(
+        await renderToAnsi(src),
+      );
+    });
+  });
+
+  // A real highlighter, end to end: `rangi` knows nothing about md4x, gets
+  // called from inside the renderer, and its output lands verbatim in the
+  // renderer's stream.
+  describe("highlighting with rangi", () => {
+    const CODE = "const a = 1;\n";
+    const MD = `# Doc\n\n\`\`\`js\n${CODE}\`\`\`\n\nAfter.\n`;
+
+    it("renderToHtml emits rangi's markup in place of <pre><code>", async () => {
+      const html = await renderToHtml(MD, {
+        highlighter: (code, block) => codeToHtml(code, { lang: block.lang }),
+      });
+      expect(html).toContain('data-lang="js"');
+      expect(html).toContain(">const<");
+      expect(html).not.toContain("<pre><code");
+      // The blocks around it are untouched.
+      expect(html.startsWith("<h1>Doc</h1>\n")).toBe(true);
+      expect(html.endsWith("<p>After.</p>\n")).toBe(true);
+    });
+
+    it("renderToHtml passes the code through unescaped", async () => {
+      let seen;
+      await renderToHtml("```js\nif (a < b && c > d) {}\n```", {
+        highlighter: (code) => {
+          seen = code;
+          return codeToHtml(code, { lang: "js" });
+        },
+      });
+      expect(seen).toBe("if (a < b && c > d) {}\n");
+    });
+
+    it("renderToAnsi indents rangi's escapes with the block prefix", async () => {
+      const ansi = await renderToAnsi(`> ${MD.replaceAll("\n", "\n> ")}`, {
+        highlighter: (code, block) => codeToAnsi(code, { lang: block.lang }),
+      });
+      // Every non-empty code line keeps the blockquote bar the renderer would
+      // have drawn, and the highlighter's colors survive.
+      expect(ansi).toContain("\u001b[38;2;");
+      for (const line of ansi.split("\n")) {
+        if (line.includes("\u001b[38;2;")) expect(line).toContain("\u2502");
+      }
+    });
+
+    it("declines per block, keeping the default rendering for the rest", async () => {
+      const md = "```js\nconst a = 1;\n```\n\n```unknownlang\nxyz\n```\n";
+      const html = await renderToHtml(md, {
+        highlighter: (code, block) =>
+          block.lang === "js" ? codeToHtml(code, { lang: "js" }) : undefined,
+      });
+      expect(html).toContain('data-lang="js"');
+      expect(html).toContain(
+        '<pre><code class="language-unknownlang">xyz\n</code></pre>',
+      );
+    });
+  });
+
   describe("renderToAnsi with highlighter", () => {
     const DIM = "\u001b[2m";
     const DIM_OFF = "\u001b[22m";
@@ -1804,7 +1976,7 @@ export function defineSuite({
       const { blocks } = await collectBlocks("```js\nconsole.log(1)\n```");
       expect(blocks).toHaveLength(1);
       expect(blocks[0].lang).toBe("js");
-      expect(blocks[0].code).toBe("console.log(1)");
+      expect(blocks[0].code).toBe("console.log(1)\n");
       expect(blocks[0].prefix).toBe("  ");
     });
 
@@ -1815,55 +1987,64 @@ export function defineSuite({
       const { blocks } = await collectBlocks(md);
       expect(blocks).toHaveLength(4);
       expect(blocks.map((b) => b.code)).toEqual([
-        "local a = 1",
-        "local a = 2",
-        "local a = 3",
-        "local a = 4",
+        "local a = 1\n",
+        "local a = 2\n",
+        "local a = 3\n",
+        "local a = 4\n",
       ]);
     });
 
-    // The offsets index the un-highlighted ANSI output, so each recorded span
-    // must be exactly the block's own `DIM ... DIM_OFF` region -- no leading
-    // escape-sequence tail, no trailing paragraph text.
-    it("start/end bracket the DIM region of every block", async () => {
+    // The renderer captures each block and only throws the capture away when
+    // the highlighter accepts it, so declining has to reproduce the
+    // no-highlighter output exactly -- escapes, indent and all.
+    it("declining leaves the output byte-identical", async () => {
       const md = "```js\na\n```\n\ntext\n\n```py\nb\n```\n";
-      const { ansi, blocks } = await collectBlocks(md);
-      expect(blocks).toHaveLength(2);
-      expect(ansi.slice(blocks[0].start, blocks[0].end)).toBe(
-        `${DIM}  a\n${DIM_OFF}`,
-      );
-      expect(ansi.slice(blocks[1].start, blocks[1].end)).toBe(
-        `${DIM}  b\n${DIM_OFF}`,
-      );
+      const { ansi } = await collectBlocks(md);
+      expect(ansi).toBe(await renderToAnsi(md));
+      expect(ansi).toContain(`${DIM}  a\n${DIM_OFF}`);
+      expect(ansi).toContain(`${DIM}  b\n${DIM_OFF}`);
     });
 
-    // The drift scaled with the prefix, so a blockquote (bar + its own DIM
-    // pair, 12 bytes) and a list item (4 bytes) skewed the *next* block by
-    // more than the 2-byte base indent did.
+    // The indent is whatever render_indent emits for the current nesting, and
+    // the renderer re-applies it to the replacement -- so a highlighter inside
+    // a blockquote (bar + its own DIM pair) or a list item never has to know
+    // what it is nested in.
     it.each([
-      ["blockquote", "> ```js\n> a\n> ```\n", `${DIM}  │ ${DIM_OFF}  `],
+      ["blockquote", "> ```js\n> a\n> ```\n", `${DIM}  \u2502 ${DIM_OFF}  `],
       ["list item", "- ```js\n  a\n  ```\n", "    "],
-    ])(
-      "long %s prefix leaves the next block aligned",
-      async (_, first, pfx) => {
-        const md = `${first}\ntext\n\n\`\`\`py\nb\n\`\`\`\n`;
-        const { ansi, blocks } = await collectBlocks(md);
-        expect(blocks).toHaveLength(2);
-        expect(blocks.map((b) => b.code)).toEqual(["a", "b"]);
-        expect(blocks[0].prefix).toBe(pfx);
-        expect(ansi.slice(blocks[0].start, blocks[0].end)).toBe(
-          `${DIM}${pfx}a\n${DIM_OFF}`,
-        );
-        expect(ansi.slice(blocks[1].start, blocks[1].end)).toBe(
-          `${DIM}  b\n${DIM_OFF}`,
-        );
-      },
-    );
+    ])("reports the %s line prefix", async (_, first, pfx) => {
+      const md = `${first}\ntext\n\n\`\`\`py\nb\n\`\`\`\n`;
+      const { ansi, blocks } = await collectBlocks(md);
+      expect(blocks).toHaveLength(2);
+      expect(blocks.map((b) => b.code)).toEqual(["a\n", "b\n"]);
+      expect(blocks[0].prefix).toBe(pfx);
+      expect(blocks[1].prefix).toBe("  ");
+      expect(ansi).toBe(await renderToAnsi(md));
+    });
+
+    it("re-applies the line prefix to the replacement", async () => {
+      const out = await renderToAnsi("> ```js\n> a\n> b\n> ```\n", {
+        highlighter: () => "X\nY",
+      });
+      const pfx = `${DIM}  \u2502 ${DIM_OFF}  `;
+      expect(out).toBe(`${pfx}X\n${pfx}Y\n`);
+    });
 
     it("splices replacements at the block boundaries", async () => {
       const md = "```js\na\n```\n\ntext\n\n```py\nb\n```\n";
       const out = await renderToAnsi(md, { highlighter: () => "HL" });
       expect(out).toBe("  HL\n\ntext\n\n  HL\n");
+    });
+
+    it("a throwing highlighter surfaces its error", async () => {
+      const boom = new Error("boom");
+      await expect(async () =>
+        renderToAnsi("```js\na\n```", {
+          highlighter: () => {
+            throw boom;
+          },
+        }),
+      ).rejects.toBe(boom);
     });
   });
 

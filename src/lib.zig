@@ -34,6 +34,9 @@ const markdown = @import("renderers/md4x-markdown.zig");
 const heal = @import("renderers/md4x-heal.zig");
 const json = @import("renderers/md4x-json.zig");
 
+/// The syntax-highlight hook the HTML and ANSI renderers call per code block.
+pub const highlight = @import("renderers/md4x-highlight.zig");
+
 /// Shared MD_* types, enums, and flags.
 pub const abi = @import("abi");
 
@@ -46,7 +49,9 @@ pub const MD_HTML_OPTS = html.MD_HTML_OPTS;
 pub const md_html = html.md_html;
 pub const md_html_ex = html.md_html_ex;
 pub const md_ast = ast.md_ast;
+pub const MD_ANSI_OPTS = ansi.MD_ANSI_OPTS;
 pub const md_ansi = ansi.md_ansi;
+pub const md_ansi_ex = ansi.md_ansi_ex;
 pub const md_text = text.md_text;
 pub const md_meta = meta.md_meta;
 pub const md_markdown = markdown.md_markdown;
