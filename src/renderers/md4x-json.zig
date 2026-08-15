@@ -630,17 +630,15 @@ pub fn json_write_yaml_props_ex(w: *JsonWriter, text: [*]const u8, size: c.MD_SI
 /// Unlike `json_write_yaml_props`, this accepts any root node — a sequence or a
 /// bare scalar as readily as a mapping — and a stream with no document at all
 /// converts to `null`, YAML's own reading of an empty file. It takes the
-/// renderer signature (both trailing flag words unused) so it drops straight
+/// renderer signature (the trailing flag word unused) so it drops straight
 /// into the existing wasm/napi wrappers.
 pub fn md_yaml(
     input: [*c]const c.MD_CHAR,
     input_size: c.MD_SIZE,
     process_output: ProcessOutputFn,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int {
-    _ = parser_flags;
     _ = renderer_flags;
 
     var w: JsonWriter = .{ .process_output = process_output, .userdata = userdata };
@@ -712,7 +710,7 @@ const TestSink = struct {
 fn testYaml(input: []const u8) ![]u8 {
     var sink: TestSink = .{};
     errdefer sink.out.deinit(testing.allocator);
-    try testing.expectEqual(@as(c_int, 0), md_yaml(@ptrCast(input.ptr), @intCast(input.len), TestSink.write, &sink, 0, 0));
+    try testing.expectEqual(@as(c_int, 0), md_yaml(@ptrCast(input.ptr), @intCast(input.len), TestSink.write, &sink, 0));
     return sink.out.toOwnedSlice(testing.allocator);
 }
 

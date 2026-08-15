@@ -86,7 +86,7 @@ await init(); // load WASM binary (call once before using render methods)
 const html = renderToHtml("# Hello"); // sync after init
 ```
 
-`init(opts?)` accepts an optional options object with a `wasm` property: `ArrayBuffer`, `Uint8Array`, `WebAssembly.Module`, `Response`, or `Promise<Response>`. When called with no arguments in Node.js, it reads the bundled `.wasm` file from disk. All render methods are **sync** after initialization. All extensions are enabled by default (`MD_DIALECT_ALL`).
+`init(opts?)` accepts an optional options object with a `wasm` property: `ArrayBuffer`, `Uint8Array`, `WebAssembly.Module`, `Response`, or `Promise<Response>`. When called with no arguments in Node.js, it reads the bundled `.wasm` file from disk. All render methods are **sync** after initialization. All extensions are always on: md4x has one dialect, fixed in the Zig layer with no flag word or parameter to change it.
 
 ## Standalone Target (inlined WASM)
 
@@ -211,7 +211,7 @@ import { renderToHtml } from "md4x/napi";
 const html = renderToHtml("# Hello");
 ```
 
-The NAPI API is sync. All extensions are enabled by default (`MD_DIALECT_ALL`). `renderToAST` returns the raw JSON string from the AST renderer. `parseAST` parses it into a `ComarkTree` object.
+The NAPI API is sync. All extensions are always on (the single fixed dialect). `renderToAST` returns the raw JSON string from the AST renderer. `parseAST` parses it into a `ComarkTree` object.
 
 `init(opts?)` is optional for NAPI — the native binding loads lazily on first render call. It accepts an optional options object with a `binding` property to provide a custom NAPI binding.
 
@@ -230,7 +230,7 @@ Configured in `packages/md4x/package.json` via `exports`:
 
 Conditions are matched in declaration order, so: Node.js keeps NAPI for the bare entry; an explicitly-enabled `unwasm` build keeps the unwasm module; browser bundlers (Vite, webpack, Rollup with `browser` on) get the self-contained `lib/standalone.mjs` with no `.wasm` asset to emit; everything else loads `build/md4x.wasm` from disk or over the network.
 
-All extensions (`MD_DIALECT_ALL`) are enabled by default. No parser/renderer flag configuration is exposed to JS consumers.
+All extensions are always on — the dialect is fixed in the Zig layer, there is no parser flag word, and no entry point at any level takes parser flags. No parser/renderer flag configuration is exposed to JS consumers.
 
 **JS API functions (unified across NAPI and WASM):**
 

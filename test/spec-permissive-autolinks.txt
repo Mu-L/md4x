@@ -12,9 +12,8 @@ Standard autolinks (as per CommonMark specification) have to be decorated with
 <a href="https://example.com">https://example.com</a></p>
 ````````````````````````````````
 
-With flags `MD_FLAG_PERMISSIVEURLAUTOLINKS`, `MD_FLAG_PERMISSIVEWWWAUTOLINKS`
-and `MD_FLAG_PERMISSIVEEMAILAUTOLINKS`, MD4X is able also to recognize autolinks
-without those marks.
+MD4X also recognizes permissive URL, WWW and e-mail autolinks — autolinks
+written without those marks. All three are unconditional.
 
 Example of permissive autolinks follows:
 
@@ -107,7 +106,7 @@ john.doe@example.com*
 
 ## Permissive URL Autolinks
 
-Permissive URL autolinks (`MD_FLAG_PERMISSIVEURLAUTOLINKS`) are formed
+Permissive URL autolinks are formed
 by mandatory URL scheme, mandatory host, optional path, optional query and
 optional fragment.
 
@@ -180,7 +179,7 @@ Anonymous FTP is available at ftp://foo.bar.baz.
 
 ## Permissive WWW Autolinks
 
-Permissive WWW autolinks (`MD_FLAG_PERMISSIVEWWWAUTOLINKS`) are very similar
+Permissive WWW autolinks are very similar
 to the permissive URL autolinks. Actually the only difference is that instead
 of providing an explicit scheme, they have to begin with `www.`.
 
@@ -193,7 +192,7 @@ www.google.com/search?q=Markdown
 
 ## Permissive E-mail Autolinks
 
-Permissive E-mail autolinks (`MD_FLAG_PERMISSIVEEMAILAUTOLINKS`) impose the
+Permissive E-mail autolinks impose the
 following limitations to the e-mail addresses:
 
 1. The username (before the `@`) can only use alphanumerical characters and

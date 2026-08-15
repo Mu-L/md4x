@@ -14,6 +14,13 @@
 > behavior in the shipping ReleaseFast build) rather than a way to discard
 > output. A missing sink is now a compile error at the call site. Do not re-add
 > `?`, and do not guard the sink call sites with `if (out) |f|` instead.
+>
+> **No entry point takes parser flags.** The trailing `renderer_flags`
+> (`MD_*_FLAG_*`) is the only flag word, and it is a live per-call knob. The
+> dialect is fixed and there is no parser flag word at all — `abi.Parser` holds
+> callbacks only. Do not re-add a `parser_flags` parameter when syncing a
+> signature from md4c, which still has one — see
+> [.agents/upstream-sync.md](../.agents/upstream-sync.md).
 
 ## HTML Renderer API (`src/renderers/md4x-html.zig`)
 
@@ -25,7 +32,6 @@ pub fn md_html(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 ```
@@ -46,7 +52,6 @@ pub fn md_html_ex(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
     opts: ?*const MD_HTML_OPTS,
 ) c_int;
@@ -174,7 +179,6 @@ pub fn md_ast(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 ```
@@ -215,7 +219,6 @@ pub fn md_ansi(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 
@@ -229,7 +232,6 @@ pub fn md_ansi_ex(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
     opts: ?*const MD_ANSI_OPTS,
 ) c_int;
@@ -298,7 +300,6 @@ pub fn md_yaml(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 ```
@@ -310,7 +311,7 @@ meta renderer, and stripping the heading list back off the result.
 
 Unlike `json_write_yaml_props()` it accepts any root node (a sequence or a bare
 scalar as readily as a mapping), and a stream with no document at all converts
-to `null` — YAML's own reading of an empty file. Both flag words are unused; it
+to `null` — YAML's own reading of an empty file. The flag word is unused; it
 takes the renderer signature so it drops into the existing wasm/napi wrappers
 unchanged. Malformed input follows the same forward-repair contract as
 frontmatter, so the output always parses.
@@ -393,7 +394,6 @@ pub fn md_meta(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 ```
@@ -446,7 +446,6 @@ pub fn md_text(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 ```
@@ -491,7 +490,6 @@ pub fn md_markdown(
     input_size: MD_SIZE,
     process_output: *const fn ([*c]const MD_CHAR, MD_SIZE, ?*anyopaque) void,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int;
 ```

@@ -34,16 +34,17 @@ pub fn md_parse(
 
 Returns `0` on success, `-1` on runtime error (e.g. memory failure), or the non-zero return value of any callback that aborted parsing.
 
+There is **no parser-flags parameter** — not here and not on any renderer entry point (see [renderers.md](renderers.md)). md4x has exactly one dialect, and there is no flag word to select another with.
+
 `MD_CHAR` is `u8`; `MD_SIZE` and `MD_OFFSET` are `c_uint`. UTF-8 is the only supported encoding (the `MD4X_USE_ASCII` / `MD4X_USE_UTF16` build variants were dropped with the C sources).
 
-The `Parser` struct holds callbacks and flags:
+The `Parser` struct holds the callbacks — and nothing else:
 
 ```zig
 /// 0 continues the parse; non-zero aborts the enclosing emitter.
 pub const CallbackResult = i32;
 
 pub const Parser = struct {
-    flags: c_uint = 0,         // Bitmask of MD_FLAG_xxxx values
     // Required — non-optional, no default.
     enter_block: *const fn (*const BlockDetail, ?*anyopaque) CallbackResult,
     leave_block: *const fn (*const BlockDetail, ?*anyopaque) CallbackResult,
@@ -57,8 +58,8 @@ pub const Parser = struct {
 **All five SAX callbacks must be supplied.** The emission path calls them
 unconditionally, so they are non-optional _and_ carry no default: `Parser{}`
 does not compile, and neither does `md_parse(text, size, &.{}, null)`. Every
-callback table must therefore name all five explicitly (`flags` and `debug_log`
-still default). This is deliberate — while the fields were nullable, an omitted
+callback table must therefore name all five explicitly (only `debug_log`
+defaults). This is deliberate — while the fields were nullable, an omitted
 callback was a null-function-pointer call: a panic in Debug/ReleaseSafe and
 undefined behavior in the shipping ReleaseFast build. `debug_log` is the one
 genuinely optional callback and stays nullable; the parser guards it.
@@ -246,7 +247,7 @@ pub const BlockOlDetail = struct {
 };
 
 pub const BlockLiDetail = struct {
-    is_task: bool,              // Can be true only with MD_FLAG_TASKLISTS
+    is_task: bool,              // True for a `[ ]` / `[x]` task item
     task_mark: MD_CHAR,         // 'x', 'X', or ' ' (if is_task)
     task_mark_offset: MD_OFFSET, // Offset of char between '[' and ']'
 };
@@ -369,34 +370,13 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 }
 ```
 
-## Parser Flags
+## No parser flags
 
-| Flag                               | Value      | Description                                                                       |
-| ---------------------------------- | ---------- | --------------------------------------------------------------------------------- |
-| `MD_FLAG_COLLAPSEWHITESPACE`       | `0x0001`   | Collapse non-trivial whitespace to single space                                   |
-| `MD_FLAG_PERMISSIVEATXHEADERS`     | `0x0002`   | Allow ATX headers without space (`###header`)                                     |
-| `MD_FLAG_PERMISSIVEURLAUTOLINKS`   | `0x0004`   | Recognize URLs as autolinks without `<>`                                          |
-| `MD_FLAG_PERMISSIVEEMAILAUTOLINKS` | `0x0008`   | Recognize emails as autolinks without `<>` and `mailto:`                          |
-| `MD_FLAG_NOINDENTEDCODEBLOCKS`     | `0x0010`   | Disable indented code blocks (fenced only)                                        |
-| `MD_FLAG_NOHTMLBLOCKS`             | `0x0020`   | Disable raw HTML blocks                                                           |
-| `MD_FLAG_NOHTMLSPANS`              | `0x0040`   | Disable inline raw HTML                                                           |
-| `MD_FLAG_TABLES`                   | `0x0100`   | Enable tables extension                                                           |
-| `MD_FLAG_STRIKETHROUGH`            | `0x0200`   | Enable strikethrough extension                                                    |
-| `MD_FLAG_PERMISSIVEWWWAUTOLINKS`   | `0x0400`   | Enable `www.` autolinks                                                           |
-| `MD_FLAG_TASKLISTS`                | `0x0800`   | Enable task list extension                                                        |
-| `MD_FLAG_LATEXMATHSPANS`           | `0x1000`   | Enable `$` / `$$` LaTeX math                                                      |
-| `MD_FLAG_HARD_SOFT_BREAKS`         | `0x8000`   | Force all soft breaks to act as hard breaks                                       |
-| `MD_FLAG_FRONTMATTER`              | `0x10000`  | Enable frontmatter extension                                                      |
-| `MD_FLAG_COMPONENTS`               | `0x20000`  | Enable components (inline `:name[content]{props}` and block `::name{props}...::`) |
-| `MD_FLAG_ATTRIBUTES`               | `0x40000`  | Enable `{...}` attributes on inline elements and `[text]{.class}` spans           |
-| `MD_FLAG_ALERTS`                   | `0x80000`  | Enable `> [!TYPE]` alert/admonition syntax                                        |
-| `MD_FLAG_HIGHLIGHT`                | `0x100000` | Enable `==highlight==` spans                                                      |
-| `MD_FLAG_FOOTNOTES`                | `0x200000` | Enable `[^label]` references and `[^label]:` definitions                          |
+There is no parser flag word. md4x has exactly **one dialect** and every
+extension is unconditionally on, so there is nothing to configure: no
+`MD_FLAG_*` / `MD_DIALECT_*` constants, no `Parser.flags` field, and no
+parser-flags parameter on any entry point.
 
-**Compound flags:**
-
-- `MD_FLAG_PERMISSIVEAUTOLINKS` = email + URL + WWW autolinks
-- `MD_FLAG_NOHTML` = no HTML blocks + no HTML spans
-- `MD_DIALECT_COMMONMARK` = `0` (strict CommonMark)
-- `MD_DIALECT_GITHUB` = permissive autolinks + tables + strikethrough + task lists + alerts + footnotes
-- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + frontmatter + components + attributes + alerts + highlight + footnotes)
+See [compatibility.md](compatibility.md) for what that one dialect is, and
+[.agents/github-parity.md](../.agents/github-parity.md) for why there is only
+one.

@@ -1894,7 +1894,6 @@ pub fn md_ast(
     input_size: c.MD_SIZE,
     process_output: ProcessOutputFn,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int {
     var input_ptr = input;
@@ -1907,13 +1906,12 @@ pub fn md_ast(
             healBufFree(&hbuf);
             return -1;
         }
-        const ret = md_ast(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, parser_flags, renderer_flags & ~MD_AST_FLAG_HEAL);
+        const ret = md_ast(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, renderer_flags & ~MD_AST_FLAG_HEAL);
         healBufFree(&hbuf);
         return ret;
     }
 
     const parser: c.Parser = .{
-        .flags = parser_flags,
         .enter_block = jsonEnterBlock,
         .leave_block = jsonLeaveBlock,
         .enter_span = jsonEnterSpan,

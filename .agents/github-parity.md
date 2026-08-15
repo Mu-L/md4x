@@ -1,8 +1,9 @@
 # GitHub parity
 
 md4x has **one dialect**. There is no `commonmark` mode, no `gfm` mode, no runtime
-switch — every entry point parses with every extension md4x ships. GitHub is what that
-one dialect is _measured against_, not what it is limited to.
+switch — every entry point parses with every extension md4x ships, none of them takes
+a parser-flags parameter, and there is no parser flag word to select otherwise with.
+GitHub is what that one dialect is _measured against_, not what it is limited to.
 
 Read this before changing parser or renderer output, and before deciding that a
 difference from GitHub is a bug. Its job is the same as

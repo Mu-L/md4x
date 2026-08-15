@@ -82,7 +82,6 @@ const OutputFormat = enum { html, text, json, ansi, markdown, heal };
 // Global options (mirror the C file's `static` globals).
 // ---------------------------------------------------------------------------
 var output_format: OutputFormat = .html;
-var parser_flags: c_uint = abi.MD_DIALECT_ALL;
 var renderer_flags: c_uint = MD_HTML_FLAG_DEBUG | MD_HTML_FLAG_SKIP_UTF8_BOM;
 var want_fullhtml = false;
 var want_heading_ids = false;
@@ -126,7 +125,6 @@ fn read_stream(stream: *libc.FILE) []u8 {
 }
 
 fn process_file(in: *libc.FILE, out: *libc.FILE) c_int {
-    var p_flags = parser_flags;
     var r_flags = renderer_flags;
 
     const input = read_stream(in);
@@ -136,15 +134,17 @@ fn process_file(in: *libc.FILE, out: *libc.FILE) c_int {
     var out_buf: MemBuffer = .empty;
     defer out_buf.deinit(gpa);
 
-    // Undocumented mode: replay a fuzz test case (flags prefixed to the input).
+    // Undocumented mode: replay a fuzz test case (renderer flags prefixed to
+    // the input). md4c's format prefixed two words, parser flags then renderer
+    // flags; md4x has one fixed dialect, so only the renderer-flags word is
+    // left.
     if (want_replay_fuzz) {
-        if (in_size < 2 * @sizeOf(c_uint)) {
+        if (in_size < @sizeOf(c_uint)) {
             eprint("File isn't valid fuzz test case.\n", .{});
             return -1;
         }
-        @memcpy(std.mem.asBytes(&p_flags), input[0..@sizeOf(c_uint)]);
-        @memcpy(std.mem.asBytes(&r_flags), input[@sizeOf(c_uint) .. 2 * @sizeOf(c_uint)]);
-        const skip = 2 * @sizeOf(c_uint);
+        @memcpy(std.mem.asBytes(&r_flags), input[0..@sizeOf(c_uint)]);
+        const skip = @sizeOf(c_uint);
         std.mem.copyForwards(u8, input[0 .. in_size - skip], input[skip..in_size]);
         in_size -= skip;
         @memset(input[in_size .. in_size + skip], 0);
@@ -177,27 +177,27 @@ fn process_file(in: *libc.FILE, out: *libc.FILE) c_int {
                 html_opts.css_url = if (css_path) |u| u.ptr else null;
                 opts_ptr = &html_opts;
             }
-            ret = lib.md_html_ex(input_ptr, in_sz, process_output, &out_buf, p_flags, html_flags, opts_ptr);
+            ret = lib.md_html_ex(input_ptr, in_sz, process_output, &out_buf, html_flags, opts_ptr);
         },
         .json => {
             var j_flags = MD_AST_FLAG_DEBUG | MD_AST_FLAG_SKIP_UTF8_BOM;
             if (want_heal) j_flags |= MD_AST_FLAG_HEAL;
-            ret = lib.md_ast(input_ptr, in_sz, process_output, &out_buf, p_flags, j_flags);
+            ret = lib.md_ast(input_ptr, in_sz, process_output, &out_buf, j_flags);
         },
         .ansi => {
             var a_flags = MD_ANSI_FLAG_DEBUG | MD_ANSI_FLAG_SKIP_UTF8_BOM;
             if (want_heal) a_flags |= MD_ANSI_FLAG_HEAL;
-            ret = lib.md_ansi(input_ptr, in_sz, process_output, &out_buf, p_flags, a_flags);
+            ret = lib.md_ansi(input_ptr, in_sz, process_output, &out_buf, a_flags);
         },
         .text => {
             var t_flags = MD_TEXT_FLAG_DEBUG | MD_TEXT_FLAG_SKIP_UTF8_BOM;
             if (want_heal) t_flags |= MD_TEXT_FLAG_HEAL;
-            ret = lib.md_text(input_ptr, in_sz, process_output, &out_buf, p_flags, t_flags);
+            ret = lib.md_text(input_ptr, in_sz, process_output, &out_buf, t_flags);
         },
         .markdown => {
             var pm_flags = MD_MARKDOWN_FLAG_DEBUG | MD_MARKDOWN_FLAG_SKIP_UTF8_BOM;
             if (want_heal) pm_flags |= MD_MARKDOWN_FLAG_HEAL;
-            ret = lib.md_markdown(input_ptr, in_sz, process_output, &out_buf, p_flags, pm_flags);
+            ret = lib.md_markdown(input_ptr, in_sz, process_output, &out_buf, pm_flags);
         },
         .heal => {
             ret = lib.md_heal(input.ptr, in_sz, process_output, &out_buf);

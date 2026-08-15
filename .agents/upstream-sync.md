@@ -150,8 +150,8 @@ the parser for no behavior change — and `1ec0ff4` above depends on it.
 
 **Skip.** Upstream deliberately steals the single tilde from strikethrough. md4x documents
 `~text~` **and** `~~text~~` as strikethrough (`docs/markdown-syntax.md`) and has **no
-per-flag opt-out** — CLI, wasm, standalone and NAPI all hardcode `MD_DIALECT_ALL` — so this
-would silently change the meaning of every existing `H~2~O` for every consumer. `:sub[2]`
+per-flag opt-out** — there is no parser flag word at all, so every consumer gets every
+extension — so this would silently change the meaning of every existing `H~2~O` for every consumer. `:sub[2]`
 works today via COMPONENTS.
 
 Superscript `^x^` (`0bc75cd`, `1af4605`, `f6ad5af`) collides with nothing and is merely
@@ -176,8 +176,8 @@ a tests-only item, discharged by `26038a5` (`test/spec-alerts.txt` 19 → 42 cas
 ### Underline `MD_FLAG_UNDERLINE` / `MD_SPAN_U` — **removed from md4x**
 
 **Do not re-port.** Upstream still ships the flag and the `MD_SPAN_U` span type; md4x deleted
-both (see unjs/md4x#18). The flag was in `MD_DIALECT_ALL`, which every md4x entry point
-hardcodes — CLI, WASM and NAPI — so `_foo_` emitted `<u>`, `__foo__` emitted `<u><u>` (one
+both (see unjs/md4x#18). The flag was in `MD_DIALECT_ALL`, the dialect every md4x entry
+point ran at the time — CLI, WASM and NAPI — so `_foo_` emitted `<u>`, `__foo__` emitted `<u><u>` (one
 `<u>` per underscore, upstream's own semantics) and `_` emphasis was unreachable. CommonMark
 and GFM both treat `*` and `_` as exact synonyms and have no underline syntax at all, so the
 default silently broke every document written for either. Since md4x has no CLI toggle for
@@ -204,13 +204,120 @@ Consequences to remember:
 - `SpanType` ordinals after `latexmath_display` shift down by one again; the AST/JSON
   renderers no longer emit a `wikilink` node and the HTML renderer no longer emits
   `<x-wikilink>`. Flag bit `0x2000` is retired rather than reused.
-- `'|'` is now a mark character **only** under `MD_FLAG_TABLES`.
+- `'|'` is now a mark character only for tables (unconditionally, since wave 3).
 - The `326fe25` guard below is retained but is no longer reachable: a differential over
   ~30 000 bracket/footnote/link inputs plus every committed corpus found zero behavior
   difference with both copies disabled. It is kept as a cheap invariant guard, not as
   live coverage.
 - If a future sync brings a commit touching `MD_SPAN_WIKILINK`, `md_resolve_bracket_wikilink`
   or `test/wiki-links.txt`, it is not applicable here.
+
+### Six dialect-toggle flags — **removed from md4x**
+
+**Do not re-port.** Upstream still ships all six; md4x deleted the declarations and the code
+they guarded:
+
+| Flag                           | Bit      | What it guarded                                                    |
+| ------------------------------ | -------- | ------------------------------------------------------------------ |
+| `MD_FLAG_COLLAPSEWHITESPACE`   | `0x0001` | whitespace fill of `mark_char_map` in `md_build_mark_char_map`     |
+| `MD_FLAG_PERMISSIVEATXHEADERS` | `0x0002` | the space-after-`#` check and the trailing-`#` trim                |
+| `MD_FLAG_NOINDENTEDCODEBLOCKS` | `0x0010` | `ctx.code_indent_offset` (parked at `OFF_MAX` to disable the type) |
+| `MD_FLAG_NOHTMLBLOCKS`         | `0x0020` | the raw-HTML block start check in `md_analyze_line`                |
+| `MD_FLAG_NOHTMLSPANS`          | `0x0040` | the raw-HTML mark arm on `<` in `md_collect_marks`                 |
+| `MD_FLAG_HARD_SOFT_BREAKS`     | `0x8000` | forcing every soft break to `TextType.br`                          |
+
+md4x has **one dialect**: every entry point (CLI, WASM, NAPI, the fuzzer, the unit tests)
+hardcodes `MD_DIALECT_ALL`, and none of these six was ever a member of it. So every guard was
+statically false in every build md4x ships — dead code plus six untestable branches. The
+surviving behavior is exactly what the flags-off build already did, and
+`scripts/diff-corpus.sh` was diff-clean across the removal.
+
+Consequences to remember:
+
+- Bits `0x0001`, `0x0002`, `0x0010`, `0x0020`, `0x0040` and `0x8000` are **retired, not
+  reused** (same policy as `0x2000`). The surviving flags keep their values; nothing is
+  renumbered. The `MD_FLAG_NOHTML` alias went with them.
+- `ctx.code_indent_offset` is gone as an `MD_CTX` field; it is now
+  `types.CODE_INDENT_OFFSET` (`= 4`), a module constant.
+- `test/spec-hard-soft-breaks.txt` is renamed `test/spec-soft-breaks.txt` — its examples
+  always pinned the flag-**off** output, so it is an anti-regression suite for soft breaks.
+  `test/coverage.txt`'s `MD_FLAG_COLLAPSEWHITESPACE` section was retitled for the same
+  reason.
+- If a future sync brings a commit touching any of the six, it is not applicable here.
+
+### The parser-flags parameter — **removed from md4x** (wave 2)
+
+**Do not re-port.** Upstream threads a `MD_PARSER.flags` value in through every entry
+point (`md_html(input, size, out, userdata, parser_flags, renderer_flags)`, and the same
+trailing pair on every renderer). md4x **dropped the parser-flags parameter entirely**:
+
+| Before                                                                                 | After                                                                 |
+| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `md_html/md_ast/md_ansi/md_meta/md_text/md_markdown/md_yaml(…, parser_flags, r_flags)` | `(…, r_flags)` — one flag word                                        |
+| `md_html_ex/md_ansi_ex(…, parser_flags, r_flags, opts)`                                | `(…, r_flags, opts)`                                                  |
+| `Parser{ .flags = MD_DIALECT_ALL, … }` at six call sites                               | `Parser{ … }` — `flags` defaults to `MD_DIALECT_ALL` in `src/abi.zig` |
+
+Every caller in the repo (CLI, WASM, NAPI, the fuzzer, the four unit-test drivers)
+passed the literal `MD_DIALECT_ALL`; there was never a second value. The parameter was a
+five-argument-deep pass-through of a constant. **The renderer-flags word stays** — it is
+a live per-call knob (`DEBUG`, `SKIP_UTF8_BOM`, `FULL_HTML`, `HEADING_IDS`, `HEAL`, …).
+
+Consequences to remember:
+
+- The **JS-visible ABI is unchanged.** The wasm exports (`md4x_to_html(input, size,
+renderer_flags)`) and the napi bindings only ever took renderer flags — `MD_DIALECT_ALL`
+  was injected by the Zig wrapper — so `packages/md4x/lib/**` needed no edit.
+- `MD_FLAG_*` / `MD_DIALECT_*` and `Parser.flags` survived this wave and were deleted by
+  wave 3 (below). They were never a configuration surface: a sync that reintroduces a
+  `parser_flags` parameter is re-adding a knob md4x deliberately deleted.
+- `--replay-fuzz`'s prefix is now **4 bytes** (renderer flags only), not md4c's 8. See the
+  `--replay-fuzz` note under [Open](#open--reviewed-actionable-not-landed).
+- `scripts/diff-corpus.sh` was diff-clean across the change (pure signature refactor).
+
+### The parser flag word itself — **removed from md4x** (wave 3)
+
+**Do not re-port. md4x has no parser flag word at all.** Wave 1 deleted the six
+never-set dialect toggles and wave 2 the `parser_flags` parameter; wave 3 deleted what
+was left of the mechanism:
+
+- `Parser.flags` — the `c_uint` field is gone from `abi.Parser`, which now holds the
+  five required SAX callbacks plus the optional `debug_log` and nothing else.
+- **Every** `MD_FLAG_*` constant, the `MD_FLAG_PERMISSIVEAUTOLINKS` composite, and all
+  three `MD_DIALECT_*` constants (`COMMONMARK`, `GITHUB`, `ALL`).
+
+The thirteen surviving bits (`PERMISSIVE{URL,EMAIL,WWW}AUTOLINKS`, `TABLES`,
+`STRIKETHROUGH`, `TASKLISTS`, `LATEXMATHSPANS`, `FRONTMATTER`, `COMPONENTS`,
+`ATTRIBUTES`, `ALERTS`, `HIGHLIGHT`, `FOOTNOTES`) were all members of `MD_DIALECT_ALL`,
+which was `Parser.flags`'s only possible value. So every `flags & MD_FLAG_X != 0` test in
+the parser was statically **true** and every `== 0` test statically **false**. Each guard
+was folded away: the live arm kept, the dead branch deleted. `scripts/diff-corpus.sh` was
+diff-clean across the removal (the same binary behavior, byte for byte).
+
+**What this means for a sync.** md4c gates most of its extensions behind
+`ctx->parser.flags`. Ported code must be written **unconditionally** — there is no flag
+word to test, no `MD_CTX` field standing in for one, and no bit to allocate. If an
+upstream hunk reads `MD_FLAG_X`, drop the condition and keep the body; if it adds a new
+flag, md4x either takes the feature always-on or does not take it at all. Deciding that
+is a dialect decision — see [github-parity.md](github-parity.md), not a flag.
+
+Consequences to remember:
+
+- **No bit value was renumbered, repurposed or resurrected.** Every bit — including the
+  ones wave 1 retired (`0x0001`, `0x0002`, `0x0010`, `0x0020`, `0x0040`, `0x8000`) and
+  `0x2000` from the wiki-link removal — simply ceased to exist. A future flag word, if
+  anyone ever needs one, starts from a blank sheet.
+- `ctx.parser` is still live: the parser calls the SAX callbacks through it
+  (`enter_block` / `leave_block` / `enter_span` / `leave_span` / `text` / `debug_log`).
+  Only the flag field went.
+- `md_build_mark_char_map` now sets `~ $ = @ . |` unconditionally alongside the
+  CommonMark mark chars — the map is a constant scan filter, not a dialect selector. The
+  `md_analyze_link_contents` mark-char strings (`"*_~$="`, `"@:."`) are likewise literal,
+  where md4c builds them from the flags.
+- `md_resolve_attrs` and `md_resolve_block_attrs` lost their early-out; `md_resolve_
+footnote_refs`, `md_build_footnote_def_hashtable` and `md_process_footnote_defs` are
+  now called unconditionally from `md_analyze_inlines` / `md_process_doc`.
+- The `## Parser Flags` table in `docs/parser-api.md` is gone. Nothing documents a flag
+  because nothing has one.
 
 ## Deliberate deviations — md4x ahead of md4c on CommonMark
 
@@ -343,8 +450,8 @@ Three related decisions from the same sweep, recorded so they are not re-litigat
   page expects `A paragraph [span] {attr}` to yield an attribute-less `<span>`. It was
   implemented in `md_resolve_links`, measured at **spec.txt 606/46 → 576/76** plus regressions
   +2 and coverage +1, and reverted; `inlines.zig` is unchanged. The conflict is structural:
-  CommonMark requires an unresolved bracket to stay literal, `MD_FLAG_ATTRIBUTES` is on in every
-  default dialect, and both rules fire at the same point after `md_is_link_reference` fails.
+  CommonMark requires an unresolved bracket to stay literal, inline attributes are always on,
+  and both rules fire at the same point after `md_is_link_reference` fails.
   The two examples asserting it were deleted rather than left red. Do not retry without a plan
   for that collision.
 
@@ -360,16 +467,20 @@ Three related decisions from the same sweep, recorded so they are not re-litigat
 | `28e2fbd`            | duplicate chars in the URL-escape set (`md4x-html.zig:70`)                                 | Zero output change; the comptime `ESCAPE_MAP` is bit-identical. `[rnd]` |
 
 - **Man page.** Verified: `--ftables`, `--github`, `--fverbatim-entities` all exit 1. md4x
-  dropped every dialect/extension flag (hardcodes `MD_DIALECT_ALL`, `src/cli/md4x-cli.zig:84`)
+  dropped every dialect/extension flag (the dialect is fixed, no entry point takes parser
+  flags, and there is no parser flag word — see the wave-2 and wave-3 notes above)
   but kept md4c's page verbatim; it also omits `--heal`, lists 3 of 6 `--format` values, and
   still stamps "February 2026". The fix is a product decision: rewrite the page to describe the
   real CLI (recommended), or implement the flags — which would also change the default from ALL
   to CommonMark.
-- **`--replay-fuzz`.** It implements md2html's 8-byte flag prefix, but `src/fuzz.zig` uses a
-  fixed `MD_DIALECT_ALL`/`0` and the corpus is plain markdown, so replay silently eats 8 bytes.
-  md4x also still does the trailing zero-fill upstream removed ("it can actually hide a bug")
-  and overwrites `r_flags`, losing `MD_HTML_FLAG_DEBUG`. Delete the mode, or apply both
-  one-line fixes.
+- **`--replay-fuzz`.** md4c's prefix is two words, parser flags then renderer flags. Wave 2
+  dropped the parser-flags half, so md4x's prefix is **4 bytes** (renderer flags only) —
+  a sync must not restore the 8-byte layout. It is still vestigial either way: nothing in
+  the repo produces the format (`src/fuzz.zig` writes plain `.md` seeds via
+  `std.testing.fuzz`, and `test/fuzzers/seed-corpus/` is all plain markdown), so replay on
+  a real seed silently eats 4 bytes. md4x also still does the trailing zero-fill upstream
+  removed ("it can actually hide a bug") and overwrites `r_flags`, losing
+  `MD_HTML_FLAG_DEBUG`. Delete the mode, or apply both one-line fixes.
 - **`ce4636b`.** md4x ported the callback half (`!= 0`) but not the internal propagation half
   (~60 `ret < 0` sites) and **pins the pre-`ce4636b` matrix in tests** (`src/md4x.zig:800-854`).
   Either follow upstream, or document in `docs/parser-api.md` that callbacks must abort with a
@@ -407,97 +518,97 @@ Linux/Windows/coverage CI matrix that does not exist.
 `md2html/` or `scripts/` — exactly what `bun scripts/upstream-sync.ts` prints for that range,
 in the same order. Long reasoning lives in the sections above; these notes are the index.
 
-| sha       | subject                                                        | class                                     | note                                                                                     |
-| --------- | -------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `870f967` | md_analyze_line: get rid of strcspn-based optimization         | do-not-port                               | `src/scan.zig` is bounds-driven. `[blk]`                                                 |
-| `e0dcf62` | md_process_leaf_block: invalid free() in error path            | already-fixed                             | `MD_ATTRIBUTE_BUILD` is `= .{}` everywhere; free is idempotent. `[mem]`                  |
-| `fab28e4` | Avoid repeated `language-` in info string                      | ported                                    | → `c108204` (HTML + AST + `lib/_shared.mjs`). `[rnd]` `[uni]`                            |
-| `ce25e56` | Fix alignment issue in md_mark_store_ptr()                     | n/a                                       | md4x stores via `[*]u8` `@memcpy`; **do not "modernize"** into a pointer store. `[mem]`  |
-| `ae85f71` | MD_MARK union → just beg/end                                   | n/a                                       | C-layout refactor; md4x already writes only `beg`+`end`. `[mem]`                         |
-| `9b51e26` | Simplify mark pointers more                                    | n/a                                       | Same. `[mem]`                                                                            |
-| `bd6a4e3` | Fix md_decode_utf16le_before\_\_() return value                | n/a                                       | UTF-16 only; md4x returns `ch(off - 1)` on every path. `[misc]`                          |
-| `380ee2b` | md_is_closing_code_fence: accept trailing tabs                 | ported                                    | → `bb4ee4d`; 6 new cases, the rule's first executable coverage. `[blk]` `[uni]`          |
-| `1ccedb3` | fix OFF_MAX redefinition and a potential overflow              | already-fixed                             | `src/md4x.zig:249` widens to `u64` before multiplying. `[mem]`                           |
-| `44c90ca` | Disable openers/marks more carefully (#278, #294)              | ported                                    | → `9eed904`, with `c055ef5`; unbalanced SAX spans, not just HTML. `[inl]`                |
-| `ff71f00` | md_process_inlines: don't skip back to line start (#271)       | ported                                    | → `a629443` (`off = @max(off, line.beg)`). `[inl]` `[uni]`                               |
-| `ce4636b` | MD_CHECK: abort on any non-zero value                          | **open**                                  | Decision needed; see [Open](#open--reviewed-actionable-not-landed). `[mem]`              |
-| `3834f11` | permissive autolink: remove always-true condition              | ported                                    | → `00b9516`, subsumed by `d1f8a97`. `[auto]`                                             |
-| `5d52d32` | permissive autolink: be a little more permissive               | ported                                    | → `00b9516`, subsumed by `d1f8a97`. `[auto]`                                             |
-| `bd8f80e` | const up scheme_map                                            | n/a                                       | Zig's `const scheme_map` is already immutable. `[auto]`                                  |
-| `fccb43a` | fix tasklist XHTML render                                      | n/a                                       | md4x has no XHTML mode. `[rnd]`                                                          |
-| `8cab795` | build: CMake improvements                                      | n/a                                       | md4x builds with `zig build`. `[misc]`                                                   |
-| `87258eb` | build: absolute include/lib dirs in pc file                    | n/a                                       | md4x ships no pkg-config files. `[misc]`                                                 |
-| `3420ce7` | Update to Unicode 18.0                                         | ported                                    | → `d806f23`; +1003 punct, +76 folds, whitespace unchanged. `[uni]`                       |
-| `f24870b` | render_open_code_block: fix buffer overflow                    | n/a                                       | Cannot recur (slice + `startsWith`), but a **constraint** on `fab28e4`. `[rnd]` `[mem]`  |
-| `c4eebad` | Create initial fuzzer seed corpus                              | n/a                                       | 8-byte flag header; `src/fuzz.zig` takes raw markdown. `[uni]`                           |
-| `2a0f60d` | spec-permissive-autolinks.txt: fix a typo                      | **open**                                  | Cosmetic text drift. `[auto]`                                                            |
-| `e90921a` | spec-permissive-autolinks.txt: drop gmail.com                  | **open**                                  | Cosmetic text drift (10 occurrences). `[auto]`                                           |
-| `1e82998` | Add spoiler span extension (#308)                              | do-not-port                               | Breaks table cells. `[ext]`                                                              |
-| `f6b445d` | md2html: minor --replay-fuzz improvements                      | **open**                                  | md4x still does the zero-fill upstream removed. `[misc]`                                 |
-| `5860a02` | md_collect_marks: add missing parenthesis                      | n/a                                       | The C precedence trap does not exist in Zig. `[inl]`                                     |
-| `84c5d92` | Fix O(n²) with --fspoilers and nested brackets (#311)          | n/a                                       | Spoiler-only pass; the skip-resolved jump already exists here. `[inl]`                   |
-| `3a8c180` | Tests for links/images inside spoiler spans                    | n/a                                       | Spoilers. `[ext]`                                                                        |
-| `86cee2b` | Tests for inline spans inside spoilers                         | n/a                                       | Spoilers. `[ext]`                                                                        |
-| `f169318` | Replace ISANYOF\_ with direct char comparison                  | n/a                                       | Coverage-only edit inside the spoiler loop. `[inl]`                                      |
-| `f41e674` | md_analyze_link_contents: reuse md_analyze_marks()             | n/a                                       | Refactor; 0 diffs over 8 400 differential inputs. `[inl]`                                |
-| `d534ad9` | permissive autolink: accept any opener mark before it          | ported                                    | → `00b9516`; unobservable until a new mark char exists. `[auto]`                         |
-| `0bc75cd` | Add superscript and subscript span extensions                  | do-not-port (sub) / deferred (super)      | Single tilde is md4x's strikethrough. `[ext]`                                            |
-| `1af4605` | Remove unused caret case in md_opener_stack                    | n/a                                       | No `^` opener stack in md4x. `[misc]`                                                    |
-| `625a49e` | Examples for tilde behavior in subscript spans                 | n/a                                       | Subscript. `[misc]`                                                                      |
-| `f6ad5af` | Examples for caret behavior in superscript spans               | n/a                                       | Superscript. `[misc]`                                                                    |
-| `377cc53` | Update copyright years                                         | **open**                                  | 4 files still say `2016-2024`. `[misc]`                                                  |
-| `81b871f` | Fix python SyntaxWarning in test                               | ported                                    | → `26038a5`; the `pathological-tests.py` half was already done. `[uni]`                  |
-| `07712a5` | Code cleanup (#314)                                            | n/a                                       | Comment style, include order, `MD_UNUSED`. `[inl]`                                       |
-| `ed89abe` | md2html: add option --gfm                                      | **open** (design)                         | md4x's CLI has no dialect option at all. `[misc]`                                        |
-| `3456667` | Implement github-style admonitions extension (#316)            | do-not-port                               | md4x ships ALERTS and already matches. `[ext]`                                           |
-| `859d9df` | Fix invalid assertion at admonition recognition                | n/a                                       | Admonitions. `[ext]`                                                                     |
-| `4f0b252` | md_process_all_blocks: fix stack-use-after-scope               | n/a                                       | md4x's alert attribute build is **function-scoped**; keep it that way. `[mem]`           |
-| `d1f8a97` | Refactor the permissive autolink extension code (#319)         | ported                                    | → `00b9516`, the primary port; subsumes 5 earlier commits. `[auto]`                      |
-| `5f9b246` | md_process_line: fix admonition handling                       | n/a                                       | Admonitions. `[ext]`                                                                     |
-| `6257361` | Fix double-free on second realloc failure                      | already-fixed                             | `realloc_array_a` returns null and leaves the old slice owned. `[mem]`                   |
-| `174fe05` | MD_ATTRIBUTE_BUILD: unsigned size types                        | ported                                    | → `76dff08`; counters → `usize`, refused at the opener. `[mem]`                          |
-| `28e2fbd` | md_html: remove duplicate chars from strchr()                  | **open** (tidy)                           | Zero output change. `[rnd]`                                                              |
-| `5faab7c` | Fix HTML tag length computation in UTF-16 builds               | n/a                                       | `mkTag` uses `name.len`, the correct unit for `u8`. `[misc]`                             |
-| `c9e4a7c` | Admonitions: move detection to md_analyze_line()               | n/a                                       | md4x detects there from day one. `[ext]`                                                 |
-| `192723a` | Fuzz seed corpus: add an admonition sample                     | n/a                                       | Covered by `test/fuzzers/seed-corpus/alerts.md`. `[uni]`                                 |
-| `671cd93` | fix: V-001 (membuf_append size overflow)                       | ported                                    | → `76dff08`; `md4x-heal.zig`'s `+%` guard was the live bug. `[mem]`                      |
-| `53852ac` | Fix multiple bugs (#325)                                       | ported (surrogate) / already-fixed (rest) | → `3583855`; CESU-8 from 4 renderers, raw NUL from meta. `[mem]` `[uni]`                 |
-| `5012c8f` | Use SZ (not int) for realloc sizes                             | already-fixed / ported (arena)            | → `235d587` for the arena upstream never covered. `[mem]`                                |
-| `b8d9ee1` | permissive autolink: allow `~` in the URL path                 | ported                                    | → `00b9516`. `[auto]`                                                                    |
-| `9e1165f` | md_analyze_line: fix admonition detection                      | n/a                                       | Admonitions. `[ext]`                                                                     |
-| `56eec98` | Admonitions: get rid of MD_LINE_ADMONITIONTAG                  | n/a                                       | md4x sets `line.type = .blank`. `[ext]`                                                  |
-| `110011e` | Admonitions: don't turn indented code into admonition          | n/a                                       | md4x's `indent < code_indent_offset` guard already does this. `[ext]`                    |
-| `5add6a3` | Several fixes for the Windows UTF-16 build                     | n/a                                       | `sizeof(CHAR)` scalings; the 4 md4x sites were checked byte-correct. `[misc]`            |
-| `a8b0d3e` | Add footnote reference support (#315)                          | ported                                    | → `09b10c2`; also fixed a live md4x mis-parse of `[^1]: note`. `[ext]`                   |
-| `54bfec0` | Footnotes: text may be split into multiple lines               | ported                                    | → `09b10c2`. `[ext]`                                                                     |
-| `915676f` | Separate the label hashtable implementation                    | ported                                    | → `09b10c2` as a comptime-generic `LabelHashTable(Def)`. `[ext]`                         |
-| `19dd06f` | Heavily refactor label hashtable                               | ported + `76dff08` (sizing)               | → `09b10c2`; md4x computes `n + n/4`, never forming `n*5`. `[ext]` `[misc]`              |
-| `589681b` | Tables: suppress too sparse tables (#346)                      | ported, diverged                          | → `1094346`; cap retuned to 65535, not deleted (16-bit `bits.data`). `[blk]`             |
-| `326fe25` | Footnotes: fix assert for a ref inside a wiki-link dest (#348) | ported                                    | → `09b10c2`; guard in `md_rollback` **and** `md_disable_marks`, now unreachable. `[ext]` |
-| `193141e` | Refactor bracket resolution into md_resolve_brackets()         | do-not-port                               | Deliberately out of scope. `[inl]`                                                       |
-| `30c1a68` | Brackets: rename some mark flags                               | n/a                                       | md4x's flag values are frozen per `.agents/conventions.md`. `[inl]`                      |
-| `59af256` | Brackets: no-impact preparation for image handling             | n/a                                       | md4x collects image openers with `ch == '!'` directly. `[inl]`                           |
-| `9fa747c` | Fix code indentation and add missing `_T()`                    | n/a                                       | Re-indentation; `_T()` is identity in UTF-8 builds. `[misc]`                             |
-| `99d4667` | md2html: --replay-fuzz enforces debug output                   | **open**                                  | md4x's replay path overwrites `r_flags`, losing DEBUG. `[misc]`                          |
-| `1ecb4a4` | md_process_leaf_block: fix sparse table detection              | ported                                    | → `1094346`; only the `589681b`+typo-fix form was landed. `[blk]`                        |
-| `a962cdf` | md_resolve_bracket_wikilink: simplify a little                 | n/a                                       | Wiki links removed from md4x. `[inl]`                                                    |
-| `ff70673` | Brackets: remove extra pass for the bracket extension          | n/a                                       | Footnotes were hand-fitted into `md_resolve_links` instead. `[inl]`                      |
-| `1ec0ff4` | md_disable_marks: remove the footnote special case             | do-not-port                               | Would reintroduce the `326fe25` bug here. `[inl]` → corrected                            |
-| `fb4d03d` | Regressions: add a testcase from #352                          | ported                                    | → `26038a5`, in its `6ed63d1`-corrected form. `[uni]`                                    |
-| `ea20033` | Match cmark version of normalize.py                            | ported                                    | → `26038a5`, byte-identical to md4c HEAD. `[uni]`                                        |
-| `be7332b` | Update links to https                                          | **open**                                  | 10 md4x sources still carry `http://github.com/unjs/md4x`. `[misc]`                      |
-| `16a8df7` | Add apostrophe to HTML escaping                                | do-not-port (for now)                     | Not exploitable; 6 of 28 corpus hashes would move. `[rnd]`                               |
-| `323995c` | Add man page options, clean up md2html --help (#362)           | **open**                                  | `src/cli/md4x.1` is badly stale. `[misc]`                                                |
-| `d2a08e5` | Add highlight span extension (#357)                            | ported, diverged                          | → `d59ea4e`; span carries `SpanAttrsDetail` so `==x=={.warn}` composes. `[ext]`          |
-| `c055ef5` | md_resolve_brackets: check the `[` is not disabled             | ported                                    | → `9eed904`; no standalone effect, mandatory with `44c90ca`. `[inl]`                     |
-| `6ed63d1` | Fix broken testcase related to #352                            | ported                                    | → `26038a5` (the corrected expectation is what was imported). `[misc]`                   |
-| `755ce49` | md_is_autolink_uri: scheme must begin with alnum (#369)        | ported                                    | → `47f4485`; **63 of 128** first bytes made bogus links. `[auto]` `[uni]`                |
-| `38592ac` | Accept percent sign in auto links                              | ported                                    | → `00b9516`. `[auto]`                                                                    |
-| `6d168ef` | Make the tests more like current cmark (#373)                  | do-not-port                               | Would gut `spec-markdown.txt`; its timeout never fires. `[uni]`                          |
-| `ecbb091` | md_analyze_table_alignment: bound the dash scan                | ported                                    | → `76dff08`; latent, but `ctx.ch()` is never bounds-checked. `[blk]`                     |
-| `10e96ad` | Code spans: keep the line-break space                          | do-not-port                               | **Upstream regression; md4x fails 0 of the affected examples.** `[blk]`                  |
-| `65c6c9d` | md_html: escape raw HTML in image alt attribute                | ported                                    | → `c1a1990`; `onerror` became a live attribute. `[rnd]` `[uni]`                          |
-| `c4be862` | test/regressions.txt: fix some wording                         | already-fixed                             | Wording only; no example bodies changed. `[uni]`                                         |
+| sha       | subject                                                        | class                                     | note                                                                                      |
+| --------- | -------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `870f967` | md_analyze_line: get rid of strcspn-based optimization         | do-not-port                               | `src/scan.zig` is bounds-driven. `[blk]`                                                  |
+| `e0dcf62` | md_process_leaf_block: invalid free() in error path            | already-fixed                             | `MD_ATTRIBUTE_BUILD` is `= .{}` everywhere; free is idempotent. `[mem]`                   |
+| `fab28e4` | Avoid repeated `language-` in info string                      | ported                                    | → `c108204` (HTML + AST + `lib/_shared.mjs`). `[rnd]` `[uni]`                             |
+| `ce25e56` | Fix alignment issue in md_mark_store_ptr()                     | n/a                                       | md4x stores via `[*]u8` `@memcpy`; **do not "modernize"** into a pointer store. `[mem]`   |
+| `ae85f71` | MD_MARK union → just beg/end                                   | n/a                                       | C-layout refactor; md4x already writes only `beg`+`end`. `[mem]`                          |
+| `9b51e26` | Simplify mark pointers more                                    | n/a                                       | Same. `[mem]`                                                                             |
+| `bd6a4e3` | Fix md_decode_utf16le_before\_\_() return value                | n/a                                       | UTF-16 only; md4x returns `ch(off - 1)` on every path. `[misc]`                           |
+| `380ee2b` | md_is_closing_code_fence: accept trailing tabs                 | ported                                    | → `bb4ee4d`; 6 new cases, the rule's first executable coverage. `[blk]` `[uni]`           |
+| `1ccedb3` | fix OFF_MAX redefinition and a potential overflow              | already-fixed                             | `src/md4x.zig:249` widens to `u64` before multiplying. `[mem]`                            |
+| `44c90ca` | Disable openers/marks more carefully (#278, #294)              | ported                                    | → `9eed904`, with `c055ef5`; unbalanced SAX spans, not just HTML. `[inl]`                 |
+| `ff71f00` | md_process_inlines: don't skip back to line start (#271)       | ported                                    | → `a629443` (`off = @max(off, line.beg)`). `[inl]` `[uni]`                                |
+| `ce4636b` | MD_CHECK: abort on any non-zero value                          | **open**                                  | Decision needed; see [Open](#open--reviewed-actionable-not-landed). `[mem]`               |
+| `3834f11` | permissive autolink: remove always-true condition              | ported                                    | → `00b9516`, subsumed by `d1f8a97`. `[auto]`                                              |
+| `5d52d32` | permissive autolink: be a little more permissive               | ported                                    | → `00b9516`, subsumed by `d1f8a97`. `[auto]`                                              |
+| `bd8f80e` | const up scheme_map                                            | n/a                                       | Zig's `const scheme_map` is already immutable. `[auto]`                                   |
+| `fccb43a` | fix tasklist XHTML render                                      | n/a                                       | md4x has no XHTML mode. `[rnd]`                                                           |
+| `8cab795` | build: CMake improvements                                      | n/a                                       | md4x builds with `zig build`. `[misc]`                                                    |
+| `87258eb` | build: absolute include/lib dirs in pc file                    | n/a                                       | md4x ships no pkg-config files. `[misc]`                                                  |
+| `3420ce7` | Update to Unicode 18.0                                         | ported                                    | → `d806f23`; +1003 punct, +76 folds, whitespace unchanged. `[uni]`                        |
+| `f24870b` | render_open_code_block: fix buffer overflow                    | n/a                                       | Cannot recur (slice + `startsWith`), but a **constraint** on `fab28e4`. `[rnd]` `[mem]`   |
+| `c4eebad` | Create initial fuzzer seed corpus                              | n/a                                       | 8-byte flag header; `src/fuzz.zig` takes raw markdown. `[uni]`                            |
+| `2a0f60d` | spec-permissive-autolinks.txt: fix a typo                      | **open**                                  | Cosmetic text drift. `[auto]`                                                             |
+| `e90921a` | spec-permissive-autolinks.txt: drop gmail.com                  | **open**                                  | Cosmetic text drift (10 occurrences). `[auto]`                                            |
+| `1e82998` | Add spoiler span extension (#308)                              | do-not-port                               | Breaks table cells. `[ext]`                                                               |
+| `f6b445d` | md2html: minor --replay-fuzz improvements                      | **open**                                  | md4x still does the zero-fill upstream removed. `[misc]`                                  |
+| `5860a02` | md_collect_marks: add missing parenthesis                      | n/a                                       | The C precedence trap does not exist in Zig. `[inl]`                                      |
+| `84c5d92` | Fix O(n²) with --fspoilers and nested brackets (#311)          | n/a                                       | Spoiler-only pass; the skip-resolved jump already exists here. `[inl]`                    |
+| `3a8c180` | Tests for links/images inside spoiler spans                    | n/a                                       | Spoilers. `[ext]`                                                                         |
+| `86cee2b` | Tests for inline spans inside spoilers                         | n/a                                       | Spoilers. `[ext]`                                                                         |
+| `f169318` | Replace ISANYOF\_ with direct char comparison                  | n/a                                       | Coverage-only edit inside the spoiler loop. `[inl]`                                       |
+| `f41e674` | md_analyze_link_contents: reuse md_analyze_marks()             | n/a                                       | Refactor; 0 diffs over 8 400 differential inputs. `[inl]`                                 |
+| `d534ad9` | permissive autolink: accept any opener mark before it          | ported                                    | → `00b9516`; unobservable until a new mark char exists. `[auto]`                          |
+| `0bc75cd` | Add superscript and subscript span extensions                  | do-not-port (sub) / deferred (super)      | Single tilde is md4x's strikethrough. `[ext]`                                             |
+| `1af4605` | Remove unused caret case in md_opener_stack                    | n/a                                       | No `^` opener stack in md4x. `[misc]`                                                     |
+| `625a49e` | Examples for tilde behavior in subscript spans                 | n/a                                       | Subscript. `[misc]`                                                                       |
+| `f6ad5af` | Examples for caret behavior in superscript spans               | n/a                                       | Superscript. `[misc]`                                                                     |
+| `377cc53` | Update copyright years                                         | **open**                                  | 4 files still say `2016-2024`. `[misc]`                                                   |
+| `81b871f` | Fix python SyntaxWarning in test                               | ported                                    | → `26038a5`; the `pathological-tests.py` half was already done. `[uni]`                   |
+| `07712a5` | Code cleanup (#314)                                            | n/a                                       | Comment style, include order, `MD_UNUSED`. `[inl]`                                        |
+| `ed89abe` | md2html: add option --gfm                                      | **open** (design)                         | md4x's CLI has no dialect option at all. `[misc]`                                         |
+| `3456667` | Implement github-style admonitions extension (#316)            | do-not-port                               | md4x ships ALERTS and already matches. `[ext]`                                            |
+| `859d9df` | Fix invalid assertion at admonition recognition                | n/a                                       | Admonitions. `[ext]`                                                                      |
+| `4f0b252` | md_process_all_blocks: fix stack-use-after-scope               | n/a                                       | md4x's alert attribute build is **function-scoped**; keep it that way. `[mem]`            |
+| `d1f8a97` | Refactor the permissive autolink extension code (#319)         | ported                                    | → `00b9516`, the primary port; subsumes 5 earlier commits. `[auto]`                       |
+| `5f9b246` | md_process_line: fix admonition handling                       | n/a                                       | Admonitions. `[ext]`                                                                      |
+| `6257361` | Fix double-free on second realloc failure                      | already-fixed                             | `realloc_array_a` returns null and leaves the old slice owned. `[mem]`                    |
+| `174fe05` | MD_ATTRIBUTE_BUILD: unsigned size types                        | ported                                    | → `76dff08`; counters → `usize`, refused at the opener. `[mem]`                           |
+| `28e2fbd` | md_html: remove duplicate chars from strchr()                  | **open** (tidy)                           | Zero output change. `[rnd]`                                                               |
+| `5faab7c` | Fix HTML tag length computation in UTF-16 builds               | n/a                                       | `mkTag` uses `name.len`, the correct unit for `u8`. `[misc]`                              |
+| `c9e4a7c` | Admonitions: move detection to md_analyze_line()               | n/a                                       | md4x detects there from day one. `[ext]`                                                  |
+| `192723a` | Fuzz seed corpus: add an admonition sample                     | n/a                                       | Covered by `test/fuzzers/seed-corpus/alerts.md`. `[uni]`                                  |
+| `671cd93` | fix: V-001 (membuf_append size overflow)                       | ported                                    | → `76dff08`; `md4x-heal.zig`'s `+%` guard was the live bug. `[mem]`                       |
+| `53852ac` | Fix multiple bugs (#325)                                       | ported (surrogate) / already-fixed (rest) | → `3583855`; CESU-8 from 4 renderers, raw NUL from meta. `[mem]` `[uni]`                  |
+| `5012c8f` | Use SZ (not int) for realloc sizes                             | already-fixed / ported (arena)            | → `235d587` for the arena upstream never covered. `[mem]`                                 |
+| `b8d9ee1` | permissive autolink: allow `~` in the URL path                 | ported                                    | → `00b9516`. `[auto]`                                                                     |
+| `9e1165f` | md_analyze_line: fix admonition detection                      | n/a                                       | Admonitions. `[ext]`                                                                      |
+| `56eec98` | Admonitions: get rid of MD_LINE_ADMONITIONTAG                  | n/a                                       | md4x sets `line.type = .blank`. `[ext]`                                                   |
+| `110011e` | Admonitions: don't turn indented code into admonition          | n/a                                       | md4x's `indent < code_indent_offset` guard already does this. `[ext]`                     |
+| `5add6a3` | Several fixes for the Windows UTF-16 build                     | n/a                                       | `sizeof(CHAR)` scalings; the 4 md4x sites were checked byte-correct. `[misc]`             |
+| `a8b0d3e` | Add footnote reference support (#315)                          | ported                                    | → `09b10c2`; also fixed a live md4x mis-parse of `[^1]: note`. `[ext]`                    |
+| `54bfec0` | Footnotes: text may be split into multiple lines               | ported                                    | → `09b10c2`. `[ext]`                                                                      |
+| `915676f` | Separate the label hashtable implementation                    | ported                                    | → `09b10c2` as a comptime-generic `LabelHashTable(Def)`. `[ext]`                          |
+| `19dd06f` | Heavily refactor label hashtable                               | ported + `76dff08` (sizing)               | → `09b10c2`; md4x computes `n + n/4`, never forming `n*5`. `[ext]` `[misc]`               |
+| `589681b` | Tables: suppress too sparse tables (#346)                      | ported, diverged                          | → `1094346`; cap retuned to 65535, not deleted (16-bit `bits.data`). `[blk]`              |
+| `326fe25` | Footnotes: fix assert for a ref inside a wiki-link dest (#348) | ported                                    | → `09b10c2`; guard in `md_rollback` **and** `md_disable_marks`, now unreachable. `[ext]`  |
+| `193141e` | Refactor bracket resolution into md_resolve_brackets()         | do-not-port                               | Deliberately out of scope. `[inl]`                                                        |
+| `30c1a68` | Brackets: rename some mark flags                               | n/a                                       | md4x's flag values are frozen per `.agents/conventions.md`. `[inl]`                       |
+| `59af256` | Brackets: no-impact preparation for image handling             | n/a                                       | md4x collects image openers with `ch == '!'` directly. `[inl]`                            |
+| `9fa747c` | Fix code indentation and add missing `_T()`                    | n/a                                       | Re-indentation; `_T()` is identity in UTF-8 builds. `[misc]`                              |
+| `99d4667` | md2html: --replay-fuzz enforces debug output                   | **open**                                  | md4x's replay path overwrites `r_flags`, losing DEBUG. Prefix is 4 bytes, not 8. `[misc]` |
+| `1ecb4a4` | md_process_leaf_block: fix sparse table detection              | ported                                    | → `1094346`; only the `589681b`+typo-fix form was landed. `[blk]`                         |
+| `a962cdf` | md_resolve_bracket_wikilink: simplify a little                 | n/a                                       | Wiki links removed from md4x. `[inl]`                                                     |
+| `ff70673` | Brackets: remove extra pass for the bracket extension          | n/a                                       | Footnotes were hand-fitted into `md_resolve_links` instead. `[inl]`                       |
+| `1ec0ff4` | md_disable_marks: remove the footnote special case             | do-not-port                               | Would reintroduce the `326fe25` bug here. `[inl]` → corrected                             |
+| `fb4d03d` | Regressions: add a testcase from #352                          | ported                                    | → `26038a5`, in its `6ed63d1`-corrected form. `[uni]`                                     |
+| `ea20033` | Match cmark version of normalize.py                            | ported                                    | → `26038a5`, byte-identical to md4c HEAD. `[uni]`                                         |
+| `be7332b` | Update links to https                                          | **open**                                  | 10 md4x sources still carry `http://github.com/unjs/md4x`. `[misc]`                       |
+| `16a8df7` | Add apostrophe to HTML escaping                                | do-not-port (for now)                     | Not exploitable; 6 of 28 corpus hashes would move. `[rnd]`                                |
+| `323995c` | Add man page options, clean up md2html --help (#362)           | **open**                                  | `src/cli/md4x.1` is badly stale. `[misc]`                                                 |
+| `d2a08e5` | Add highlight span extension (#357)                            | ported, diverged                          | → `d59ea4e`; span carries `SpanAttrsDetail` so `==x=={.warn}` composes. `[ext]`           |
+| `c055ef5` | md_resolve_brackets: check the `[` is not disabled             | ported                                    | → `9eed904`; no standalone effect, mandatory with `44c90ca`. `[inl]`                      |
+| `6ed63d1` | Fix broken testcase related to #352                            | ported                                    | → `26038a5` (the corrected expectation is what was imported). `[misc]`                    |
+| `755ce49` | md_is_autolink_uri: scheme must begin with alnum (#369)        | ported                                    | → `47f4485`; **63 of 128** first bytes made bogus links. `[auto]` `[uni]`                 |
+| `38592ac` | Accept percent sign in auto links                              | ported                                    | → `00b9516`. `[auto]`                                                                     |
+| `6d168ef` | Make the tests more like current cmark (#373)                  | do-not-port                               | Would gut `spec-markdown.txt`; its timeout never fires. `[uni]`                           |
+| `ecbb091` | md_analyze_table_alignment: bound the dash scan                | ported                                    | → `76dff08`; latent, but `ctx.ch()` is never bounds-checked. `[blk]`                      |
+| `10e96ad` | Code spans: keep the line-break space                          | do-not-port                               | **Upstream regression; md4x fails 0 of the affected examples.** `[blk]`                   |
+| `65c6c9d` | md_html: escape raw HTML in image alt attribute                | ported                                    | → `c1a1990`; `onerror` became a live attribute. `[rnd]` `[uni]`                           |
+| `c4be862` | test/regressions.txt: fix some wording                         | already-fixed                             | Wording only; no example bodies changed. `[uni]`                                          |
 
 **Excluded from the table (31 of 120).** 29 commits touching only README/CHANGELOG/CI/CMake/
 `.gitignore`/version: `05c0e7f` `09819bf` `10c0158` `2855917` `2bac75e` `2ed8e52` `313429e`
@@ -563,9 +674,9 @@ Recorded because the ledger, not the report, is the durable artifact.
    apostrophe difference, reproducible with no link present. Autolink-attributable diffs reach
    zero.
 7. **Flag bits as landed.** `MD_FLAG_HIGHLIGHT = 0x100000` (`d59ea4e`),
-   `MD_FLAG_FOOTNOTES = 0x200000` (`09b10c2`, also in `MD_DIALECT_GITHUB`). md4x's bit
-   assignment diverges from upstream's from `0x10000` up; do not try to re-align — there is no
-   shared C ABI.
+   `MD_FLAG_FOOTNOTES = 0x200000` (`09b10c2`, also in `MD_DIALECT_GITHUB`) — upstream values.
+   md4x's own assignment diverged from `0x10000` up and is now moot: wave 3 deleted the flag
+   word entirely. Do not try to re-align, and do not reintroduce bits.
 8. **`language-` de-duplication reach.** The audit named the HTML and AST renderers.
    `packages/md4x/lib/_shared.mjs` also had to change: it reconstructed the `<pre><code …>`
    wrapper length assuming the prefix was always present, and under-trimmed by 9 bytes once the

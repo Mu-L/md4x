@@ -429,24 +429,18 @@ pub fn md_build_mark_char_map(ctx: *MD_CTX) void {
     ctx.mark_char_map['!'] = 1;
     ctx.mark_char_map[']'] = 1;
     ctx.mark_char_map[0] = 1;
-    // ':' is unconditional because emoji shortcodes are, unlike the two other
-    // ':' features below, not behind a dialect flag.
     ctx.mark_char_map[':'] = 1;
-
-    const flags = ctx.parser.flags;
-    if (flags & c.MD_FLAG_STRIKETHROUGH != 0) ctx.mark_char_map['~'] = 1;
-    if (flags & c.MD_FLAG_LATEXMATHSPANS != 0) ctx.mark_char_map['$'] = 1;
-    if (flags & c.MD_FLAG_HIGHLIGHT != 0) ctx.mark_char_map['='] = 1;
-    if (flags & c.MD_FLAG_PERMISSIVEEMAILAUTOLINKS != 0) ctx.mark_char_map['@'] = 1;
-    if (flags & c.MD_FLAG_PERMISSIVEWWWAUTOLINKS != 0) ctx.mark_char_map['.'] = 1;
-    if (flags & c.MD_FLAG_TABLES != 0) ctx.mark_char_map['|'] = 1;
-
-    if (flags & c.MD_FLAG_COLLAPSEWHITESPACE != 0) {
-        var i: usize = 0;
-        while (i < ctx.mark_char_map.len) : (i += 1) {
-            if (ISWHITESPACE_(@bitCast(@as(u8, @intCast(i))))) ctx.mark_char_map[i] = 1;
-        }
-    }
+    // md4x has one dialect, so the extension mark chars below are set
+    // unconditionally too: strikethrough '~', LaTeX math '$', highlight '=',
+    // permissive email autolinks '@', permissive www autolinks '.' and tables
+    // '|'. The map is constant — it exists only so the inline scanner can skip
+    // uninteresting bytes, not to select a dialect.
+    ctx.mark_char_map['~'] = 1;
+    ctx.mark_char_map['$'] = 1;
+    ctx.mark_char_map['='] = 1;
+    ctx.mark_char_map['@'] = 1;
+    ctx.mark_char_map['.'] = 1;
+    ctx.mark_char_map['|'] = 1;
 }
 
 // md4x.c ~2828. Detect a code span starting at `beg`.
@@ -756,26 +750,24 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
 
             // Potential autolink or raw HTML start/end.
             if (ch == '<') {
-                if (ctx.parser.flags & c.MD_FLAG_NOHTMLSPANS == 0) {
-                    var html_end: OFF = undefined;
-                    const is_html = md_is_html_any(ctx, line[0 .. lines.len - line_index], off, lines[lines.len - 1].end, &html_end);
-                    if (is_html) {
-                        if (addMark(ctx, '<', off, off, MarkFlags.opener | MarkFlags.resolved) == null) {
-                            ret = -1;
-                            return ret;
-                        }
-                        if (addMark(ctx, '>', html_end, html_end, MarkFlags.closer | MarkFlags.resolved) == null) {
-                            ret = -1;
-                            return ret;
-                        }
-                        ctx.marks.items[@intCast(ctx.nMarks() - 2)].next = ctx.nMarks() - 1;
-                        ctx.marks.items[@intCast(ctx.nMarks() - 1)].prev = ctx.nMarks() - 2;
-                        off = html_end;
-                        if (off > line.*.end) {
-                            line = md_lookup_line(off, lines, &line_index);
-                        }
-                        continue :scan;
+                var html_end: OFF = undefined;
+                const is_html = md_is_html_any(ctx, line[0 .. lines.len - line_index], off, lines[lines.len - 1].end, &html_end);
+                if (is_html) {
+                    if (addMark(ctx, '<', off, off, MarkFlags.opener | MarkFlags.resolved) == null) {
+                        ret = -1;
+                        return ret;
                     }
+                    if (addMark(ctx, '>', html_end, html_end, MarkFlags.closer | MarkFlags.resolved) == null) {
+                        ret = -1;
+                        return ret;
+                    }
+                    ctx.marks.items[@intCast(ctx.nMarks() - 2)].next = ctx.nMarks() - 1;
+                    ctx.marks.items[@intCast(ctx.nMarks() - 1)].prev = ctx.nMarks() - 2;
+                    off = html_end;
+                    if (off > line.*.end) {
+                        line = md_lookup_line(off, lines, &line_index);
+                    }
+                    continue :scan;
                 }
 
                 var autolink_end: OFF = undefined;
@@ -808,9 +800,7 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
             // mistaken for a link / image opener. The opener spans
             // `[^` (end - beg == 2); the `]` is collected by the generic closer
             // arm below and paired by md_analyze_bracket like any other bracket.
-            if ((ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) and
-                ch == '[' and off + 1 < line.*.end and ctx.ch(off + 1) == '^')
-            {
+            if (ch == '[' and off + 1 < line.*.end and ctx.ch(off + 1) == '^') {
                 const tmp: OFF = off + 2;
                 if (addMark(ctx, '[', off, tmp, MarkFlags.potential_opener | MarkFlags.footnote_ref) == null) {
                     ret = -1;
@@ -899,8 +889,7 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 }
 
                 comp: {
-                    if ((ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0) and
-                        off + 1 < line.*.end and ctx.isAlpha(off + 1) and
+                    if (off + 1 < line.*.end and ctx.isAlpha(off + 1) and
                         (off == line.*.beg or !ctx.isAlnum(off - 1)))
                     {
                         var name_end: OFF = off + 2;
@@ -1011,7 +1000,7 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 // not_component:
 
                 // Potential permissive URL autolink.
-                if (ctx.parser.flags & c.MD_FLAG_PERMISSIVEURLAUTOLINKS != 0) {
+                {
                     const SchemeEntry = struct { scheme: [*c]const CHAR, scheme_size: SZ, suffix: [*c]const CHAR, suffix_size: SZ };
                     const scheme_map = [_]SchemeEntry{
                         .{ .scheme = "http", .scheme_size = 4, .suffix = "//", .suffix_size = 2 },
@@ -1076,11 +1065,11 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 continue :scan;
             }
 
-            // Potential highlight start/end: `==text==`. Gated by the flag
-            // because `=` is otherwise an ordinary character (setext
-            // underlines are block-level and never reach the mark collector,
-            // and `key=value` in attributes/props uses a single `=`).
-            if (ch == '=' and ctx.parser.flags & c.MD_FLAG_HIGHLIGHT != 0) {
+            // Potential highlight start/end: `==text==`. A lone `=` stays an
+            // ordinary character (setext underlines are block-level and never
+            // reach the mark collector, and `key=value` in attributes/props
+            // uses a single `=`); only a run of exactly two opens a mark.
+            if (ch == '=') {
                 var tmp: OFF = off + 1;
                 while (tmp < line.*.end and ctx.ch(tmp) == '=') tmp += 1;
 
@@ -1429,7 +1418,7 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                 if (is_link < 0) return -1;
             }
 
-            if (is_link == 0 and (ctx.parser.flags & c.MD_FLAG_ATTRIBUTES != 0) and opener.ch == '[') {
+            if (is_link == 0 and opener.ch == '[') {
                 // Might be a [text]{attrs} span.
                 if (closer.end < ctx.size and ctx.ch(closer.end) == '{') {
                     if (md_match_brace(ctx, closer.end) catch return -1) |brace_end| {
@@ -1468,28 +1457,28 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
 
                 md_analyze_link_contents(ctx, lines, opener_index + 1, closer_index);
 
-                if (ctx.parser.flags & c.MD_FLAG_PERMISSIVEAUTOLINKS != 0) {
-                    var first_nested_i: c_int = opener_index + 1;
-                    while (ctx.marks.items[@intCast(first_nested_i)].ch == 'D' and first_nested_i < closer_index) first_nested_i += 1;
+                // If a permissive autolink is the link's entire label, drop it:
+                // `[http://example.com](/x)` must not nest an <a> in an <a>.
+                var first_nested_i: c_int = opener_index + 1;
+                while (ctx.marks.items[@intCast(first_nested_i)].ch == 'D' and first_nested_i < closer_index) first_nested_i += 1;
 
-                    // NOTE: the C loop condition tests first_nested->ch (md4c quirk); preserved verbatim.
-                    var last_nested_i: c_int = closer_index - 1;
-                    while (ctx.marks.items[@intCast(first_nested_i)].ch == 'D' and last_nested_i > opener_index) last_nested_i -= 1;
+                // NOTE: the C loop condition tests first_nested->ch (md4c quirk); preserved verbatim.
+                var last_nested_i: c_int = closer_index - 1;
+                while (ctx.marks.items[@intCast(first_nested_i)].ch == 'D' and last_nested_i > opener_index) last_nested_i -= 1;
 
-                    const first_nested = &ctx.marks.items[@intCast(first_nested_i)];
-                    const last_nested = &ctx.marks.items[@intCast(last_nested_i)];
+                const first_nested = &ctx.marks.items[@intCast(first_nested_i)];
+                const last_nested = &ctx.marks.items[@intCast(last_nested_i)];
 
-                    if ((first_nested.flags & MarkFlags.resolved != 0) and
-                        first_nested.beg == opener.end and
-                        ISANYOF_(first_nested.ch, "@:.") and
-                        first_nested.next == last_nested_i and
-                        last_nested.end == closer.beg)
-                    {
-                        first_nested.ch = 'D';
-                        first_nested.flags &= ~MarkFlags.resolved;
-                        last_nested.ch = 'D';
-                        last_nested.flags &= ~MarkFlags.resolved;
-                    }
+                if ((first_nested.flags & MarkFlags.resolved != 0) and
+                    first_nested.beg == opener.end and
+                    ISANYOF_(first_nested.ch, "@:.") and
+                    first_nested.next == last_nested_i and
+                    last_nested.end == closer.beg)
+                {
+                    first_nested.ch = 'D';
+                    first_nested.flags &= ~MarkFlags.resolved;
+                    last_nested.ch = 'D';
+                    last_nested.flags &= ~MarkFlags.resolved;
                 }
             }
         }
@@ -2011,8 +2000,6 @@ pub fn md_find_inline_attr(ctx: *MD_CTX, closer_index: c_int, raw: *[*c]const CH
 
 // md4x.c ~4454.
 pub fn md_resolve_attrs(ctx: *MD_CTX) c_int {
-    if (ctx.parser.flags & c.MD_FLAG_ATTRIBUTES == 0) return 0;
-
     ctx.inline_attrs.clearRetainingCapacity();
 
     var i: c_int = 0;
@@ -2072,8 +2059,7 @@ pub fn md_analyze_inlines(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool
 
     // (1b) Footnote references. Must run after links, so a footnote pair inside
     // a resolved link is still found and one inside a link URL is already dead.
-    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0)
-        md_resolve_footnote_refs(ctx);
+    md_resolve_footnote_refs(ctx);
 
     if (table_mode) {
         // (2) Table cell boundaries.
@@ -2095,13 +2081,10 @@ pub fn md_analyze_inlines(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool
 // md4x.c ~4574.
 pub fn md_analyze_link_contents(ctx: *MD_CTX, lines: []const MD_LINE, mark_beg: c_int, mark_end: c_int) void {
     md_analyze_marks(ctx, lines, mark_beg, mark_end, "&", 0);
-    // `=` marks only exist when MD_FLAG_HIGHLIGHT is on, so the char can be
-    // listed unconditionally (md4c builds the string from the flags instead).
+    // Every mark char is listed literally; md4c built these strings from the
+    // dialect flags, but md4x has one dialect so the sets are constant.
     md_analyze_marks(ctx, lines, mark_beg, mark_end, "*_~$=", 0);
-
-    if (ctx.parser.flags & c.MD_FLAG_PERMISSIVEAUTOLINKS != 0) {
-        md_analyze_marks(ctx, lines, mark_beg, mark_end, "@:.", MD_ANALYZE_NOSKIP_EMPH);
-    }
+    md_analyze_marks(ctx, lines, mark_beg, mark_end, "@:.", MD_ANALYZE_NOSKIP_EMPH);
 
     var i: usize = 0;
     while (i < ctx.opener_stacks.len) : (i += 1) ctx.opener_stacks[i].top = -1;
@@ -2570,7 +2553,7 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                 var break_type: c.TextType = c.TextType.softbr;
 
                 if (text_type == c.TextType.normal) {
-                    if (enforce_hardbreak != 0 or (ctx.parser.flags & c.MD_FLAG_HARD_SOFT_BREAKS != 0)) {
+                    if (enforce_hardbreak != 0) {
                         break_type = c.TextType.br;
                     } else {
                         while (off < ctx.size and ctx.isBlank(off)) off += 1;

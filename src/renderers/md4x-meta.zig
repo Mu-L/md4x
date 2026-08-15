@@ -333,7 +333,6 @@ pub fn md_meta(
     input_size: c.MD_SIZE,
     process_output: ProcessOutputFn,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int {
     var input_ptr = input;
@@ -346,13 +345,12 @@ pub fn md_meta(
             heal_buf_free(&hbuf);
             return -1;
         }
-        const ret = md_meta(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, parser_flags, renderer_flags & ~MD_META_FLAG_HEAL);
+        const ret = md_meta(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, renderer_flags & ~MD_META_FLAG_HEAL);
         heal_buf_free(&hbuf);
         return ret;
     }
 
     const parser: c.Parser = .{
-        .flags = parser_flags,
         .enter_block = meta_enter_block,
         .leave_block = meta_leave_block,
         .enter_span = meta_enter_span,

@@ -1,11 +1,11 @@
 # Highlight
 
-With the flag `MD_FLAG_HIGHLIGHT`, MD4X enables extension for recognition of
-inline highlight spans, written as `==text==` and rendered as `<mark>`.
+MD4X always recognizes inline highlight spans, written as `==text==` and
+rendered as `<mark>`; the extension is unconditional.
 
-Ported from md4c `d2a08e5`. Note MD4X always parses with `MD_DIALECT_ALL`, so
-the examples below also show how highlight composes with the other extensions;
-md4c's "flag required" section cannot be expressed here.
+Ported from md4c `d2a08e5`. Note MD4X has one dialect with every extension on,
+so the examples below also show how highlight composes with the other
+extensions; md4c's "flag required" section cannot be expressed here.
 
 ```````````````````````````````` example
 ==Hello, world!==

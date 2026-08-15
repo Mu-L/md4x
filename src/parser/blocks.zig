@@ -33,6 +33,7 @@ const MD_BLOCK_CONTAINER_CLOSER = types.MD_BLOCK_CONTAINER_CLOSER;
 const MD_BLOCK_LOOSE_LIST = types.MD_BLOCK_LOOSE_LIST;
 const MD_BLOCK_SETEXT_HEADER = types.MD_BLOCK_SETEXT_HEADER;
 const MAX_BLOCK_INFO_RECORDS = types.MAX_BLOCK_INFO_RECORDS;
+const CODE_INDENT_OFFSET = types.CODE_INDENT_OFFSET;
 
 const uval = util.uval;
 const ISANYOF2_ = util.ISANYOF2_;
@@ -159,12 +160,11 @@ pub fn md_consume_link_reference_definitions(ctx: *MD_CTX) c_int {
     while (n < n_lines) {
         var n_consumed: c_int = 0;
 
-        // With footnotes enabled, a line starting `[^` is offered to the
-        // footnote recognizer FIRST. Otherwise `[^x]: url` is swallowed by the
-        // link-reference recognizer as a ref def labelled `^x` — which is
-        // exactly the mis-parse this extension fixes.
-        if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0 and
-            lines[n].beg + 1 < ctx.size and
+        // A line starting `[^` is offered to the footnote recognizer FIRST.
+        // Otherwise `[^x]: url` is swallowed by the link-reference recognizer
+        // as a ref def labelled `^x` — which is exactly the mis-parse the
+        // footnote extension fixes.
+        if (lines[n].beg + 1 < ctx.size and
             ctx.ch(lines[n].beg) == '[' and ctx.ch(lines[n].beg + 1) == '^')
         {
             n_consumed = md_is_footnote_definition(ctx, lines[n..n_lines]);
@@ -362,8 +362,7 @@ pub fn md_is_atxheader_line(ctx: *MD_CTX, beg: OFF, p_beg: *OFF, p_end: *OFF, p_
         return false;
     p_level.* = n;
 
-    if ((ctx.parser.flags & c.MD_FLAG_PERMISSIVEATXHEADERS == 0) and off < ctx.size and
-        !ctx.isBlank(off) and !ctx.isNewline(off))
+    if (off < ctx.size and !ctx.isBlank(off) and !ctx.isNewline(off))
         return false;
 
     while (off < ctx.size and ctx.isBlank(off))
@@ -821,12 +820,12 @@ fn md_frontmatter_has_closing_fence(ctx: *MD_CTX, off_in: OFF) bool {
         if (off < ctx.size and ctx.ch(off) == '\n') off += 1;
 
         // Leading whitespace. A tab counts as a full tab stop, which is all the
-        // precision the `< code_indent_offset` test below needs.
+        // precision the `< CODE_INDENT_OFFSET` test below needs.
         var indent: c_uint = 0;
         while (off < ctx.size and ctx.isBlank(off)) : (off += 1)
             indent += if (ctx.ch(off) == '\t') 4 else 1;
 
-        if (indent < ctx.code_indent_offset and off < ctx.size and ctx.ch(off) == '-') {
+        if (indent < CODE_INDENT_OFFSET and off < ctx.size and ctx.ch(off) == '-') {
             var tmp: OFF = off;
             while (tmp < ctx.size and ctx.ch(tmp) == '-')
                 tmp += 1;
@@ -942,7 +941,7 @@ fn md_frontmatter_body_is_yaml(ctx: *MD_CTX, off_in: OFF, allow_empty_body: bool
             indent += if (ctx.ch(content) == '\t') 4 else 1;
 
         // The closing fence, reached before any line of substance.
-        if (indent < ctx.code_indent_offset and content < end and ctx.ch(content) == '-') {
+        if (indent < CODE_INDENT_OFFSET and content < end and ctx.ch(content) == '-') {
             var tmp: OFF = content;
             while (tmp < end and ctx.ch(tmp) == '-')
                 tmp += 1;
@@ -1164,7 +1163,7 @@ pub fn md_leave_child_containers(ctx: *MD_CTX, n_keep: c_int) c_int {
 pub fn md_is_container_mark(ctx: *MD_CTX, indent: c_uint, beg: OFF, p_end: *OFF, p_container: *MD_CONTAINER) bool {
     var off: OFF = beg;
 
-    if (off >= ctx.size or indent >= ctx.code_indent_offset)
+    if (off >= ctx.size or indent >= CODE_INDENT_OFFSET)
         return false;
 
     // Check for block quote mark.
@@ -1259,7 +1258,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
     while (n_parents < ctx.nContainers()) {
         const cont = &ctx.containers.items[@intCast(n_parents)];
 
-        if (cont.ch == '>' and line.indent < ctx.code_indent_offset and
+        if (cont.ch == '>' and line.indent < CODE_INDENT_OFFSET and
             off < ctx.size and ctx.ch(off) == '>')
         {
             // Block quote mark.
@@ -1313,7 +1312,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             // pivot_line is the opener line (the pivot only moves when a new
             // block starts), so its first byte is the fence character.
             if (pivot_line.data == 3) {
-                if (line.indent < ctx.code_indent_offset and
+                if (line.indent < CODE_INDENT_OFFSET and
                     md_is_closing_code_fence(ctx, ctx.ch(pivot_line.beg), off, &off))
                 {
                     line.type = .blank;
@@ -1333,7 +1332,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             }
 
             // Check for closing --- fence.
-            if (line.indent < ctx.code_indent_offset and
+            if (line.indent < CODE_INDENT_OFFSET and
                 off < ctx.size and ctx.ch(off) == '-')
             {
                 var tmp: OFF = off;
@@ -1373,7 +1372,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             line.beg = off;
 
             // Another .fenced_code unless closing fence (→ .blank).
-            if (line.indent < ctx.code_indent_offset) {
+            if (line.indent < CODE_INDENT_OFFSET) {
                 if (md_is_closing_code_fence(ctx, ctx.ch(pivot_line.beg), off, &off)) {
                     line.type = .blank;
                     ctx.last_line_has_list_loosening_effect = false;
@@ -1419,8 +1418,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for block component closer (::).
-        if ((ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0) and ctx.block_component_nesting > 0 and
-            (line.indent < ctx.code_indent_offset or inside_component != 0) and off < ctx.size and ctx.ch(off) == ':')
+        if (ctx.block_component_nesting > 0 and
+            (line.indent < CODE_INDENT_OFFSET or inside_component != 0) and off < ctx.size and ctx.ch(off) == ':')
         {
             var tmp: OFF = undefined;
             const closer_colons = md_is_block_component_closer(ctx, off, &tmp);
@@ -1452,8 +1451,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for slot opener (#slot-name) inside a block component.
-        if ((ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0) and ctx.block_component_nesting > 0 and
-            (line.indent < ctx.code_indent_offset or inside_component != 0) and
+        if (ctx.block_component_nesting > 0 and
+            (line.indent < CODE_INDENT_OFFSET or inside_component != 0) and
             pivot_line.type != .text and
             off < ctx.size and ctx.ch(off) == '#')
         {
@@ -1515,8 +1514,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         if (off >= ctx.size or ctx.isNewline(off)) {
             if (pivot_line.type == .indented_code and n_parents == ctx.nContainers()) {
                 line.type = .indented_code;
-                if (line.indent > ctx.code_indent_offset)
-                    line.indent -= ctx.code_indent_offset
+                if (line.indent > CODE_INDENT_OFFSET)
+                    line.indent -= CODE_INDENT_OFFSET
                 else
                     line.indent = 0;
                 ctx.last_line_has_list_loosening_effect = false;
@@ -1562,8 +1561,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for alert syntax > [!TYPE] inside a newly opened blockquote.
-        if ((ctx.parser.flags & c.MD_FLAG_ALERTS != 0) and n_children > 0 and
-            line.indent < ctx.code_indent_offset and
+        if (n_children > 0 and
+            line.indent < CODE_INDENT_OFFSET and
             off < ctx.size and ctx.ch(off) == '[')
         {
             const last_cont: c_int = ctx.nContainers() - 1;
@@ -1602,7 +1601,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check whether we are Setext underline.
-        if (line.indent < ctx.code_indent_offset and pivot_line.type == .text and
+        if (line.indent < CODE_INDENT_OFFSET and pivot_line.type == .text and
             off < ctx.size and ctx.isAnyOf2(off, '=', '-') and
             (n_parents == ctx.nContainers()))
         {
@@ -1616,9 +1615,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for frontmatter opening at the very start of the document.
-        if ((ctx.parser.flags & c.MD_FLAG_FRONTMATTER != 0) and
-            ctx.frontmatter_state == 0 and
-            line.indent < ctx.code_indent_offset and n_parents == 0 and
+        if (ctx.frontmatter_state == 0 and
+            line.indent < CODE_INDENT_OFFSET and n_parents == 0 and
             off < ctx.size and ctx.ch(off) == '-')
         {
             var tmp: OFF = off;
@@ -1655,9 +1653,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             ctx.frontmatter_state = 2;
 
         // Check for component frontmatter opener (--- inside a block component).
-        if ((ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0) and
-            ctx.block_component_nesting > 0)
-        {
+        if (ctx.block_component_nesting > 0) {
             // Find the innermost component container.
             var comp_i: c_int = ctx.nContainers() - 1;
             while (comp_i >= 0) : (comp_i -= 1) {
@@ -1666,7 +1662,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             }
             if (comp_i >= 0 and ctx.containers.items[@intCast(comp_i)].comp_fm_state == 0) {
                 var found_opener: bool = false;
-                if (line.indent < ctx.code_indent_offset and
+                if (line.indent < CODE_INDENT_OFFSET and
                     off < ctx.size and ctx.ch(off) == '-')
                 {
                     var tmp: OFF = off;
@@ -1693,7 +1689,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                 }
                 // The codeblock spelling, ```yaml [props] ... ```, accepted in
                 // exactly the same position and closed by an ordinary code fence.
-                if (!found_opener and line.indent < ctx.code_indent_offset and
+                if (!found_opener and line.indent < CODE_INDENT_OFFSET and
                     off < ctx.size and ctx.isAnyOf2(off, '`', '~'))
                 {
                     var tmp: OFF = off;
@@ -1714,7 +1710,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for thematic break line.
-        if (line.indent < ctx.code_indent_offset and
+        if (line.indent < CODE_INDENT_OFFSET and
             off < ctx.size and off >= hr_killer and
             ctx.isAnyOf(off, "-_*"))
         {
@@ -1743,7 +1739,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                 // Some of the following whitespace still belongs to the mark.
                 if (off >= ctx.size or ctx.isNewline(off)) {
                     container.contents_indent += 1;
-                } else if (line.indent <= ctx.code_indent_offset) {
+                } else if (line.indent <= CODE_INDENT_OFFSET) {
                     container.contents_indent += line.indent;
                     line.indent = 0;
                 } else {
@@ -1761,16 +1757,15 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
 
         // Check for indented code (cannot interrupt a paragraph; disabled
         // inside block components).
-        if (line.indent >= ctx.code_indent_offset and inside_component == 0 and (pivot_line.type != .text)) {
+        if (line.indent >= CODE_INDENT_OFFSET and inside_component == 0 and (pivot_line.type != .text)) {
             line.type = .indented_code;
-            line.indent -= ctx.code_indent_offset;
+            line.indent -= CODE_INDENT_OFFSET;
             line.data = 0;
             break :classify;
         }
 
         // Check for block component opener (::name or ::name{props}).
-        if ((ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0) and
-            (line.indent < ctx.code_indent_offset or inside_component != 0) and
+        if ((line.indent < CODE_INDENT_OFFSET or inside_component != 0) and
             pivot_line.type != .text and
             off < ctx.size and ctx.ch(off) == ':')
         {
@@ -1819,7 +1814,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for start of a new container block.
-        if (line.indent < ctx.code_indent_offset and
+        if (line.indent < CODE_INDENT_OFFSET and
             md_is_container_mark(ctx, line.indent, off, &off, &container))
         {
             if (pivot_line.type == .text and n_parents == ctx.nContainers() and
@@ -1841,7 +1836,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                 // Some of the following whitespace still belongs to the mark.
                 if (off >= ctx.size or ctx.isNewline(off)) {
                     container.contents_indent += 1;
-                } else if (line.indent <= ctx.code_indent_offset) {
+                } else if (line.indent <= CODE_INDENT_OFFSET) {
                     container.contents_indent += line.indent;
                     line.indent = 0;
                 } else {
@@ -1870,7 +1865,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for ATX header.
-        if (line.indent < ctx.code_indent_offset and
+        if (line.indent < CODE_INDENT_OFFSET and
             off < ctx.size and ctx.ch(off) == '#')
         {
             var level: c_uint = undefined;
@@ -1883,7 +1878,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check whether we are starting code fence.
-        if (line.indent < ctx.code_indent_offset and
+        if (line.indent < CODE_INDENT_OFFSET and
             off < ctx.size and ctx.isAnyOf2(off, '`', '~'))
         {
             if (md_is_opening_code_fence(ctx, off, &off)) {
@@ -1900,9 +1895,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         // guard, so `    <div>` interrupts a paragraph there; md4x deliberately
         // deviates.) Inside a block component indented code is disabled, so the
         // guard lifts there, matching the component-aware checks above.
-        if ((line.indent < ctx.code_indent_offset or inside_component != 0) and
-            off < ctx.size and ctx.ch(off) == '<' and
-            (ctx.parser.flags & c.MD_FLAG_NOHTMLBLOCKS == 0))
+        if ((line.indent < CODE_INDENT_OFFSET or inside_component != 0) and
+            off < ctx.size and ctx.ch(off) == '<')
         {
             ctx.html_block_type = md_is_html_block_start_condition(ctx, off);
 
@@ -1923,7 +1917,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for table underline.
-        if ((ctx.parser.flags & c.MD_FLAG_TABLES != 0) and pivot_line.type == .text and
+        if (pivot_line.type == .text and
             off < ctx.size and ctx.isAnyOf3(off, '|', '-', ':') and
             n_parents == ctx.nContainers())
         {
@@ -1946,7 +1940,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         }
 
         // Check for task mark.
-        if ((ctx.parser.flags & c.MD_FLAG_TASKLISTS != 0) and n_brothers + n_children > 0 and
+        if (n_brothers + n_children > 0 and
             ISANYOF_(ctx.containers.items[@intCast(ctx.nContainers() - 1)].ch, "-+*.)"))
         {
             var tmp: OFF = off;
@@ -1998,7 +1992,7 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             tmp -= 1;
         while (tmp > line.beg and ctx.ch(tmp - 1) == '#')
             tmp -= 1;
-        if (tmp == line.beg or ctx.isBlank(tmp - 1) or (ctx.parser.flags & c.MD_FLAG_PERMISSIVEATXHEADERS != 0))
+        if (tmp == line.beg or ctx.isBlank(tmp - 1))
             line.end = tmp;
     }
 

@@ -80,7 +80,6 @@ const md4x_render_fn = *const fn (
     *const fn ([*c]const abi.MD_CHAR, abi.MD_SIZE, ?*anyopaque) void,
     ?*anyopaque,
     c_uint,
-    c_uint,
 ) c_int;
 
 fn render_impl(env: c.napi_env, info: c.napi_callback_info, fn_ptr: md4x_render_fn) c.napi_value {
@@ -115,7 +114,7 @@ fn render_impl(env: c.napi_env, info: c.napi_callback_info, fn_ptr: md4x_render_
 
     // Render with all extensions enabled
     var buf = napi_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
-    const ret = fn_ptr(@ptrCast(input), @intCast(input_size), napi_buf_append, &buf, abi.MD_DIALECT_ALL, renderer_flags);
+    const ret = fn_ptr(@ptrCast(input), @intCast(input_size), napi_buf_append, &buf, renderer_flags);
     std.c.free(input);
 
     if (ret != 0 or buf.err != 0) {
@@ -298,11 +297,11 @@ fn render_highlightable(env: c.napi_env, info: c.napi_callback_info, comptime ki
     const ret = switch (kind) {
         .html => blk: {
             const opts: lib.MD_HTML_OPTS = .{ .highlighter = hook };
-            break :blk lib.md_html_ex(@ptrCast(input), @intCast(input_size), napi_buf_append, &buf, abi.MD_DIALECT_ALL, renderer_flags, &opts);
+            break :blk lib.md_html_ex(@ptrCast(input), @intCast(input_size), napi_buf_append, &buf, renderer_flags, &opts);
         },
         .ansi => blk: {
             const opts: lib.MD_ANSI_OPTS = .{ .highlighter = hook };
-            break :blk lib.md_ansi_ex(@ptrCast(input), @intCast(input_size), napi_buf_append, &buf, abi.MD_DIALECT_ALL, renderer_flags, &opts);
+            break :blk lib.md_ansi_ex(@ptrCast(input), @intCast(input_size), napi_buf_append, &buf, renderer_flags, &opts);
         },
     };
     std.c.free(input);

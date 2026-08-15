@@ -256,7 +256,7 @@ Content</p>
 
 ## Indented tag is an indented code block, not an alert
 
-The recognizer is gated on `line.indent < code_indent_offset`. Five spaces
+The recognizer is gated on `line.indent < CODE_INDENT_OFFSET`. Five spaces
 after the `>` leave four columns of indent inside the quote, which opens an
 indented code block before the tag is ever considered (md4c #336, `110011e`).
 
@@ -274,7 +274,7 @@ indented code block before the tag is ever considered (md4c #336, `110011e`).
 ## Indent boundary: three columns still opens an alert
 
 One space fewer than the case above -- three columns of indent -- is still
-below `code_indent_offset`, so this *is* an alert. The pair pins the exact
+below `CODE_INDENT_OFFSET`, so this *is* an alert. The pair pins the exact
 boundary.
 
 ```````````````````````````````` example

@@ -56,9 +56,8 @@ const SZ = types.SZ; // == c_uint (32-bit)
 const OFF = types.OFF; // == c_uint (32-bit)
 const MD_SIZE = types.MD_SIZE; // explicit alias used in a few signatures
 
-// SZ_MAX / OFF_MAX (UTF-8 build: 32-bit unsigned).
+// SZ_MAX (UTF-8 build: 32-bit unsigned).
 const SZ_MAX = types.SZ_MAX;
-const OFF_MAX = types.OFF_MAX;
 
 // ----------------------------------------------------------------------------
 // Boolean constants and small helpers (`SIZEOF_ARRAY` becomes `.len`).
@@ -244,7 +243,6 @@ fn md_parse_impl(alloc: std.mem.Allocator, text: [*c]const CHAR, size: SZ, parse
     ctx.size = size;
     ctx.parser = parser.*;
     ctx.userdata = userdata;
-    ctx.code_indent_offset = if (ctx.parser.flags & c.MD_FLAG_NOINDENTEDCODEBLOCKS != 0) OFF_MAX else 4;
     md_build_mark_char_map(&ctx);
     ctx.doc_ends_with_newline = size > 0 and ISNEWLINE_(text[size - 1]);
     {
@@ -306,7 +304,6 @@ comptime {
     _ = &md_build_attribute;
     _ = &md_free_attribute;
     _ = &SZ_MAX;
-    _ = &OFF_MAX;
     _ = &entity_lookup_wrap;
     // Pass B: ref-defs + link recognizers (consumed by Pass C/D/E).
     _ = &md_lookup_line;
@@ -353,7 +350,6 @@ fn _test_run_inline(parser: *const c.Parser, text: [*c]const CHAR, size: SZ) c_i
     ctx.size = size;
     ctx.parser = parser.*;
     ctx.userdata = null;
-    ctx.code_indent_offset = if (ctx.parser.flags & c.MD_FLAG_NOINDENTEDCODEBLOCKS != 0) OFF_MAX else 4;
     md_build_mark_char_map(&ctx);
     ctx.doc_ends_with_newline = size > 0 and ISNEWLINE_(text[size - 1]);
     ctx.max_ref_def_output = 1024 * 1024;
@@ -560,7 +556,6 @@ fn _test_run_analyze(parser: *const c.Parser, text: [*c]const CHAR, size: SZ, ou
     ctx.size = size;
     ctx.parser = parser.*;
     ctx.userdata = null;
-    ctx.code_indent_offset = if (ctx.parser.flags & c.MD_FLAG_NOINDENTEDCODEBLOCKS != 0) OFF_MAX else 4;
     ctx.doc_ends_with_newline = size > 0 and ISNEWLINE_(text[size - 1]);
     ctx.max_ref_def_output = 1024 * 1024;
 
@@ -762,7 +757,6 @@ const AbortProbe = struct {
     fn parser(self: *AbortProbe) c.Parser {
         _ = self;
         return .{
-            .flags = c.MD_DIALECT_ALL,
             .enter_block = AbortProbe.enterBlock,
             .leave_block = AbortProbe.leaveBlock,
             .enter_span = AbortProbe.enterSpan,
@@ -968,7 +962,6 @@ const HrefProbe = struct {
 
     fn parser() c.Parser {
         return .{
-            .flags = c.MD_DIALECT_ALL,
             .enter_block = HrefProbe.noopBlock,
             .leave_block = HrefProbe.noopBlock,
             .enter_span = HrefProbe.enterSpan,
@@ -1075,7 +1068,6 @@ const CapProbe = struct {
 
     fn parser() c.Parser {
         return .{
-            .flags = c.MD_DIALECT_ALL,
             .enter_block = CapProbe.enterBlock,
             .leave_block = CapProbe.leaveBlock,
             .enter_span = CapProbe.noopSpan,
@@ -1878,7 +1870,6 @@ const TraceProbe = struct {
 
     fn parser() c.Parser {
         return .{
-            .flags = c.MD_DIALECT_ALL,
             .enter_block = TraceProbe.enterBlock,
             .leave_block = TraceProbe.leaveBlock,
             .enter_span = TraceProbe.enterSpan,

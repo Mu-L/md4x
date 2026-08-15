@@ -1,8 +1,8 @@
 
 # Frontmatter
 
-With the flag `MD_FLAG_FRONTMATTER`, MD4X enables recognition of YAML-style
-frontmatter blocks delimited by `---` at the very beginning of the document.
+MD4X always recognizes YAML-style frontmatter blocks delimited by `---` at the
+very beginning of the document; the extension is unconditional.
 
 The frontmatter block must start with a line of three or more dashes as the
 very first line of the document.
@@ -68,8 +68,8 @@ title: Hello
 <h2>title: Hello</h2>
 ````````````````````````````````
 
-`MD_FLAG_FRONTMATTER` is set unconditionally by the CLI and there is no
-option to clear it, so this suite cannot observe the flag-off behaviour
+Frontmatter recognition is unconditional and there is no option to turn it
+off, so this suite cannot observe the disabled behaviour
 (`---` lines parsed as thematic breaks). An example claiming to cover it
 used to sit here; its input was byte-identical to the flag-on example above
 and its expected output was the flag-on output, so it could only ever pass

@@ -1145,7 +1145,6 @@ pub fn md_markdown(
     input_size: c.MD_SIZE,
     process_output: ProcessOutputFn,
     userdata: ?*anyopaque,
-    parser_flags: c_uint,
     renderer_flags: c_uint,
 ) c_int {
     var input_ptr = input;
@@ -1158,13 +1157,12 @@ pub fn md_markdown(
             heal_buf_free(&hbuf);
             return -1;
         }
-        const ret = md_markdown(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, parser_flags, renderer_flags & ~MD_MARKDOWN_FLAG_HEAL);
+        const ret = md_markdown(@ptrCast(hbuf.data), hbuf.size, process_output, userdata, renderer_flags & ~MD_MARKDOWN_FLAG_HEAL);
         heal_buf_free(&hbuf);
         return ret;
     }
 
     const parser: c.Parser = .{
-        .flags = parser_flags,
         .enter_block = enter_block_callback,
         .leave_block = leave_block_callback,
         .enter_span = enter_span_callback,

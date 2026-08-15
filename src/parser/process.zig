@@ -834,11 +834,6 @@ const MD_BLOCK_ATTR_FRAME = struct {
 // block arena, before any callback fires — both decisions need the whole block
 // tree, which a streaming renderer never has in hand.
 fn md_resolve_block_attrs(ctx: *MD_CTX) error{OutOfMemory}!void {
-    const do_attrs = ctx.parser.flags & c.MD_FLAG_ATTRIBUTES != 0;
-    const do_fold = ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0;
-    if (!do_attrs and !do_fold)
-        return;
-
     // Local to the pass — deliberately not an MD_CTX field, since nothing
     // outside it ever reads the stack.
     var stack: std.ArrayListUnmanaged(MD_BLOCK_ATTR_FRAME) = .empty;
@@ -855,10 +850,10 @@ fn md_resolve_block_attrs(ctx: *MD_CTX) error{OutOfMemory}!void {
             // them in, so the frames nest the same way.
             if (flags & MD_BLOCK_CONTAINER_CLOSER != 0 and stack.items.len > 0) {
                 const frame = stack.pop().?;
-                if (do_attrs) md_close_block_attr_frame(ctx, &frame);
+                md_close_block_attr_frame(ctx, &frame);
                 // After md_close_block_attr_frame: a quote that just took a
                 // lifted run must not also take a wrapper's props.
-                if (do_fold) md_fold_wrapper_component(ctx, &frame, block);
+                md_fold_wrapper_component(ctx, &frame, block);
             }
 
             if (flags & MD_BLOCK_CONTAINER_OPENER != 0) {
@@ -889,7 +884,7 @@ fn md_resolve_block_attrs(ctx: *MD_CTX) error{OutOfMemory}!void {
 
         md_count_block_attr_child(&stack, byte_off);
 
-        if (do_attrs and (btype == c.BlockType.p or btype == c.BlockType.h) and block.n_lines > 0) {
+        if ((btype == c.BlockType.p or btype == c.BlockType.h) and block.n_lines > 0) {
             const lines: [*]MD_LINE = @ptrCast(@alignCast(@as([*]MD_BLOCK, @ptrCast(block)) + 1));
             const last = &lines[block.n_lines - 1];
             if (md_find_block_attrs(ctx, last.beg, last.end)) |text_end| {
@@ -1528,10 +1523,8 @@ pub fn md_process_doc(ctx: *MD_CTX) c_int {
 
     ret = md_build_ref_def_hashtable(ctx);
     if (ret < 0) return ret;
-    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) {
-        ret = md_build_footnote_def_hashtable(ctx);
-        if (ret < 0) return ret;
-    }
+    ret = md_build_footnote_def_hashtable(ctx);
+    if (ret < 0) return ret;
 
     // Process all blocks.
     ret = md_leave_child_containers(ctx, 0);
@@ -1540,10 +1533,8 @@ pub fn md_process_doc(ctx: *MD_CTX) c_int {
     if (ret < 0) return ret;
 
     // Emit the referenced footnote definitions, in reference order.
-    if (ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) {
-        ret = md_process_footnote_defs(ctx);
-        if (ret < 0) return ret;
-    }
+    ret = md_process_footnote_defs(ctx);
+    if (ret < 0) return ret;
 
     ret = mdLeaveBlock(ctx, &.{ .doc = {} });
     if (ret != 0) return ret;

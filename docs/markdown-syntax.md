@@ -23,7 +23,7 @@ on `meta.headings` for TOC building. A `{#custom-id}` block attribute overrides 
 > the flag and stays an unmodified CommonMark conformance check. The JSON/meta outputs are Comark's
 > own rather than CommonMark's, so they always carry the id.
 
-## Extension: Tables (`MD_FLAG_TABLES`)
+## Extension: Tables
 
 ```
 | Column 1 | Column 2 |
@@ -36,18 +36,18 @@ on `meta.headings` for TOC building. A `{#custom-id}` block attribute overrides 
 - Max 128 columns (DoS protection)
 - Cell content supports inline markdown
 
-## Extension: Task Lists (`MD_FLAG_TASKLISTS`)
+## Extension: Task Lists
 
 ```
 - [x] Completed
 - [ ] Pending
 ```
 
-## Extension: Strikethrough (`MD_FLAG_STRIKETHROUGH`)
+## Extension: Strikethrough
 
 `~text~` or `~~text~~`. Opener/closer must match length. Follows same flanking rules as emphasis.
 
-## Extension: Highlight (`MD_FLAG_HIGHLIGHT`)
+## Extension: Highlight
 
 `==text==` renders as `<mark>text</mark>`. Exactly two `=` on each side — `=x=`,
 `===x===` and longer runs stay literal. Unlike emphasis and strikethrough the
@@ -56,7 +56,7 @@ it cannot open when followed by whitespace and cannot close when preceded by
 whitespace, but an intra-word `a==b==c` is a highlight. Setext underlines are
 block-level and are unaffected.
 
-## Extension: Footnotes (`MD_FLAG_FOOTNOTES`)
+## Extension: Footnotes
 
 ```
 Text with a footnote[^1] and again[^1].
@@ -92,15 +92,15 @@ Interactions with the other MD4X extensions:
 
 ## Extension: Permissive Autolinks
 
-- **URL** (`MD_FLAG_PERMISSIVEURLAUTOLINKS`): `https://example.com`
-- **Email** (`MD_FLAG_PERMISSIVEEMAILAUTOLINKS`): `john@example.com`
-- **WWW** (`MD_FLAG_PERMISSIVEWWWAUTOLINKS`): `www.example.com`
+- **URL**: `https://example.com`
+- **Email**: `john@example.com`
+- **WWW**: `www.example.com`
 
-## Extension: LaTeX Math (`MD_FLAG_LATEXMATHSPANS`)
+## Extension: LaTeX Math
 
 Inline `$...$` and display `$$...$$`. Opener must not be preceded by alphanumeric; closer must not be followed by alphanumeric.
 
-## Extension: Frontmatter (`MD_FLAG_FRONTMATTER`)
+## Extension: Frontmatter
 
 YAML-style frontmatter delimited by `---` at the very start of the document. The opening `---` must be on the first line (no leading blank lines). Content is exposed as verbatim text via the `.frontmatter` block. The HTML renderer suppresses frontmatter from body output; in full-HTML mode (`MD_HTML_FLAG_FULL_HTML`), YAML `title` and `description` fields are used in `<head>`. An **unclosed** `---` is not frontmatter: the opener falls back to a thematic break and the rest of the document parses as ordinary blocks.
 
@@ -131,7 +131,7 @@ Frontmatter keys carry no special meaning to the parser: every key is passed thr
 
 **JSON renderer YAML parsing:** The JSON renderer uses [libyaml](https://github.com/yaml/libyaml) to parse frontmatter into the tree's top-level `frontmatter` object. Full YAML 1.1 is supported including nested objects, arrays (block and flow), and multi-line values (literal `|` and folded `>`). Plain scalars have type coercion: numbers (int/float), booleans (`true`/`false`/`yes`/`no`/`on`/`off`), null (`null`/`~`/empty). Quoted scalars (`""`/`''`) are always strings. Frontmatter is not a node — it sits beside `nodes` on the tree, and the raw text is not preserved: `{"nodes": [...], "frontmatter": {"title": "Hello", "count": 42}, "meta": {...}}`. Content that is not a YAML mapping (a bare scalar) is consumed but yields `{}`.
 
-## Extension: Alerts (`MD_FLAG_ALERTS`)
+## Extension: Alerts
 
 GitHub-style alert/admonition syntax. A blockquote whose first line is `> [!TYPE]` becomes an alert block:
 
@@ -165,7 +165,7 @@ The element stays a `<blockquote>` — an alert _is_ a block quote, and GitHub's
 
 JSON renderer: `["alert", {"type": "note"}, ...children]` (type lowercased). ANSI renderer: colored thick left bar (`▌`) with type-specific colors (note/info=blue, tip/success=green, important=magenta, warning=yellow, caution/danger=red), and a title line that keeps the **author's** casing rather than the HTML renderer's derived label — see [renderers.md](renderers.md). Block components `::alert{type="..."}`, `::note`, `::warning`, etc. also render with the same style.
 
-## Extension: Inline Components (`MD_FLAG_COMPONENTS`)
+## Extension: Inline Components
 
 Inline components use the MDC syntax: `:component-name`, `:component[content]`, `:component[content]{props}`, `:component{props}`.
 
@@ -184,7 +184,7 @@ Property syntax in `{...}`: `key="value"`, `key='value'`, `bool` (boolean true),
 
 HTML renderer: `<component-name ...attrs>content</component-name>`. JSON renderer: `["component-name", {props}, ...children]`. ANSI renderer: cyan-colored text.
 
-## Extension: Block Components (`MD_FLAG_COMPONENTS`)
+## Extension: Block Components
 
 Block components use the MDC syntax with `::` fences. They are container blocks — content between open and close is parsed as normal markdown.
 
@@ -237,7 +237,7 @@ Implementation: Block components use the container mechanism (`MD_CONTAINER` wit
 
 HTML renderer: `<component-name title="..." ...attrs>content</component-name>`. JSON renderer: `["component-name", {"title": "...", ...props}, ...children]`. ANSI renderer: title used as display label for alert-style components.
 
-## Component Frontmatter (`MD_FLAG_COMPONENTS`)
+## Component Frontmatter
 
 Block components support YAML frontmatter as an alternative (or addition) to `{props}` syntax. A `---` delimited YAML block as the **first content** inside a component is parsed as component props:
 
@@ -283,7 +283,7 @@ Store data in Azure available storages.
 
 HTML renderer: frontmatter is suppressed (not rendered). JSON renderer: YAML is parsed and merged into the component's props object: `["card", {"icon": "mdi:microsoft-azure", "to": "/drivers/azure", ...}, ...]`.
 
-## Component Slots (`MD_FLAG_COMPONENTS`)
+## Component Slots
 
 Inside a block component, `#slot-name` at line start creates a named slot. Content after `#slot-name` until the next `#slot` or `::` closing is the slot body. Content before the first `#slot` stays as direct children (default slot).
 
@@ -313,7 +313,7 @@ Implementation: Slots use the container mechanism (`MD_CONTAINER` with `ch = '#'
 
 HTML renderer: `<template name="slot-name">...content...</template>`. JSON renderer: `["template", {"name": "slot-name"}, ...children]`. ANSI renderer: transparent (content renders normally).
 
-## Extension: Inline Attributes (`MD_FLAG_ATTRIBUTES`)
+## Extension: Inline Attributes
 
 Attributes can be added to inline elements using `{...}` syntax immediately after the closing delimiter:
 
@@ -347,7 +347,7 @@ Constraints:
 - Only applies to resolved inline elements (not plain text — `hello{.class}` is literal). A `{...}`
   run separated from the element by a space is not an inline attribute; it may instead be consumed
   as a **block attribute** (below).
-- Spans with `MD_FLAG_ATTRIBUTES`: em/strong/code/del/u/mark pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
+- Spans: em/strong/code/del/u/mark pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
 - `MD_SPAN_SPAN` is emitted for `[text]{attrs}` with `MD_SPAN_SPAN_DETAIL`
 
 HTML renderer: attributes rendered on opening tags. JSON renderer: attrs merged into node props. ANSI renderer: transparent (ignores attrs).

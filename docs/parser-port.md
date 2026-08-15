@@ -501,7 +501,7 @@ inline` include of md4x.c + a driver replicating `md_process_doc`'s line loop �
   **Step 4 — FULL GATE (all GREEN):**
   - `zig build` → 0; `zig build wasm` → 0; `zig build napi-linux-x64 -Dnapi-include=…` → 0.
   - `bun scripts/run-tests.ts` → **all 16 suites pass**: coverage 30, regressions 67, spec-alerts 19,
-    spec-attributes 22, spec-components 58, spec-frontmatter 14, spec-hard-soft-breaks 2, spec-latex-math 6,
+    spec-attributes 22, spec-components 58, spec-frontmatter 14, spec-soft-breaks 2, spec-latex-math 6,
     spec-markdown 37, spec-permissive-autolinks 15, spec-strikethrough 5, spec-tables 12, spec-tasklists 5,
     spec-underline 4, spec-wiki-links 23, **spec.txt 652**, **+ 30 pathological** (all 0 failed/errored).
   - `python3 test/pathological-tests.py -p zig-out/bin/md4x` → **30 passed**, linear timings (worst case

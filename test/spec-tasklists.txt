@@ -1,8 +1,7 @@
 
 # Tasklists
 
-With the flag `MD_FLAG_TASKLISTS`, MD4X enables extension for recognition of
-task lists.
+MD4X always recognizes task lists; the extension is unconditional.
 
 Basic task list may look as follows:
 

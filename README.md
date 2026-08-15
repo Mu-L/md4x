@@ -11,17 +11,16 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 
 - **Fast** — **~8x** faster than markdown-it
 - **CLI** — Render local files, remote URLs, GitHub repos, npm packages
-- **Small** — **~100KB** gzip WASM binary works in Node.js and Browser
+- **Small** — **~135KB** gzip WASM binary works in Node.js and Browser
 - **Multi-format output** — HTML, JSON AST, ANSI terminal, plain text, markdown, metadata
 - **Streaming heal** — Fix incomplete markdown from LLM output in real-time
 - **Full CommonMark** — Passes the CommonMark spec
 - **GitHub Flavored Markdown** — Tables, task lists, strikethrough, autolinks, alerts
 - **Built-in YAML parser** — Frontmatter and standalone YAML, no external dependency
-- **Extra extensions** — LaTeX math, underline, highlight, footnotes, inline attributes
+- **Extra extensions** — LaTeX math, highlight (`==mark==`), footnotes, inline attributes
 - **Comark (MDC) support** — Block and inline components with props, slots
 - **Universal JS** — Native Node.js addon (NAPI) + portable WASM for browsers, Deno, Bun, edge workers
-- **C library** — SAX-like streaming parser, zero-copy, no AST allocation overhead
-- **Zig package** — Consumable as a Zig dependency
+- **Zig library** — SAX-like streaming parser, zero-copy, no AST allocation overhead
 
 ## Showcase
 
@@ -40,7 +39,7 @@ npx md4x README.md -t meta                  # Metadata JSON output
 npx md4x README.md -t markdown              # Clean markdown (strip MDC/frontmatter/HTML)
 npx md4x README.md -t heal                  # Heal incomplete markdown
 npx md4x README.md --heal                   # Heal before rendering (any format)
-npx md4x README.md --heal -t json           # Heal + JSON AST output
+npx md4x README.md --heal -t ast            # Heal + JSON AST output
 
 # Remote sources
 npx md4x https://nitro.build/guide          # Fetch and render any URL
@@ -64,6 +63,12 @@ npx md4x README.md -t html -f --html-css=style.css    # Add CSS link
 ```sh
 yay -S md4x # md4x-git
 ```
+
+The examples above are the npm CLI (`npx md4x`). The native binary — the one `zig build`
+produces and `md4x(1)` documents — is a smaller tool: it reads a local file or stdin, with
+no URL, `gh:` or `npm:` shorthands, and its formats are `html` (the default), `text`,
+`json`, `ansi`, `markdown` and `heal`, where the npm CLI spells the AST format `ast` and
+adds `meta`.
 
 ## JavaScript
 
@@ -126,7 +131,7 @@ const html = renderToHtml("# Hello");
 
 #### Standalone (inlined WASM)
 
-A single, minified, dependency-free ES module (~126 KB) with the same API as `md4x/wasm` fully embeded into single chunk.
+A single, minified, dependency-free ES module (~140 KB) with the same API as `md4x/wasm`, the WASM binary embedded into the same chunk.
 
 ```js
 import { init, renderToHtml } from "md4x/standalone";
@@ -380,124 +385,58 @@ Notes:
 
 </details>
 
-## Zig Package
+## Zig Library
 
-MD4X can be consumed as a Zig package dependency via `build.zig.zon`.
+MD4X is written in Zig. `src/lib.zig` is the library root: it pulls the parser, the entity
+table and every renderer into a single module and re-exports their entry points, so they
+call each other directly.
+
+| Entry point              | Output                                                               |
+| ------------------------ | -------------------------------------------------------------------- |
+| `md_html` / `md_html_ex` | HTML (`_ex` adds full-document output and the syntax-highlight hook) |
+| `md_ast`                 | Comark AST as JSON                                                   |
+| `md_ansi` / `md_ansi_ex` | ANSI terminal output (`_ex` adds the syntax-highlight hook)          |
+| `md_text`                | Plain text (markdown stripped)                                       |
+| `md_meta`                | Frontmatter + headings as JSON                                       |
+| `md_markdown`            | Clean, normalized markdown                                           |
+| `md_heal`                | Healed markdown (a text transform — it does not parse)               |
+| `md_yaml`                | Standalone YAML document as JSON                                     |
+| `md_parse`               | The SAX parser itself, for custom rendering                          |
+
+Every renderer takes the same shape — input bytes, an output callback, `userdata`, and a
+word of renderer flags — and streams its result through the callback without building an
+AST:
+
+```zig
+const md4x = @import("md4x"); // src/lib.zig
+
+fn sink(text: [*c]const u8, size: c_uint, userdata: ?*anyopaque) void {
+    const out: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(userdata.?));
+    out.appendSlice(gpa, text[0..size]) catch {};
+}
+
+var out: std.ArrayListUnmanaged(u8) = .empty;
+_ = md4x.md_html(input.ptr, @intCast(input.len), sink, &out, 0);
+```
+
+`md_parse` is the five-callback SAX interface the renderers themselves are written
+against (`enter_block` / `leave_block` / `enter_span` / `leave_span` / `text`), for when
+none of the bundled renderers fit. The markdown dialect is fixed: no entry point takes
+parser flags, and there is nothing to select. See [docs/parser-api.md](./docs/parser-api.md)
+for the callback table and [docs/renderers.md](./docs/renderers.md) for each renderer's
+flags and behavior.
 
 ## Building
 
-Requires [Zig](https://ziglang.org/). No other external dependencies.
+Requires [Zig](https://ziglang.org/). No other external dependencies (libyaml is fetched
+by `build.zig.zon`).
 
 ```sh
-zig build                      # ReleaseFast (default)
+zig build                      # CLI at zig-out/bin/md4x (ReleaseFast, the default)
 zig build -Doptimize=Debug     # Debug build
-zig build wasm                 # WASM target (~163K)
-zig build napi                 # Node.js NAPI addon
-```
-
-## C Library
-
-SAX-like streaming parser with no AST construction. Link against `libmd4x` and the renderer you need.
-
-#### HTML Renderer
-
-```c
-#include "md4x.h"
-#include "md4x-html.h"
-
-void output(const MD_CHAR* text, MD_SIZE size, void* userdata) {
-    fwrite(text, 1, size, (FILE*) userdata);
-}
-
-md_html(input, input_size, output, stdout, MD_DIALECT_GITHUB, 0);
-```
-
-#### JSON Renderer
-
-```c
-#include "md4x.h"
-#include "md4x-ast.h"
-
-md_ast(input, input_size, output, stdout, MD_DIALECT_GITHUB, 0);
-```
-
-#### ANSI Renderer
-
-```c
-#include "md4x.h"
-#include "md4x-ansi.h"
-
-md_ansi(input, input_size, output, stdout, MD_DIALECT_GITHUB, 0);
-```
-
-#### Text Renderer
-
-Strips markdown formatting and produces plain text:
-
-```c
-#include "md4x.h"
-#include "md4x-text.h"
-
-md_text(input, input_size, output, stdout, MD_DIALECT_GITHUB, 0);
-```
-
-#### Markdown Renderer
-
-Converts extended markdown (MDC/Comark) to clean, standard markdown. Strips frontmatter, HTML comments, raw HTML, and inline attributes. Converts block/inline components to HTML tags.
-
-```c
-#include "md4x.h"
-#include "md4x-markdown.h"
-
-md_markdown(input, input_size, output, stdout, MD_DIALECT_ALL, 0);
-```
-
-#### Meta Renderer
-
-Extracts frontmatter and headings as a flat JSON object:
-
-```c
-#include "md4x.h"
-#include "md4x-meta.h"
-
-md_meta(input, input_size, output, stdout, MD_DIALECT_GITHUB, 0);
-// {"title":"Hello","headings":[{"level":1,"text":"Hello"}]}
-```
-
-#### Heal Utility
-
-Fixes incomplete/streaming markdown by closing unclosed delimiters:
-
-```c
-#include "md4x-heal.h"
-
-md_heal(input, input_size, output, stdout);
-```
-
-#### Low-Level Parser
-
-For custom rendering, use the SAX-like parser directly:
-
-```c
-#include "md4x.h"
-
-int enter_block(MD_BLOCKTYPE type, void* detail, void* userdata) { return 0; }
-int leave_block(MD_BLOCKTYPE type, void* detail, void* userdata) { return 0; }
-int enter_span(MD_SPANTYPE type, void* detail, void* userdata) { return 0; }
-int leave_span(MD_SPANTYPE type, void* detail, void* userdata) { return 0; }
-int text(MD_TEXTTYPE type, const MD_CHAR* text, MD_SIZE size, void* userdata) { return 0; }
-
-MD_PARSER parser = {
-    .abi_version = 0,
-    .flags = MD_DIALECT_GITHUB,
-    .enter_block = enter_block,
-    .leave_block = leave_block,
-    .enter_span = enter_span,
-    .leave_span = leave_span,
-    .text = text,
-};
-
-md_parse(input, input_size, &parser, NULL);
+zig build wasm                 # WASM     → packages/md4x/build/md4x.wasm
+zig build napi-all             # NAPI addon for all 9 platforms
+bun run build:js               # wasm + host NAPI + standalone bundle (what the JS package loads)
 ```
 
 ## License

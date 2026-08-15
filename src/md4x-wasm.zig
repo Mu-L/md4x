@@ -186,12 +186,11 @@ const md4x_render_fn = *const fn (
     *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void,
     ?*anyopaque,
     c_uint,
-    c_uint,
 ) c_int;
 
 fn render(fn_ptr: md4x_render_fn, input: [*c]const u8, input_size: c_uint, renderer_flags: c_uint) c_int {
     var buf = md4x_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
-    const ret = fn_ptr(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, renderer_flags);
+    const ret = fn_ptr(input, input_size, buf_append, &buf, renderer_flags);
     if (ret != 0 or buf.err != 0) {
         std.c.free(buf.data);
         g_result_data = null;
@@ -211,7 +210,7 @@ export fn md4x_to_html(input: [*c]const u8, input_size: c_uint, renderer_flags: 
 export fn md4x_to_html_hl(input: [*c]const u8, input_size: c_uint, renderer_flags: c_uint) callconv(.c) c_int {
     var buf = md4x_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
     const opts: lib.MD_HTML_OPTS = .{ .highlighter = &js_highlighter };
-    const ret = lib.md_html_ex(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, renderer_flags, &opts);
+    const ret = lib.md_html_ex(input, input_size, buf_append, &buf, renderer_flags, &opts);
     if (ret != 0 or buf.err != 0) {
         std.c.free(buf.data);
         g_result_data = null;
@@ -234,7 +233,7 @@ export fn md4x_to_ansi(input: [*c]const u8, input_size: c_uint, renderer_flags: 
 export fn md4x_to_ansi_hl(input: [*c]const u8, input_size: c_uint, renderer_flags: c_uint) callconv(.c) c_int {
     var buf = md4x_buf{ .data = null, .size = 0, .cap = 0, .err = 0 };
     const opts: lib.MD_ANSI_OPTS = .{ .highlighter = &js_highlighter };
-    const ret = lib.md_ansi_ex(input, input_size, buf_append, &buf, c.MD_DIALECT_ALL, renderer_flags, &opts);
+    const ret = lib.md_ansi_ex(input, input_size, buf_append, &buf, renderer_flags, &opts);
     if (ret != 0 or buf.err != 0) {
         std.c.free(buf.data);
         g_result_data = null;

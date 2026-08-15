@@ -2,25 +2,28 @@
 
 md4x has **one dialect**. This document records how that dialect lines up against the
 three references it is measured against — CommonMark 0.31.2, GitHub, and Comark — at the
-**default preset**, meaning the flags a JS caller gets from `renderToHtml(input)` with no
+**default preset**, meaning what a JS caller gets from `renderToHtml(input)` with no
 options.
 
 Everything here is measured, not asserted. See [Reproducing these numbers](#reproducing-these-numbers).
 
 ## The default preset
 
-**Parser flags are not configurable from JS.** Every binding entry point passes
-`MD_DIALECT_ALL` as a literal — `src/md4x-wasm.zig:194,214,237` and
-`src/md4x-napi.zig:118,301,305`. The CLI defaults to the same value
-(`src/cli/md4x-cli.zig:85`), so the `.txt` suites exercise the JS parser preset.
+**The parser is not configurable — from JS or from Zig.** There is no parser flag
+word: `abi.Parser` holds the SAX callbacks and nothing else, and no entry point takes
+a parser-flags parameter. The CLI, the WASM exports, the NAPI addon, the fuzzer and
+the unit tests therefore all run the same dialect, so the `.txt` suites exercise
+exactly the JS parser preset.
 
-`MD_DIALECT_ALL` = `0x3F1F0C` (`src/abi.zig:459`):
+Permissive URL / email / WWW autolinks, tables, strikethrough, task lists, LaTeX math,
+frontmatter, components, attributes, alerts, highlight and footnotes are all
+**unconditionally on**. There is no "off" column: the six dialect toggles that used to
+sit there (collapse-whitespace, permissive ATX headers, no-indented-code-blocks,
+no-HTML-blocks, no-HTML-spans, hard-soft-breaks) were dead in every build and have been
+deleted along with the code they guarded, so their former behavior is now simply the
+parser's behavior.
 
-| On                                                                                                                                                                            | Off                                                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `PERMISSIVE{URL,EMAIL,WWW}AUTOLINKS`, `TABLES`, `STRIKETHROUGH`, `TASKLISTS`, `LATEXMATHSPANS`, `FRONTMATTER`, `COMPONENTS`, `ATTRIBUTES`, `ALERTS`, `HIGHLIGHT`, `FOOTNOTES` | `COLLAPSEWHITESPACE`, `PERMISSIVEATXHEADERS`, `NOINDENTEDCODEBLOCKS`, `NOHTMLBLOCKS`, `NOHTMLSPANS`, `HARD_SOFT_BREAKS` |
-
-This is `MD_DIALECT_GITHUB` plus exactly the five md4x-only extensions (latex,
+That is GitHub's extension set plus exactly the five md4x-only extensions (latex,
 frontmatter, components, attributes, highlight). **Raw HTML passes through unsanitized.**
 
 **Renderer flags default to `SKIP_UTF8_BOM` only** (`packages/md4x/lib/wasm/common.mjs`,

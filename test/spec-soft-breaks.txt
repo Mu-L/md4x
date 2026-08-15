@@ -1,0 +1,29 @@
+
+# Soft Breaks
+
+MD4X emits a soft break for a plain newline: only the CommonMark hard-break
+markers (two trailing spaces, or a trailing backslash) produce a `<br />`.
+
+This suite is an anti-regression guard for that. It used to be the fixture for a
+hard-soft-breaks dialect toggle, which forced every newline to a hard break — but
+the expected output below always pinned the toggle-off behavior, which is now the
+only behavior: the toggle was never on in any md4x build and has been removed.
+
+```````````````````````````````` example
+foo
+baz
+.
+<p>foo
+baz</p>
+````````````````````````````````
+
+```````````````````````````````` example
+A quote from the CommonMark Spec below:
+
+A renderer may also provide an option to 
+render soft line breaks as hard line breaks.
+.
+<p>A quote from the CommonMark Spec below:</p>
+<p>A renderer may also provide an option to
+render soft line breaks as hard line breaks.</p>
+````````````````````````````````

@@ -255,6 +255,11 @@ pub const MarkFlags = struct {
 
 pub const CODESPAN_MARK_MAXLEN: usize = 32;
 
+// Minimal indentation to call the block "indented code block". A constant, not
+// an MD_CTX field: upstream only ever moved it to disable indented code blocks
+// entirely, and md4x has no dialect switch to do that with.
+pub const CODE_INDENT_OFFSET: c_uint = 4;
+
 // Reference definition. Faithful layout of `struct MD_REF_DEF_tag` (md4x.c
 // ~1635). The two trailing `unsigned char : 1` bitfields are modelled as a
 // single `u8` flags byte holding bit0=label_needs_free, bit1=title_needs_free.
@@ -472,9 +477,6 @@ pub const MD_CTX = struct {
     // depth as a c_int; pushes are `.append`, pops `.items.len -= 1`, and the
     // serialize-phase reuse resets via `clearRetainingCapacity()`.
     containers: std.ArrayListUnmanaged(MD_CONTAINER) = .empty,
-
-    // Minimal indentation to call the block "indented code block".
-    code_indent_offset: c_uint = 0,
 
     // Contextual info for line analysis.
     code_fence_length: SZ = 0, // For checking closing fence length.

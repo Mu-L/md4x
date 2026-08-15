@@ -66,14 +66,14 @@ fn accept(input: []const u8) bool {
 /// Shared driver for the renderer harnesses. `render` is one of the `md_*`
 /// entry points; all share the same signature.
 fn fuzzRenderer(
-    comptime render: fn ([*c]const c.MD_CHAR, c.MD_SIZE, *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void, ?*anyopaque, c_uint, c_uint) c_int,
+    comptime render: fn ([*c]const c.MD_CHAR, c.MD_SIZE, *const fn ([*c]const c.MD_CHAR, c.MD_SIZE, ?*anyopaque) void, ?*anyopaque, c_uint) c_int,
     smith: *std.testing.Smith,
 ) !void {
     @disableInstrumentation();
     var buf: [max_input]u8 = undefined;
     const input = buf[0..smith.slice(&buf)];
     if (!accept(input)) return;
-    _ = render(@ptrCast(input.ptr), @intCast(input.len), sink, null, c.MD_DIALECT_ALL, 0);
+    _ = render(@ptrCast(input.ptr), @intCast(input.len), sink, null, 0);
 }
 
 test "md_parse" {
@@ -98,7 +98,6 @@ test "md_parse" {
                 }
             };
             const p: c.Parser = .{
-                .flags = c.MD_DIALECT_ALL,
                 .enter_block = nop.block,
                 .leave_block = nop.block,
                 .enter_span = nop.span,

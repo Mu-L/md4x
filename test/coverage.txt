@@ -470,7 +470,12 @@ CJK supplementary (U+20000 𠀀):
 ````````````````````````````````
 
 
-## Flag `MD_FLAG_COLLAPSEWHITESPACE`
+## Whitespace is never collapsed
+
+Runs of blanks (and non-ASCII whitespace) survive verbatim into the output. This
+was the fixture for a collapse-whitespace dialect toggle, but the expected output
+always pinned the toggle-off behavior, which is now the only behavior — the toggle
+was never on in any md4x build and has been removed.
 
 ```````````````````````````````` example
 foo  bar → baz

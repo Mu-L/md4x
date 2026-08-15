@@ -1,8 +1,8 @@
 # Footnote References
 
-With the flag `MD_FLAG_FOOTNOTES`, MD4X enables recognition of footnote
-references written `[^label]` and footnote definitions written `[^label]: content`
-at the start of a paragraph.
+MD4X always recognizes footnote references written `[^label]` and footnote
+definitions written `[^label]: content` at the start of a paragraph; the
+extension is unconditional.
 
 A footnote reference is a self-contained inline span that renders as a numbered
 superscript linked to its definition. Definitions are emitted at the very end of
@@ -13,7 +13,7 @@ section in `<section class="footnotes"><ol>`.
 
 Ported from md4c `a8b0d3e` (#315), `54bfec0` (multi-line bodies) and `326fe25`
 (refs swallowed by a link destination), plus the label-hashtable generalization `915676f` /
-`19dd06f` those needed. MD4X always parses with `MD_DIALECT_ALL`, so the
+`19dd06f` those needed. MD4X has one dialect with every extension on, so the
 examples below also show how footnotes compose with the other extensions;
 md4c's "flag required" section cannot be expressed here, and its spoiler and
 superscript interaction sections have no MD4X counterpart.
