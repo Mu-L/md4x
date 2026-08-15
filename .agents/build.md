@@ -23,9 +23,10 @@ Feature flags that must fold away at comptime — a runtime flag would still lin
 go through the shared `build_config` options module (`b.addOptions()` in `build.zig`), created
 **once** and imported by every artifact, same one-instance rule as `abi`.
 
-| Switch         | Default | Effect                                                                       |
-| -------------- | ------- | ---------------------------------------------------------------------------- |
-| `-Demoji=true` | `false` | Links `src/emoji.zig` (1913 shortcodes) in, so `:wave:` renders as the emoji |
+| Switch                | Default | Effect                                                                       |
+| --------------------- | ------- | ---------------------------------------------------------------------------- |
+| `-Demoji=true`        | `false` | Links `src/emoji.zig` (1913 shortcodes) in, so `:wave:` renders as the emoji |
+| `-Dwasm-symbols=true` | `false` | Keeps the name section in the WASM/NAPI artifacts (analysis only, see below) |
 
 Emoji is **off in every shipped artifact**: the table costs ~26 KB gzipped on the standalone bundle
 (~24% of it). With the default the recognizer folds away entirely — `src/emoji.zig` is never
@@ -36,6 +37,10 @@ changes rendered output, so `scripts/diff-corpus.sh` is expected to differ acros
 Reach the switch through the JS artifacts with
 `bun scripts/js-artifacts.ts build -Demoji=true` (anything after `build` is forwarded to each
 `zig build` step).
+
+`-Dwasm-symbols` is not a feature switch — it only flips `strip`, so codegen is unchanged. It exists
+so `scripts/wasm-size.ts` can attribute code bytes to Zig functions; that script passes it itself and
+installs to a throwaway `--prefix`, leaving `packages/md4x/build/` alone. No shipped build sets it.
 
 ## Targets
 

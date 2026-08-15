@@ -147,9 +147,17 @@ pub fn build(b: *std.Build) void {
     // --- WASM & NAPI targets ---
 
     const pkg_optimize: std.builtin.OptimizeMode = .ReleaseFast;
+
+    // `-Dwasm-symbols=true` keeps the name section in the package artifacts, so
+    // the bytes in the code section can be attributed back to Zig functions.
+    // Only `scripts/wasm-size.ts` passes it, and it installs into a throwaway
+    // prefix — the shipped artifacts stay stripped. The flag does not change
+    // codegen, so the per-function sizes it reveals are the stripped build's.
+    const wasm_symbols = b.option(bool, "wasm-symbols", "Keep symbols in the WASM/NAPI artifacts (for scripts/wasm-size.ts); never used by a shipped build") orelse false;
+
     const pkg_opts: PkgBuildOptions = .{
         .optimize = pkg_optimize,
-        .strip = pkg_optimize != .Debug,
+        .strip = pkg_optimize != .Debug and !wasm_symbols,
         .include_paths = include_paths,
         .abi = abi_mod,
         .build_config = build_config_mod,

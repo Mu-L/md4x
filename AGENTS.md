@@ -78,6 +78,7 @@ scripts/
                       #   (vitest globalSetup — see vitest.config.mjs)
   diff-corpus.sh      # Output-parity harness (sha256 of all 6 formats over the corpus)
   build-standalone.ts # Bundles lib/standalone.mjs (rolldown, gzip+Z85 inlined wasm)
+  wasm-size.ts        # WASM size analyzer — sections, per-function/module code, data tables
   upstream-sync.ts    # Lists md4c commits newer than .agents/upstream-sync.json
   gh-parity.ts        # GitHub Markdown parity harness (see .agents/github-parity.md)
   _gen-*.py           # Zig table generators (unicode, entities)

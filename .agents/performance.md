@@ -137,6 +137,32 @@ measured 0.03% (i.e. unchanged) for a change worth 40% in the shipping build. Be
 ships. For the same reason each `ParsedProps` is declared **inside the branch that uses it**, never
 hoisted — hoisting would pay the 0xaa fill on every element node in Debug/ReleaseSafe.
 
+## Where the WASM bytes go
+
+```sh
+bun scripts/wasm-size.ts                 # md4x-small.wasm (the compact bundle's module)
+bun scripts/wasm-size.ts --variant=wasm  # the ReleaseFast module the npm package loads
+bun scripts/wasm-size.ts --diff=old.wasm # what a change cost, per module and per function
+```
+
+The shipped artifacts are stripped, so the script rebuilds the variant with `-Dwasm-symbols=true`
+into a throwaway prefix under `node_modules/.cache/wasm-size/` and reports on that with every custom
+section excluded — the numbers are the shipped ones, just with names attached. It never writes to
+`packages/md4x/build/`.
+
+Two things it exists to catch. First, **runtime machinery linked in by one call site**: a single
+`snprintf`/`fprintf` pulls musl's `printf_core` in, and `printf_core`'s `long double` path pulls the
+128-bit soft-float set (`__addtf3`, `__multf3`, …) after it — 16 KB of code, 7% of the module, for
+formatting an integer. The COST CENTERS table names these; add a row when a new one appears. Second,
+**generated tables**, which are sized from their source of truth in `src/` (so the number moves when
+the generator does) and probed for in the data section, so a table that a comptime switch left out
+reads as `absent` rather than being billed.
+
+Sizes are reported raw _and_ gzipped because the standalone bundle inlines the module gzip+Z85
+(`scripts/build-standalone.ts`): a flat generated table and a page of branchy code cost very
+differently once compressed — the entity table is 45 KB raw and compresses ~4:1, the code section
+barely 2.7:1.
+
 ## Benchmarking the WASM build
 
 The instance is a module-level singleton in `packages/md4x/lib/wasm/common.mjs` and `init()`

@@ -18,6 +18,7 @@
     "md4x": "zig build && bun packages/md4x/lib/cli.mjs",
     "test": "bun ./scripts/run-tests.ts",
     "bench": "bun packages/md4x/bench/index.mjs",
+    "size": "bun scripts/wasm-size.ts",
     "release": "bun scripts/release.ts"
   },
   "devDependencies": {
