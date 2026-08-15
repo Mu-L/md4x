@@ -398,7 +398,7 @@ const CODE_GROUPS: { re: RegExp; path: (m: RegExpMatchArray) => string[] }[] = [
   { re: /^(compiler_rt|__)/, path: () => ["runtime", "compiler-rt"] },
   { re: /^c\.(\w+)\./, path: (m) => ["runtime", `libc (${m[1]})`] },
   {
-    re: /^(printf_core|v?f?s?n?printf|pop_arg|pad|sn_write|wcrtomb|wctomb|strerror|str\w+|mem\w+|malloc|free|calloc|realloc|qsort\w*|abort|exit|_Exit|_start|writev|dummy|undefined_weak)/,
+    re: /^(printf_core|v?f?s?n?printf|pop_arg|pad|sn_write|wcrtomb|wctomb|strerror|str\w+|mem\w+|malloc|free|calloc|realloc|qsort\w*|abort|exit|_Exit|_start|writev|dummy|undefined_weak|fwrite|fput[cs]|fflush|__towrite|__stdio_write)/,
     path: () => ["runtime", "libc"],
   },
 ];
@@ -421,7 +421,11 @@ const COST_CENTERS: { label: string; note: string; re: RegExp }[] = [
   {
     label: "libc printf + 128-bit soft-float",
     note: "linked in by any snprintf/fprintf call site; printf_core's long double path drags the __*tf* set with it",
-    re: /^(printf_core|vfprintf|vsnprintf|snprintf|fprintf|sprintf|pop_arg|pad|sn_write|wcrtomb|wctomb|strerror|c\.math\.frexpl|__(add|sub|mul|div|cmp|unord|extend|trunc|fix|fixuns|float|floatun)\w*tf\w*|__multi3)$/,
+    // `__multi3` is deliberately NOT in this set: printf_core's long double
+    // path does call it, but so does wyhash (`hash_map.StringContext.hash`),
+    // which is its only caller here — attributing it to printf claimed 117
+    // bytes this call site cannot remove.
+    re: /^(printf_core|vfprintf|vsnprintf|snprintf|fprintf|sprintf|pop_arg|pad|sn_write|wcrtomb|wctomb|strerror|c\.math\.frexpl|__(add|sub|mul|div|cmp|unord|extend|trunc|fix|fixuns|float|floatun)\w*tf\w*)$/,
   },
   {
     label: "libc malloc/qsort",

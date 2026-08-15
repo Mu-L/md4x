@@ -36,7 +36,7 @@ const sys = @cImport({
 });
 
 /// Write one parser diagnostic to stderr. `msg` need not be NUL-terminated.
-/// The `fprintf` result is discarded, exactly as the per-renderer calls did.
+/// The `fwrite` results are discarded, exactly as the per-renderer calls did.
 pub fn logMessage(msg: []const u8) void {
     // Comptime-known switch: only the prong for this target is analyzed, which
     // is what keeps the unusable `sys.stderr` shapes out of the other builds.
@@ -45,5 +45,13 @@ pub fn logMessage(msg: []const u8) void {
         .macos, .ios, .tvos, .watchos, .visionos => sys.stderr(),
         else => sys.stderr,
     };
-    _ = sys.fprintf(stream, "MD4X: %.*s\n", @as(c_int, @intCast(msg.len)), msg.ptr);
+    // Three `fwrite`s rather than one `fprintf("MD4X: %.*s\n", …)`: the format
+    // string was the only thing referencing `printf_core`, which handles
+    // `long double` and so pulled the 128-bit soft-float set (`__addtf3`,
+    // `__multf3`, `__floatsitf`, …) into the WASM/NAPI module graph — ~16 KB of
+    // code for one diagnostic line. `fwrite` shares the FILE buffer with the
+    // old call, so the three parts still land contiguously.
+    _ = sys.fwrite("MD4X: ", 1, 6, stream);
+    _ = sys.fwrite(msg.ptr, 1, msg.len, stream);
+    _ = sys.fwrite("\n", 1, 1, stream);
 }

@@ -93,6 +93,9 @@ const jsonWrite = json.json_write;
 const jsonWriteStr = json.json_write_str;
 const jsonWriteEscaped = json.json_write_escaped;
 const jsonWriteString = json.json_write_string;
+// Both `id`/`refId`/`refCount` and the `start`/`highlights`/`level` numbers go
+// through here; the meta renderer's heading levels use the same writer.
+const jsonWriteUint = json.json_write_uint;
 const jsonWriteYamlProps = json.json_write_yaml_props;
 const jsonWriteYamlPropsEx = json.json_write_yaml_props_ex;
 
@@ -1324,27 +1327,6 @@ fn compMergeOverride(ctx: ?*anyopaque, w: *JsonWriter, key: []const u8) bool {
 // stay valid JSON and round-trip through JSON.parse().
 fn jsonWriteSlice(w: *JsonWriter, s: []const u8) void {
     jsonWriteString(w, s.ptr, @intCast(s.len));
-}
-
-// Write a decimal integer. Replaces `snprintf(buf, n, "%u", v)` followed by
-// `jsonWriteStrZ` (which then `strlen`s what snprintf had just measured): the
-// pair cost ~1.5% of a `--format=json` render on glibc for what is a dozen-byte
-// conversion, and every one of these call sites formats a single plain `%u`.
-// Both `id`/`refId`/`refCount` and the `start`/`highlights`/`level` numbers go
-// through here, so a footnote- or heading-dense document stops paying libc's
-// format-string parse per number.
-fn jsonWriteUint(w: *JsonWriter, v: c_uint) void {
-    // c_uint tops out at 4294967295 — 10 digits.
-    var buf: [10]u8 = undefined;
-    var i: usize = buf.len;
-    var n = v;
-    while (true) {
-        i -= 1;
-        buf[i] = '0' + @as(u8, @intCast(n % 10));
-        n /= 10;
-        if (n == 0) break;
-    }
-    jsonWrite(w, buf[i..].ptr, @intCast(buf.len - i));
 }
 
 // Write the props object for an element node.

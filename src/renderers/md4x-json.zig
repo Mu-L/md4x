@@ -95,6 +95,27 @@ pub fn json_write_strz(w: *JsonWriter, str: [*:0]const u8) void {
     json_write(w, str, @intCast(std.mem.len(str)));
 }
 
+// Write a decimal integer. Replaces `snprintf(buf, n, "%u", v)` followed by
+// `json_write_strz` (which then `strlen`s what snprintf had just measured): the
+// pair cost ~1.5% of a `--format=json` render on glibc for what is a dozen-byte
+// conversion, and every one of these call sites formats a single plain `%u`.
+// It is also the last thing keeping libc's `printf` family in the WASM/NAPI
+// module graph — `printf_core` handles `long double`, so it drags the whole
+// 128-bit soft-float set in with it, ~16 KB of code for these few numbers.
+pub fn json_write_uint(w: *JsonWriter, v: c_uint) void {
+    // c_uint tops out at 4294967295 — 10 digits.
+    var buf: [10]u8 = undefined;
+    var i: usize = buf.len;
+    var n = v;
+    while (true) {
+        i -= 1;
+        buf[i] = '0' + @as(u8, @intCast(n % 10));
+        n /= 10;
+        if (n == 0) break;
+    }
+    json_write(w, buf[i..].ptr, @intCast(buf.len - i));
+}
+
 // Find the next offset >= `start` needing a JSON escape — `"`, `\`, or any
 // control character below 0x20 — or `size` if there is none. Exactly the set
 // the switch below produces a `replacement` for; everything else is copied

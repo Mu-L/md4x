@@ -152,8 +152,11 @@ section excluded — the numbers are the shipped ones, just with names attached.
 
 Two things it exists to catch. First, **runtime machinery linked in by one call site**: a single
 `snprintf`/`fprintf` pulls musl's `printf_core` in, and `printf_core`'s `long double` path pulls the
-128-bit soft-float set (`__addtf3`, `__multf3`, …) after it — 16 KB of code, 7% of the module, for
-formatting an integer. The COST CENTERS table names these; add a row when a new one appears. Second,
+128-bit soft-float set (`__addtf3`, `__multf3`, …) after it — that was 16 KB of code, 7% of the
+module, for formatting a heading level and one diagnostic line. Both call sites are gone
+(`json_write_uint` in md4x-json.zig, `fwrite` in md4x-diag.zig) and the row is absent from the table;
+**keep it that way** — one new `printf`-family call anywhere in the wasm graph brings all 16 KB back.
+The COST CENTERS table names these; add a row when a new one appears. Second,
 **generated tables**, which are sized from their source of truth in `src/` (so the number moves when
 the generator does) and probed for in the data section, so a table that a comptime switch left out
 reads as `absent` rather than being billed.

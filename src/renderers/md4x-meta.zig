@@ -36,9 +36,8 @@ const heal = @import("md4x-heal.zig");
 // Heading text + GitHub-compatible slugging, shared with the AST renderer so
 // the two never disagree about a heading's id.
 const slug = @import("md4x-slug.zig");
-const sys = @cImport({
-    @cInclude("stdio.h");
-});
+// No @cImport here any more: the last C dependency was `snprintf`, and the one
+// `%u` conversion it served now goes through md4x-json.zig's json_write_uint.
 const diag = @import("md4x-diag.zig");
 
 const c_allocator = std.heap.c_allocator;
@@ -231,6 +230,7 @@ const JSON_WRITER = json.JsonWriter;
 const json_write = json.json_write;
 const json_write_str = json.json_write_strz;
 const json_write_string = json.json_write_string;
+const json_write_uint = json.json_write_uint;
 const json_write_yaml_props = json.json_write_yaml_props;
 
 // Frontmatter lives under its own key rather than being spread across the top
@@ -249,13 +249,10 @@ fn meta_serialize(w: *JSON_WRITER, ctx: *META_CTX) void {
 
     json_write_str(w, "},\"headings\":[");
     for (ctx.headings.items, 0..) |h, i| {
-        var buf: [16]u8 = undefined;
-
         if (i > 0) json_write(w, ",", 1);
 
         json_write_str(w, "{\"level\":");
-        _ = sys.snprintf(&buf, buf.len, "%u", h.level);
-        json_write_str(w, @ptrCast(&buf));
+        json_write_uint(w, h.level);
 
         json_write_str(w, ",\"text\":");
         json_write_string(w, h.text.ptr, @intCast(h.text.len));
