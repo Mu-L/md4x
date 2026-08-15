@@ -352,7 +352,7 @@ fn json_write_yaml_truncate(w: *JsonWriter) c_int {
 // success, -1 on error; `n_written` is incremented once per pair actually
 // emitted (including a pair whose value had to be repaired to `null`, since its
 // key bytes are already on the wire).
-fn json_write_yaml_mapping(w: *JsonWriter, yp: *yaml.Parser, n_written: *c_int, depth: usize) c_int {
+fn json_write_yaml_mapping(w: *JsonWriter, yp: *yaml.Parser, n_written: *c_int, depth: usize, override: ?*const YamlOverride) c_int {
     var event: yaml.Event = .{};
 
     while (true) {
@@ -383,7 +383,19 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *yaml.Parser, n_written: *c_int, 
         json_write(w, "\"", 1);
         json_write_escaped(w, key.ptr, @intCast(key.len));
         json_write_str(w, "\":");
+
+        // A shadowing value (an inline component attribute) is written HERE, at
+        // the YAML key's position, and the YAML value is then consumed without
+        // being emitted — the position comes from the first insertion, the value
+        // from the last write. `key` is still alive: the event is deleted below.
+        const overridden = if (override) |o| o.write_value(o.ctx, w, key) else false;
         event.deinit(c_allocator);
+
+        if (overridden) {
+            json_skip_yaml_value(yp);
+            n_written.* += 1;
+            continue;
+        }
 
         // Write value (recursive). Past this point the key is committed, so the
         // pair counts as written whatever happens: `json_write_yaml_value`
@@ -394,6 +406,35 @@ fn json_write_yaml_mapping(w: *JsonWriter, yp: *yaml.Parser, n_written: *c_int, 
             return -1;
     }
     return 0;
+}
+
+// Consume the events of one YAML value without emitting anything. Used when an
+// inline attribute has already supplied the value for this key. Only ever
+// called where a value is guaranteed to follow, so a depth of 0 after the first
+// event means the value was a scalar (or an alias) and is complete.
+fn json_skip_yaml_value(yp: *yaml.Parser) void {
+    var event: yaml.Event = .{};
+    var depth: usize = 0;
+
+    while (true) {
+        yaml.parse(yp, &event) catch return;
+        const opens = event.data == .mapping_start or event.data == .sequence_start;
+        const closes = event.data == .mapping_end or event.data == .sequence_end;
+        const ends_stream = event.data == .stream_end or event.data == .none;
+        event.deinit(c_allocator);
+
+        if (opens) {
+            depth += 1;
+        } else if (closes) {
+            // Unbalanced input: the enclosing mapping's end reached with no
+            // value. Nothing left to skip.
+            if (depth == 0) return;
+            depth -= 1;
+        } else if (ends_stream) {
+            return;
+        }
+        if (depth == 0) return;
+    }
 }
 
 // Write a YAML sequence as a JSON array.
@@ -454,7 +495,9 @@ fn json_write_yaml_event(w: *JsonWriter, yp: *yaml.Parser, event: *yaml.Event, d
                 return json_write_yaml_truncate(w);
             json_write(w, "{", 1);
             var n: c_int = 0;
-            const ret = json_write_yaml_mapping(w, yp, &n, depth + 1);
+            // Nested mappings are values, not props: the override only ever
+            // shadows a TOP-LEVEL frontmatter key.
+            const ret = json_write_yaml_mapping(w, yp, &n, depth + 1, null);
             json_write(w, "}", 1);
             return ret;
         },
@@ -500,7 +543,26 @@ fn json_write_yaml_value(w: *JsonWriter, yp: *yaml.Parser, depth: usize) c_int {
 // malformed document still reports what it emitted (never 0 after writing
 // bytes) — callers use the count to decide whether a separating comma is
 // needed before whatever they append next.
+/// Shadow set consulted for every TOP-LEVEL key of a frontmatter mapping.
+/// `write_value` returns true after writing a replacement value for `key`, in
+/// which case the YAML value at that position is consumed without being
+/// emitted; returning false keeps the YAML value.
+///
+/// This is what makes a component's inline `{...}` attributes take precedence
+/// over its YAML block props (`.agents/comark/components.md:182`) while
+/// emitting ONE merged key set: the key keeps the position of its first
+/// insertion and takes the value of the last write, exactly as
+/// `{...yamlProps, ...inlineProps}` does in JS.
+pub const YamlOverride = struct {
+    ctx: ?*anyopaque = null,
+    write_value: *const fn (?*anyopaque, *JsonWriter, []const u8) bool,
+};
+
 pub fn json_write_yaml_props(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE) c_int {
+    return json_write_yaml_props_ex(w, text, size, null);
+}
+
+pub fn json_write_yaml_props_ex(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE, override: ?*const YamlOverride) c_int {
     var event: yaml.Event = .{};
     var n_written: c_int = 0;
 
@@ -550,7 +612,7 @@ pub fn json_write_yaml_props(w: *JsonWriter, text: [*]const u8, size: c.MD_SIZE)
     // A mid-mapping error is already repaired in the output stream, so the
     // status is not actionable here; `n_written` is what matters. The root
     // mapping consumed just above is depth 0, so its values sit at depth 1.
-    _ = json_write_yaml_mapping(w, &yp, &n_written, 1);
+    _ = json_write_yaml_mapping(w, &yp, &n_written, 1, override);
 
     yaml.deinit(&yp);
     return n_written;

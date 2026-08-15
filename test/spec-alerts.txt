@@ -1,13 +1,23 @@
 
 # Alerts (GitHub-style admonitions)
 
+The HTML shape is fixed by `.agents/github-parity.md`: the element stays a
+`<blockquote>` (an alert *is* a block quote; GitHub substitutes a `<div>` and
+loses that), it carries md4x's `alert alert-<type>` classes *and* GitHub's
+`markdown-alert markdown-alert-<type>` so GitHub's class-based CSS matches
+unchanged, and a `<p class="markdown-alert-title">` label row opens the block.
+The label is derived from the case-folded type name with an initial capital --
+one node, one class, one label -- and carries no octicon: the icon is a
+stylesheet's business.
+
 ## Basic NOTE alert
 
 ```````````````````````````````` example
 > [!NOTE]
 > This is a note
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>This is a note</p>
 </blockquote>
 ````````````````````````````````
@@ -18,7 +28,8 @@
 > [!WARNING]
 > This is a warning
 .
-<blockquote class="alert alert-warning">
+<blockquote class="alert alert-warning markdown-alert markdown-alert-warning">
+<p class="markdown-alert-title">Warning</p>
 <p>This is a warning</p>
 </blockquote>
 ````````````````````````````````
@@ -29,7 +40,8 @@
 > [!TIP]
 > Tip content
 .
-<blockquote class="alert alert-tip">
+<blockquote class="alert alert-tip markdown-alert markdown-alert-tip">
+<p class="markdown-alert-title">Tip</p>
 <p>Tip content</p>
 </blockquote>
 ````````````````````````````````
@@ -40,7 +52,8 @@
 > [!IMPORTANT]
 > Important content
 .
-<blockquote class="alert alert-important">
+<blockquote class="alert alert-important markdown-alert markdown-alert-important">
+<p class="markdown-alert-title">Important</p>
 <p>Important content</p>
 </blockquote>
 ````````````````````````````````
@@ -51,7 +64,8 @@
 > [!CAUTION]
 > Caution content
 .
-<blockquote class="alert alert-caution">
+<blockquote class="alert alert-caution markdown-alert markdown-alert-caution">
+<p class="markdown-alert-title">Caution</p>
 <p>Caution content</p>
 </blockquote>
 ````````````````````````````````
@@ -62,7 +76,8 @@
 > [!CUSTOM]
 > Custom alert
 .
-<blockquote class="alert alert-custom">
+<blockquote class="alert alert-custom markdown-alert markdown-alert-custom">
+<p class="markdown-alert-title">Custom</p>
 <p>Custom alert</p>
 </blockquote>
 ````````````````````````````````
@@ -73,7 +88,8 @@
 > [!NOTE]
 > This **is** a *formatted* message
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>This <strong>is</strong> a <em>formatted</em> message</p>
 </blockquote>
 ````````````````````````````````
@@ -86,7 +102,8 @@
 >
 > Second paragraph
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>First paragraph</p>
 <p>Second paragraph</p>
 </blockquote>
@@ -97,7 +114,8 @@
 ```````````````````````````````` example
 > [!NOTE]
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 </blockquote>
 ````````````````````````````````
 
@@ -135,7 +153,8 @@ Content</p>
 >
 > > Nested quote
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>Content</p>
 <blockquote>
 <p>Nested quote</p>
@@ -150,7 +169,8 @@ Content</p>
 > - Item 1
 > - Item 2
 .
-<blockquote class="alert alert-tip">
+<blockquote class="alert alert-tip markdown-alert markdown-alert-tip">
+<p class="markdown-alert-title">Tip</p>
 <ul>
 <li>Item 1</li>
 <li>Item 2</li>
@@ -174,7 +194,8 @@ Content</p>
 > [!note]
 > Content
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>Content</p>
 </blockquote>
 ````````````````````````````````
@@ -185,7 +206,8 @@ Content</p>
 > [!Note]
 > Content
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>Content</p>
 </blockquote>
 ````````````````````````````````
@@ -196,7 +218,8 @@ Content</p>
 > [!my-custom-alert]
 > Content
 .
-<blockquote class="alert alert-my-custom-alert">
+<blockquote class="alert alert-my-custom-alert markdown-alert markdown-alert-my-custom-alert">
+<p class="markdown-alert-title">My-custom-alert</p>
 <p>Content</p>
 </blockquote>
 ````````````````````````````````
@@ -211,7 +234,8 @@ Content</p>
 > console.log("hello")
 > ```
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>Example:</p>
 <pre><code class="language-js">console.log(&quot;hello&quot;)
 </code></pre>
@@ -224,7 +248,8 @@ Content</p>
 > [!NOTE]
 > See [example](http://example.com) for details
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>See <a href="http://example.com">example</a> for details</p>
 </blockquote>
 ````````````````````````````````
@@ -256,7 +281,8 @@ boundary.
 >    [!tip]
 > foo
 .
-<blockquote class="alert alert-tip">
+<blockquote class="alert alert-tip markdown-alert markdown-alert-tip">
+<p class="markdown-alert-title">Tip</p>
 <p>foo</p>
 </blockquote>
 ````````````````````````````````
@@ -273,7 +299,8 @@ foo
 >-
 .
 <p>foo</p>
-<blockquote class="alert alert-tip">
+<blockquote class="alert alert-tip markdown-alert markdown-alert-tip">
+<p class="markdown-alert-title">Tip</p>
 <ul>
 <li></li>
 </ul>
@@ -292,7 +319,8 @@ analyzed fresh and its tag line is recognized (md4c #320, `5f9b246`).
 .
 <pre><code>codeblock
 </code></pre>
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>foo</p>
 </blockquote>
 ````````````````````````````````
@@ -324,7 +352,8 @@ deliberately.
 > [!note]
 text
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 </blockquote>
 <p>text</p>
 ````````````````````````````````
@@ -339,7 +368,8 @@ spaces on the input line below are significant.
 > [!note]   
 > x
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>x</p>
 </blockquote>
 ````````````````````````````````
@@ -351,8 +381,10 @@ spaces on the input line below are significant.
 > > [!tip]
 > > y
 .
-<blockquote class="alert alert-note">
-<blockquote class="alert alert-tip">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
+<blockquote class="alert alert-tip markdown-alert markdown-alert-tip">
+<p class="markdown-alert-title">Tip</p>
 <p>y</p>
 </blockquote>
 </blockquote>
@@ -365,7 +397,8 @@ spaces on the input line below are significant.
   > x
 .
 <ul>
-<li><blockquote class="alert alert-tip">
+<li><blockquote class="alert alert-tip markdown-alert markdown-alert-tip">
+<p class="markdown-alert-title">Tip</p>
 <p>x</p>
 </blockquote>
 </li>
@@ -450,7 +483,8 @@ x</p>
 >[!note]
 >x
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>x</p>
 </blockquote>
 ````````````````````````````````
@@ -479,7 +513,8 @@ class verbatim, with no separator normalization.
 > [!v2_note]
 > x
 .
-<blockquote class="alert alert-v2_note">
+<blockquote class="alert alert-v2_note markdown-alert markdown-alert-v2_note">
+<p class="markdown-alert-title">V2_note</p>
 <p>x</p>
 </blockquote>
 ````````````````````````````````
@@ -488,7 +523,8 @@ class verbatim, with no separator normalization.
 > [!123]
 > x
 .
-<blockquote class="alert alert-123">
+<blockquote class="alert alert-123 markdown-alert markdown-alert-123">
+<p class="markdown-alert-title">123</p>
 <p>x</p>
 </blockquote>
 ````````````````````````````````
@@ -497,7 +533,8 @@ class verbatim, with no separator normalization.
 > [!-x]
 > x
 .
-<blockquote class="alert alert--x">
+<blockquote class="alert alert--x markdown-alert markdown-alert--x">
+<p class="markdown-alert-title">-x</p>
 <p>x</p>
 </blockquote>
 ````````````````````````````````
@@ -506,7 +543,8 @@ class verbatim, with no separator normalization.
 > [!_]
 > x
 .
-<blockquote class="alert alert-_">
+<blockquote class="alert alert-_ markdown-alert markdown-alert-_">
+<p class="markdown-alert-title">_</p>
 <p>x</p>
 </blockquote>
 ````````````````````````````````
@@ -521,7 +559,8 @@ divergence from md4c #320.
 > [!noteX]
 > foo
 .
-<blockquote class="alert alert-notex">
+<blockquote class="alert alert-notex markdown-alert markdown-alert-notex">
+<p class="markdown-alert-title">Notex</p>
 <p>foo</p>
 </blockquote>
 ````````````````````````````````
@@ -534,7 +573,8 @@ divergence from md4c #320.
 > |---|
 > | b |
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <table>
 <thead>
 <tr>
@@ -560,7 +600,8 @@ than one chunk must come out whole rather than truncated at the buffer size.
 > [!AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]
 > foo
 .
-<blockquote class="alert alert-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
+<blockquote class="alert alert-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa markdown-alert markdown-alert-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
+<p class="markdown-alert-title">Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</p>
 <p>foo</p>
 </blockquote>
 ````````````````````````````````

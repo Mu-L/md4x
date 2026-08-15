@@ -6,6 +6,23 @@
 
 **Inline elements:** emphasis (`*`/`_`), strong (`**`/`__`), links, images, inline code, raw HTML spans, hard breaks (trailing spaces or `\`), soft breaks.
 
+### Heading IDs
+
+Headings carry a generated `id`, slugged from their text and de-duplicated within the document:
+
+```
+# Hello World      → <h1 id="hello-world">Hello World</h1>
+```
+
+All renderers agree on the slug (`src/renderers/md4x-slug.zig`); the JSON renderer also exposes it
+on `meta.headings` for TOC building. A `{#custom-id}` block attribute overrides the generated value.
+
+> **Not CommonMark**, so in HTML it is opt-in: md4c and the CommonMark reference implementations
+> emit bare `<hN>`, and so does md4x unless the caller asks for ids — `--heading-ids` on the CLI,
+> `{ headingIds: true }` from JS, `MD_HTML_FLAG_HEADING_IDS` in Zig. `test/spec.txt` runs without
+> the flag and stays an unmodified CommonMark conformance check. The JSON/meta outputs are Comark's
+> own rather than CommonMark's, so they always carry the id.
+
 ## Extension: Tables (`MD_FLAG_TABLES`)
 
 ```
@@ -69,9 +86,8 @@ Interactions with the other MD4X extensions:
 
 - `[^1]{.cls}` — **footnote wins**, the `{...}` stays literal. The span is
   self-contained, so there is no content for inline attributes to attach to.
-- Wiki links are unaffected: a footnote opener is `[^`, never the `[[` a wiki link
-  needs. A reference that lands inside a wiki-link **destination** is swallowed by
-  the destination.
+- A reference that lands inside a link **destination** is swallowed by the
+  destination and never resolves.
 - Alerts (`[!TYPE]`) and components (`:name[…]`, `::name`) do not overlap `[^`.
 
 ## Extension: Permissive Autolinks
@@ -84,15 +100,36 @@ Interactions with the other MD4X extensions:
 
 Inline `$...$` and display `$$...$$`. Opener must not be preceded by alphanumeric; closer must not be followed by alphanumeric.
 
-## Extension: Wiki Links (`MD_FLAG_WIKILINKS`)
-
-`[[target]]` — Max 100 character destination.
-
 ## Extension: Frontmatter (`MD_FLAG_FRONTMATTER`)
 
-YAML-style frontmatter delimited by `---` at the very start of the document. The opening `---` must be on the first line (no leading blank lines). Content is exposed as verbatim text via `MD_BLOCK_FRONTMATTER`. The HTML renderer suppresses frontmatter from body output; in full-HTML mode (`MD_HTML_FLAG_FULL_HTML`), YAML `title` and `description` fields are used in `<head>`. If unclosed, the rest of the document is treated as frontmatter content. Special fields: `depth` (max heading level for TOC, default 2), `searchDepth` (TOC search depth, default 2).
+YAML-style frontmatter delimited by `---` at the very start of the document. The opening `---` must be on the first line (no leading blank lines). Content is exposed as verbatim text via the `.frontmatter` block. The HTML renderer suppresses frontmatter from body output; in full-HTML mode (`MD_HTML_FLAG_FULL_HTML`), YAML `title` and `description` fields are used in `<head>`. An **unclosed** `---` is not frontmatter: the opener falls back to a thematic break and the rest of the document parses as ordinary blocks.
 
-**JSON renderer YAML parsing:** The JSON renderer uses [libyaml](https://github.com/yaml/libyaml) to parse frontmatter into the element's props object. Full YAML 1.1 is supported including nested objects, arrays (block and flow), and multi-line values (literal `|` and folded `>`). Plain scalars have type coercion: numbers (int/float), booleans (`true`/`false`/`yes`/`no`/`on`/`off`), null (`null`/`~`/empty). Quoted scalars (`""`/`''`) are always strings. The raw text is preserved as a child string: `["frontmatter", {"title": "Hello", "count": 42}, "title: Hello\ncount: 42\n"]`.
+```
+---            → <hr>
+title: Hello     <p>title: Hello</p>
+```
+
+A closed block additionally has to _contain_ YAML. The classifier skips blank lines and `#` comments below the opener and requires a mapping line — `key:` followed by a space or the line end. A body that reads as markdown is not frontmatter, so `---` / `Foo` / `---` is a thematic break and a setext heading rather than a swallowed `Foo`:
+
+```
+---            → <hr>
+Foo              <h2>Foo</h2>
+---
+```
+
+A block with **no characters at all** between its fences opens nothing either: `---` / `---`
+is two thematic breaks, and so is `---` / blank line / `---`. One character is enough to make
+it frontmatter again — a single space, a comment, a second blank line (whose separating
+newline is itself a character) — and the result is an empty `frontmatter` object. That
+threshold is Comark's, verified against `comark@0.6.2`; `test/spec-frontmatter.txt` pins
+each side of it, and [compatibility.md](compatibility.md#frontmatter) explains why.
+
+In a **component's** props position the empty case goes the other way: `::card` / `---` / `---`
+consumes the block, because there is no document content there to protect. Comark agrees.
+
+Frontmatter keys carry no special meaning to the parser: every key is passed through to the `frontmatter` object as-is. (`title` and `description` are read only by the HTML renderer's full-HTML mode, as above.)
+
+**JSON renderer YAML parsing:** The JSON renderer uses [libyaml](https://github.com/yaml/libyaml) to parse frontmatter into the tree's top-level `frontmatter` object. Full YAML 1.1 is supported including nested objects, arrays (block and flow), and multi-line values (literal `|` and folded `>`). Plain scalars have type coercion: numbers (int/float), booleans (`true`/`false`/`yes`/`no`/`on`/`off`), null (`null`/`~`/empty). Quoted scalars (`""`/`''`) are always strings. Frontmatter is not a node — it sits beside `nodes` on the tree, and the raw text is not preserved: `{"nodes": [...], "frontmatter": {"title": "Hello", "count": 42}, "meta": {...}}`. Content that is not a YAML mapping (a bare scalar) is consumed but yields `{}`.
 
 ## Extension: Alerts (`MD_FLAG_ALERTS`)
 
@@ -107,7 +144,7 @@ GitHub-style alert/admonition syntax. A blockquote whose first line is `> [!TYPE
 ```
 
 - TYPE is any non-empty ASCII name matching `[a-zA-Z0-9_-]+`, case-insensitive. The charset is applied uniformly from the first character, so a type may also begin with a digit, `-` or `_` (`[!123]`, `[!-x]`, `[!_]` are all alerts). Non-ASCII letters are not accepted
-- The parser reports the type as **source text** (`"NOTE"`); only the HTML renderer lowercases it for the class name, so a consumer matching on the JSON/AST prop must case-fold itself
+- The parser reports the type as **source text** (`"NOTE"`), and each renderer decides what to do with it: HTML and JSON/AST case-fold it (`alert-note`, `{"type":"note"}`), the markdown renderer round-trips the author's spelling, and the ANSI and plain-text renderers print it as written
 - The `[!TYPE]` line must be the **first line** of the blockquote and the **only content** on that line
 - Text after `[!TYPE]` on the same line disqualifies it (treated as normal blockquote)
 - `[!TYPE]` not on the first line is treated as literal text
@@ -115,7 +152,18 @@ GitHub-style alert/admonition syntax. A blockquote whose first line is `> [!TYPE
 - Supports all GitHub types (NOTE, TIP, IMPORTANT, WARNING, CAUTION) plus custom types
 - Content supports full markdown (inline formatting, lists, nested blockquotes, code blocks)
 
-HTML renderer: `<blockquote class="alert alert-{type}">` (type lowercased in class). JSON renderer: `["alert", {"type": "NOTE"}, ...children]`. ANSI renderer: colored thick left bar (`▌`) with type-specific colors (note/info=blue, tip/success=green, important=magenta, warning=yellow, caution/danger=red). Block components `::alert{type="..."}`, `::note`, `::warning`, etc. also render with the same style.
+HTML renderer:
+
+```html
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+  <p class="markdown-alert-title">Note</p>
+  <p>This is a note</p>
+</blockquote>
+```
+
+The element stays a `<blockquote>` — an alert _is_ a block quote, and GitHub's `<div>` substitution loses that for every consumer without the stylesheet — but carries **both** class sets, so GitHub's class-based alert CSS matches md4x output unchanged. The title row is GitHub's, **minus the inline octicon**: the icon is a stylesheet's business, and consumers who want one attach it to `.markdown-alert-title`. Its label is derived from the case-folded type with an initial capital (`[!NOTE]`, `[!note]` and `[!Note]` are one node, one class, one label — `Note`), which spells GitHub's five exactly as GitHub does and gives a custom `[!DEPLOY]` the label `Deploy`.
+
+JSON renderer: `["alert", {"type": "note"}, ...children]` (type lowercased). ANSI renderer: colored thick left bar (`▌`) with type-specific colors (note/info=blue, tip/success=green, important=magenta, warning=yellow, caution/danger=red), and a title line that keeps the **author's** casing rather than the HTML renderer's derived label — see [renderers.md](renderers.md). Block components `::alert{type="..."}`, `::note`, `::warning`, etc. also render with the same style.
 
 ## Extension: Inline Components (`MD_FLAG_COMPONENTS`)
 
@@ -151,8 +199,11 @@ This is **important** content.
 - **With title**: `:::name Title text\ncontent\n:::` — VitePress-style custom container with title
 - **With title and props**: `:::name Title text {key="value"}\ncontent\n:::`
 - **Empty**: `::divider\n::` — no content between open/close
-- **Nested**: Use more colons for outer containers: `:::outer\n::inner\n::\n:::`
-- **Deep nesting**: `::::` > `:::` > `::` (outer must have more colons than inner)
+- **Nested**: `:::outer\n::inner\n::\n:::`
+- **Deep nesting**: nesting is resolved by matching each opener with its closer; the colon count is
+  not a constraint. Increasing it inward (`::` > `:::` > `::::`), decreasing it inward
+  (`::::` > `:::` > `::`) and keeping it constant all nest identically. Varying it is a readability
+  convention only.
 
 VitePress-style custom containers are supported via the title syntax:
 
@@ -204,10 +255,31 @@ Store data in Azure available storages.
 ::
 ```
 
-- The opening `---` must be the first non-blank line inside the component
-- YAML content between `---` delimiters is parsed as key-value props
-- If `{props}` are also present on the opening line, both are merged (YAML first, then `{props}`)
+The same block can be written as a fenced `yaml` block whose info string names `props`, which is the
+spelling Comark's documentation leads with. The two forms are equivalent:
+
+````
+::card
+```yaml [props]
+icon: mdi:microsoft-azure
+title: Azure
+```
+Store data in Azure available storages.
+::
+````
+
+- The opening `---` (or the ` ```yaml [props] ` fence) must be the first non-blank line inside the component
+- YAML content between the delimiters is parsed as key-value props
+- If `{props}` are also present on the opening line, both are merged and **inline props win**: a key
+  present in both appears once, carrying the inline value. A `class` given inline **replaces** any
+  YAML `class` rather than merging with it — precedence means replacement, and `.class`
+  accumulation is a shorthand rule within a single `{...}` run
+- Block props must precede any `#slot` definitions
 - A `---` that is not the first content is treated as a normal thematic break (`<hr>`)
+- So is a `---` whose body is markdown rather than YAML: the same mapping-line test the
+  document fence applies gates this one, so a thematic break written at the top of a
+  component no longer swallows the lines below it. An empty or comment-only block stays
+  props (and yields no props), matching Comark
 
 HTML renderer: frontmatter is suppressed (not rendered). JSON renderer: YAML is parsed and merged into the component's props object: `["card", {"icon": "mdi:microsoft-azure", "to": "/drivers/azure", ...}, ...]`.
 
@@ -263,16 +335,79 @@ The `[text]{.class}` syntax (brackets NOT followed by `(url)`) creates a generic
 [**bold** text]{.styled}   → <span class="styled"><strong>bold</strong> text</span>
 ```
 
-Property syntax is shared with components: `{key="value" bool #id .class}`. Multiple `.class` values are merged. Empty `{}` is a no-op.
+Property syntax is shared with components: `{key="value" bool #id .class}`. Multiple `.class` values are merged into one `class`. Empty `{}` is a no-op.
+
+Attributes are emitted in **source order**, with the merged `class` taking the position of the
+first `.class` in the run — `{#status .badge .success data-state="active"}` yields
+`id`, `class`, `data-state`. This is observable in JSON key order, so AST consumers can rely on it.
 
 Constraints:
 
 - `{...}` must immediately follow the closing delimiter (no space)
-- Only applies to resolved inline elements (not plain text — `hello{.class}` is literal)
+- Only applies to resolved inline elements (not plain text — `hello{.class}` is literal). A `{...}`
+  run separated from the element by a space is not an inline attribute; it may instead be consumed
+  as a **block attribute** (below).
 - Spans with `MD_FLAG_ATTRIBUTES`: em/strong/code/del/u/mark pass `MD_SPAN_ATTRS_DETAIL*` (or `NULL` without attrs), links/images extend their detail structs with `raw_attrs`/`raw_attrs_size`
 - `MD_SPAN_SPAN` is emitted for `[text]{attrs}` with `MD_SPAN_SPAN_DETAIL`
 
 HTML renderer: attributes rendered on opening tags. JSON renderer: attrs merged into node props. ANSI renderer: transparent (ignores attrs).
+
+### Block attributes
+
+A `{...}` run at the end of a block's last line attaches to that **block** rather than to an inline
+element. It is consumed before the block's content is processed, so it never reaches the output as
+text and never contaminates a heading's generated slug:
+
+```
+A paragraph {attr="value"}          → <p attr="value">A paragraph</p>
+# Heading {.intro}                  → <h1 id="heading" class="intro">Heading</h1>
+- a list item {attr="value"}        → <li attr="value">a list item</li>
+- [ ] Task {attr="value"}           → <li class="task-list-item" attr="value">…
+```
+
+Blockquotes depend on paragraph count, and the two forms differ in shape as well as in target:
+
+```
+> Blockquote {attr="value"}         → <blockquote attr="value">Blockquote</blockquote>
+
+> P1 {attr="value"}                 → <blockquote>
+>                                        <p attr="value">P1</p>
+> P2 {attr2="value2"}                    <p attr2="value2">P2</p>
+                                       </blockquote>
+```
+
+A single-paragraph blockquote puts the attributes on the `<blockquote>` and drops the `<p>` wrapper;
+a multi-paragraph one attaches each run to its own paragraph and leaves the blockquote bare.
+
+Because a space before the brace makes the run a block attribute, `A paragraph [span] {attr="value"}`
+attaches `attr` to the paragraph, while `A paragraph [span]{attr="value"}` (no space) attaches it to
+the span.
+
+> **Divergence.** Comark additionally renders the bare `[span]` in the spaced form as an
+> attribute-less `<span>`; md4x leaves it as literal text. Implementing it conflicts with CommonMark
+> bracket resolution — see `.agents/upstream-sync.md`.
+
+### Wrapper folding
+
+`::ul`, `::ol`, `::table`, `::blockquote` and `::pre` wrapping a **single** same-tagged child fold
+into one element carrying the wrapper's attributes. This is how attributes reach elements that have
+no trailing-brace slot of their own:
+
+```mdc
+::ul{attr="value"}
+- item 1
+- item 2
+::
+```
+
+```html
+<ul attr="value">
+  <li>item 1</li>
+  <li>item 2</li>
+</ul>
+```
+
+Folding requires exactly one child and a matching tag; anything else nests normally.
 
 ## Code Block Metadata
 
@@ -292,7 +427,7 @@ code here
 
 ## Emojis
 
-`:emoji_name:` syntax is supported (e.g. `:rocket:` → 🚀, `:wave:` → 👋). Works in text and inside components.
+`:emoji_name:` syntax (e.g. `:rocket:` → 🚀, `:wave:` → 👋) is a **build-time opt-in**, off by default: the 1913-entry shortcode table costs ~26 KB gzipped on the standalone bundle, so no shipped artifact carries it and a shortcode reaches the output verbatim. Build with `zig build -Demoji=true` (or `bun scripts/js-artifacts.ts build -Demoji=true` for the JS artifacts) to enable it; it then works in text and inside components.
 
 ## Excerpts
 

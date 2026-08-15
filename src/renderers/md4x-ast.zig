@@ -94,6 +94,7 @@ const jsonWriteStr = json.json_write_str;
 const jsonWriteEscaped = json.json_write_escaped;
 const jsonWriteString = json.json_write_string;
 const jsonWriteYamlProps = json.json_write_yaml_props;
+const jsonWriteYamlPropsEx = json.json_write_yaml_props_ex;
 
 // ---- Props parser (md4x-props.zig) ----
 const ParsedProps = props.MD_PARSED_PROPS;
@@ -121,7 +122,6 @@ const TagKind = enum {
     pre,
     a,
     img,
-    wikilink,
     template,
     alert,
     ol,
@@ -187,8 +187,6 @@ const Detail = struct {
     // img
     img_src: ?[:0]u8 = null,
     img_title: ?[:0]u8 = null,
-    // wikilink
-    wikilink_target: ?[:0]u8 = null,
     // component
     component_raw_props: ?[:0]u8 = null,
     component_title: ?[:0]u8 = null,
@@ -527,6 +525,37 @@ fn jsonIsHtmlComment(text: []const u8) ?[]const u8 {
 
 const heading_tags = [_][:0]const u8{ "h0", "h1", "h2", "h3", "h4", "h5", "h6" };
 
+// Record a block's trailing `{...}` run on the node. Same channel the spans use,
+// so jsonWriteProps merges it after the block type's own props with no extra
+// case of its own. Best-effort on OOM, exactly like the span sites.
+// The explicit id from a heading's trailing `{...}` run, if it has one, in
+// either the `#id` shorthand or the `id="..."` key-value spelling.
+fn headingExplicitId(n: *JsonNode) ?[]const u8 {
+    const raw = n.raw_attrs orelse return null;
+    if (raw.len == 0) return null;
+    var parsed: props.MD_PARSED_PROPS = .{};
+    props.md_parse_props(raw.ptr, @intCast(raw.len), &parsed);
+    if (!props.parsedHasId(&parsed)) return null;
+    if (parsed.id) |p| {
+        if (parsed.id_size > 0) return p[0..parsed.id_size];
+    }
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(parsed.n_props))) : (i += 1) {
+        const p = &parsed.props[i];
+        if (p.key_size == 2 and std.mem.eql(u8, p.key[0..2], "id")) {
+            const v = p.value orelse return "";
+            return v[0..p.value_size];
+        }
+    }
+    return null;
+}
+
+fn jsonSetBlockAttrs(n: *JsonNode, raw_attrs: []const u8) void {
+    if (raw_attrs.len == 0) return;
+    if (dupNts(raw_attrs)) |dup|
+        n.raw_attrs = dup;
+}
+
 fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.CallbackResult {
     const ctx: *JsonCtx = @ptrCast(@alignCast(userdata.?));
 
@@ -668,9 +697,11 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
     switch (detail.*) {
         .ul => |*d| {
             n.detail.ul_is_tight = d.is_tight;
+            jsonSetBlockAttrs(n, d.raw_attrs);
         },
         .h => |*d| {
             n.detail.h_level = d.level;
+            jsonSetBlockAttrs(n, d.raw_attrs);
             ctx.in_heading = true;
             ctx.heading_node = n;
             ctx.heading_text.clearRetainingCapacity();
@@ -679,11 +710,17 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
             n.detail.ol_is_tight = d.is_tight;
             n.detail.ol_start = d.start;
             n.detail.ol_delimiter = @bitCast(d.mark_delimiter);
+            jsonSetBlockAttrs(n, d.raw_attrs);
         },
         .li => |*d| {
             n.detail.li_is_task = d.is_task;
             n.detail.li_task_mark = @bitCast(d.task_mark);
+            jsonSetBlockAttrs(n, d.raw_attrs);
         },
+        // A block-level trailing `{...}`, merged by jsonWriteProps after
+        // whatever props the block type carries of its own.
+        .p => |*d| jsonSetBlockAttrs(n, d.raw_attrs),
+        .quote => |*d| jsonSetBlockAttrs(n, d.raw_attrs),
         .code => |*d| {
             n.detail.code_info = jsonAttrToStr(&d.info);
             n.detail.code_lang = jsonAttrToStr(&d.lang);
@@ -701,9 +738,11 @@ fn jsonEnterBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
                     n.detail.code_highlights = arr;
                 }
             }
+            jsonSetBlockAttrs(n, d.raw_attrs);
         },
         .table => |*d| {
             n.detail.table_col_count = d.col_count;
+            jsonSetBlockAttrs(n, d.raw_attrs);
         },
         .th, .td => |*d| {
             n.detail.td_align = @intCast(@intFromEnum(d.@"align"));
@@ -750,11 +789,18 @@ fn jsonLeaveBlock(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callbac
             ctx.err = 1;
             return -1;
         };
-        const id = ctx.slugger.slug(ctx.alloc, text) catch {
+        // An explicit `{#id}` in the block attributes wins over the generated
+        // slug. It is published on the node by the raw-attrs path, so setting
+        // `h_id` as well would emit `id` twice; `meta.headings` carries the
+        // explicit value so a TOC still points at the anchor that exists.
+        const explicit = if (ctx.heading_node) |h| headingExplicitId(h) else null;
+        const id = explicit orelse ctx.slugger.slug(ctx.alloc, text) catch {
             ctx.err = 1;
             return -1;
         };
-        if (ctx.heading_node) |h| h.detail.h_id = id;
+        if (explicit == null) {
+            if (ctx.heading_node) |h| h.detail.h_id = id;
+        }
         ctx.headings.append(ctx.alloc, .{
             .level = if (ctx.heading_node) |h| h.detail.h_level else 0,
             .text = text,
@@ -841,7 +887,6 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .mark => tag = "mark",
             .latexmath => tag = "math",
             .latexmath_display => tag = "math-display",
-            .wikilink => tag = "wikilink",
             .span => tag = "span",
             .footnote_ref => tag = "footnote-ref",
             // `.component` is resolved above; the arm only exists to keep the
@@ -863,7 +908,6 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .code => .code,
             .latexmath => .math,
             .latexmath_display => .math_display,
-            .wikilink => .wikilink,
             .footnote_ref => .footnote_ref,
             else => .other,
         };
@@ -885,9 +929,6 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
                         n.raw_attrs = dup;
                 }
                 ctx.image_nesting = 1;
-            },
-            .wikilink => |*d| {
-                n.detail.wikilink_target = jsonAttrToStr(&d.target);
             },
             .span => |*d| {
                 if (d.raw_attrs.len > 0) {
@@ -1142,60 +1183,136 @@ fn parsedPropsAreEmpty(parsed: *const ParsedProps) bool {
 // Returns number of props written.
 fn jsonWriteParsedProps(w: *JsonWriter, parsed: *const ParsedProps) c_int {
     var n_written: c_int = 0;
-
-    // Write #id.
-    if (parsed.id != null and parsed.id_size > 0) {
-        if (n_written > 0) jsonWrite(w, ",", 1);
-        jsonWriteStr(w, "\"id\":");
-        jsonWriteString(w, parsed.id.?, parsed.id_size);
-        n_written += 1;
-    }
-
-    // Write regular props.
-    var i: c_int = 0;
-    while (i < parsed.n_props) : (i += 1) {
-        const p = &parsed.props[@intCast(i)];
-
-        if (n_written > 0) jsonWrite(w, ",", 1);
-
-        switch (p.type) {
-            .string => {
-                jsonWrite(w, "\"", 1);
-                jsonWriteEscaped(w, p.key, p.key_size);
-                jsonWriteStr(w, "\":");
-                jsonWriteString(w, p.value.?, p.value_size);
-                n_written += 1;
-            },
-            .boolean => {
-                jsonWriteStr(w, "\":");
-                jsonWriteEscaped(w, p.key, p.key_size);
-                jsonWriteStr(w, "\":\"true\"");
-                n_written += 1;
-            },
-            .bind => {
-                jsonWrite(w, "\":", 2);
-                jsonWriteEscaped(w, p.key, p.key_size);
-                jsonWriteStr(w, "\":");
-                // The bind value is emitted as a JSON-escaped *string*, never
-                // spliced in raw: a raw splice produces invalid JSON for any
-                // non-JSON value and lets an author inject arbitrary sibling
-                // keys into the props object. See docs/comark-ast.md
-                // ("Object/Array Properties") and docs/js-bindings.md.
-                jsonWriteString(w, p.value.?, p.value_size);
-                n_written += 1;
-            },
-        }
-    }
-
-    // Write merged class.
-    if (parsed.class_len > 0) {
-        if (n_written > 0) jsonWrite(w, ",", 1);
-        jsonWriteStr(w, "\"class\":");
-        jsonWriteString(w, &parsed.class_buf, parsed.class_len);
-        n_written += 1;
-    }
-
+    jsonWriteParsedPropsInto(w, parsed, null, &n_written);
     return n_written;
+}
+
+// As above, but appending to an object a caller has already written into:
+// `n_written` carries the running pair count in and out, so the separating
+// comma is placed here rather than guessed by the caller. Slots the `Shadow`
+// records as already emitted (the component frontmatter merge below) are
+// skipped.
+fn jsonWriteParsedPropsInto(w: *JsonWriter, parsed: *const ParsedProps, shadow: ?*const Shadow, n_written: *c_int) void {
+    var it = props.slots(parsed);
+    var slot_index: usize = 0;
+    while (it.next()) |slot| : (slot_index += 1) {
+        if (shadow) |sh| {
+            if (sh.used(slot_index)) continue;
+        }
+        if (n_written.* > 0) jsonWrite(w, ",", 1);
+        jsonWritePropKey(w, slot);
+        jsonWrite(w, ":", 1);
+        jsonWritePropValue(w, slot);
+        n_written.* += 1;
+    }
+}
+
+// The quoted JSON key a slot emits under. A boolean or bind prop takes the
+// `":key"` spelling (see docs/comark-ast.md); HTML strips that `:`.
+fn jsonWritePropKey(w: *JsonWriter, slot: props.Slot) void {
+    switch (slot) {
+        .id => jsonWriteStr(w, "\"id\""),
+        .class => jsonWriteStr(w, "\"class\""),
+        .prop => |p| {
+            jsonWrite(w, "\"", 1);
+            if (p.type != .string) jsonWrite(w, ":", 1);
+            jsonWriteEscaped(w, p.key, p.key_size);
+            jsonWrite(w, "\"", 1);
+        },
+    }
+}
+
+fn jsonWritePropValue(w: *JsonWriter, slot: props.Slot) void {
+    switch (slot) {
+        .id => |id| jsonWriteString(w, id.ptr, @intCast(id.len)),
+        .class => |cls| jsonWriteString(w, cls.ptr, @intCast(cls.len)),
+        .prop => |p| switch (p.type) {
+            // The bind value is emitted as a JSON-escaped *string*, never
+            // spliced in raw: a raw splice produces invalid JSON for any
+            // non-JSON value and lets an author inject arbitrary sibling keys
+            // into the props object. See docs/comark-ast.md ("Object/Array
+            // Properties") and docs/js-bindings.md.
+            .string, .bind => jsonWriteString(w, p.value.?, p.value_size),
+            .boolean => jsonWriteStr(w, "\"true\""),
+        },
+    }
+}
+
+// True when the slot's JSON key is exactly `key`.
+fn jsonPropKeyEql(slot: props.Slot, key: []const u8) bool {
+    switch (slot) {
+        .id => return std.mem.eql(u8, key, "id"),
+        .class => return std.mem.eql(u8, key, "class"),
+        .prop => |p| {
+            const name = p.key[0..p.key_size];
+            if (p.type == .string) return std.mem.eql(u8, key, name);
+            return key.len == name.len + 1 and key[0] == ':' and
+                std.mem.eql(u8, key[1..], name);
+        },
+    }
+}
+
+// Which slots of a component's inline `{...}` have already been emitted, in the
+// YAML key position that shadowed them. A `MD_MAX_PROPS` (32) prop cap plus the
+// `#id` and `.class` slots is 34, so a u64 covers every representable slot.
+const Shadow = struct {
+    mask: u64 = 0,
+    /// The component's `::name Title` has been emitted (at a YAML `title:` key).
+    title_used: bool = false,
+
+    fn used(self: *const Shadow, i: usize) bool {
+        return i < 64 and (self.mask >> @intCast(i)) & 1 != 0;
+    }
+
+    fn mark(self: *Shadow, i: usize) void {
+        if (i < 64) self.mask |= @as(u64, 1) << @intCast(i);
+    }
+};
+
+// The three prop sources a block component can carry, merged in one pass.
+//
+// Precedence is YAML block props < `::name Title` < inline `{...}` attributes
+// (`.agents/comark/components.md:173,182`), and the merge follows JS object
+// spread: a key keeps the POSITION of its first source and the VALUE of its
+// last. Emitting them as three independent runs produced the same effective
+// value only by accident — through a DUPLICATE key that strict JSON consumers
+// reject and that a source-order consumer resolves the wrong way.
+const CompMerge = struct {
+    parsed: *const ParsedProps,
+    has_parsed: bool,
+    title: []const u8,
+    shadow: Shadow = .{},
+
+    // The first not-yet-emitted inline slot named `key`, marked as emitted.
+    fn takeInline(self: *CompMerge, key: []const u8) ?props.Slot {
+        if (!self.has_parsed) return null;
+        var it = props.slots(self.parsed);
+        var i: usize = 0;
+        while (it.next()) |slot| : (i += 1) {
+            if (self.shadow.used(i)) continue;
+            if (jsonPropKeyEql(slot, key)) {
+                self.shadow.mark(i);
+                return slot;
+            }
+        }
+        return null;
+    }
+};
+
+// json.YamlOverride hook: a YAML key an inline attribute (or the component
+// title) also defines takes the higher-precedence value, at the YAML position.
+fn compMergeOverride(ctx: ?*anyopaque, w: *JsonWriter, key: []const u8) bool {
+    const m: *CompMerge = @ptrCast(@alignCast(ctx.?));
+    if (m.takeInline(key)) |slot| {
+        jsonWritePropValue(w, slot);
+        return true;
+    }
+    if (m.title.len > 0 and !m.shadow.title_used and std.mem.eql(u8, key, "title")) {
+        m.shadow.title_used = true;
+        jsonWriteSlice(w, m.title);
+        return true;
+    }
+    return false;
 }
 
 // Write `s` as a quoted, JSON-escaped string using its **exact** length. Every
@@ -1240,47 +1357,60 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
     // be checked first to avoid misinterpreting detail when a component name
     // collides with a static tag (e.g. ::alert{...}).
     if (node.tag_is_dynamic) {
-        // Component frontmatter: if first child is a frontmatter node, merge its YAML as props.
+        // Declared here rather than inside the `raw_props` branch: ParsedProps is
+        // ~1.5 KB and Debug / ReleaseSafe fill `undefined` with 0xaa, so it is
+        // still only touched when there is a prop string to parse.
+        var parsed: ParsedProps = undefined;
+        var merge = CompMerge{ .parsed = &parsed, .has_parsed = false, .title = &.{} };
+
+        // A non-empty raw string can still yield zero props (`{ }`, `{=}`, `{.}`,
+        // `{#}`), which is what `has_parsed` records.
+        if (node.detail.component_raw_props) |raw| {
+            if (raw.len > 0) {
+                mdParseProps(raw.ptr, @intCast(raw.len), &parsed);
+                merge.has_parsed = !parsedPropsAreEmpty(&parsed);
+            }
+        }
+        if (node.detail.component_title) |title| merge.title = title;
+
+        // Component frontmatter: if first child is a frontmatter node, merge its
+        // YAML as props — with the inline attributes and the title shadowing the
+        // keys they redefine, in place.
         if (node.first_child != null and node.first_child.?.kind == .element and
             node.first_child.?.tag != null and !node.first_child.?.tag_is_dynamic and
             node.first_child.?.tag_kind == .frontmatter and
             node.first_child.?.text_value != null and node.first_child.?.text_value.?.len > 0)
         {
             const fm = node.first_child.?.text_value.?;
-            has_prop = @intFromBool(jsonWriteYamlProps(w, fm.ptr, @intCast(fm.len)) > 0);
+            const override = json.YamlOverride{ .ctx = &merge, .write_value = compMergeOverride };
+            has_prop = jsonWriteYamlPropsEx(w, fm.ptr, @intCast(fm.len), &override);
         }
-        // Component title (e.g. :::danger STOP → "title":"STOP").
-        if (node.detail.component_title) |title| {
-            if (title.len > 0) {
-                if (has_prop != 0) jsonWrite(w, ",", 1);
-                jsonWriteStr(w, "\"title\":");
-                jsonWriteSlice(w, title);
-                has_prop = 1;
-            }
+
+        // Component title (e.g. :::danger STOP → "title":"STOP"), unless a YAML
+        // `title:` key already carried it. An inline `title=` outranks it there.
+        if (merge.title.len > 0 and !merge.shadow.title_used) {
+            if (has_prop != 0) jsonWrite(w, ",", 1);
+            jsonWriteStr(w, "\"title\":");
+            if (merge.takeInline("title")) |slot|
+                jsonWritePropValue(w, slot)
+            else
+                jsonWriteSlice(w, merge.title);
+            has_prop += 1;
         }
-        // Component: parse raw props string. A non-empty raw string can still
-        // yield zero props (`{ }`, `{=}`, `{.}`, `{#}`), so the separating comma
-        // is emitted only once the parse says something will follow it.
-        if (node.detail.component_raw_props) |raw| {
-            if (raw.len > 0) {
-                // Declared inside the branch: ParsedProps is ~1.5 KB and Debug /
-                // ReleaseSafe fill `undefined` with 0xaa, so hoisting it would cost
-                // that memset on every element node, prop string or not.
-                var parsed: ParsedProps = undefined;
-                mdParseProps(raw.ptr, @intCast(raw.len), &parsed);
-                if (!parsedPropsAreEmpty(&parsed)) {
-                    if (has_prop != 0) jsonWrite(w, ",", 1);
-                    _ = jsonWriteParsedProps(w, &parsed);
-                    has_prop = 1;
-                }
-            }
-        }
+
+        // Whatever the inline `{...}` declared that nothing above consumed.
+        if (merge.has_parsed)
+            jsonWriteParsedPropsInto(w, &parsed, &merge.shadow, &has_prop);
     } else switch (node.tag_kind) {
         .heading => {
+            // An empty slug means the heading had no sluggable text; publish no
+            // `id` at all rather than `"id":""`, matching the HTML renderer.
             if (node.detail.h_id) |id| {
-                jsonWriteStr(w, "\"id\":");
-                jsonWriteSlice(w, id);
-                has_prop = 1;
+                if (id.len > 0) {
+                    jsonWriteStr(w, "\"id\":");
+                    jsonWriteSlice(w, id);
+                    has_prop = 1;
+                }
             }
         },
         // The only thing separating a raw-HTML block from an inline one. An
@@ -1376,13 +1506,6 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
                 has_prop = 1;
             }
         },
-        .wikilink => {
-            if (node.detail.wikilink_target) |target| {
-                jsonWriteStr(w, "\"target\":");
-                jsonWriteSlice(w, target);
-                has_prop = 1;
-            }
-        },
         .template => {
             if (node.detail.tmpl_name) |name| {
                 jsonWriteStr(w, "\"name\":");
@@ -1434,11 +1557,7 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
         if (raw.len > 0) {
             var parsed: ParsedProps = undefined;
             mdParseProps(raw.ptr, @intCast(raw.len), &parsed);
-            if (!parsedPropsAreEmpty(&parsed)) {
-                if (has_prop != 0) jsonWrite(w, ",", 1);
-                _ = jsonWriteParsedProps(w, &parsed);
-                has_prop = 1;
-            }
+            jsonWriteParsedPropsInto(w, &parsed, null, &has_prop);
         }
     }
 

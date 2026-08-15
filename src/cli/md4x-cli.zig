@@ -57,6 +57,7 @@ const MD_HTML_OPTS = lib.MD_HTML_OPTS;
 const MD_HTML_FLAG_DEBUG: c_uint = 0x0001;
 const MD_HTML_FLAG_SKIP_UTF8_BOM: c_uint = 0x0004;
 const MD_HTML_FLAG_FULL_HTML: c_uint = 0x0008;
+const MD_HTML_FLAG_HEADING_IDS: c_uint = 0x0020;
 const MD_HTML_FLAG_HEAL: c_uint = 0x0100;
 
 const MD_AST_FLAG_DEBUG: c_uint = 0x0001;
@@ -84,6 +85,7 @@ var output_format: OutputFormat = .html;
 var parser_flags: c_uint = abi.MD_DIALECT_ALL;
 var renderer_flags: c_uint = MD_HTML_FLAG_DEBUG | MD_HTML_FLAG_SKIP_UTF8_BOM;
 var want_fullhtml = false;
+var want_heading_ids = false;
 var want_heal = false;
 var want_stat = false;
 var want_replay_fuzz = false;
@@ -168,6 +170,7 @@ fn process_file(in: *libc.FILE, out: *libc.FILE) c_int {
             var html_flags = r_flags;
             var html_opts: MD_HTML_OPTS = .{};
             var opts_ptr: ?*const MD_HTML_OPTS = null;
+            if (want_heading_ids) html_flags |= MD_HTML_FLAG_HEADING_IDS;
             if (want_fullhtml) {
                 html_flags |= MD_HTML_FLAG_FULL_HTML;
                 html_opts.title = if (html_title) |t| t.ptr else null;
@@ -239,6 +242,7 @@ fn usage() void {
             "\n" ++
             "HTML output options:\n" ++
             "  -f, --full-html      Generate full HTML document, including header\n" ++
+            "      --heading-ids    Add a generated id=\"...\" anchor to every heading\n" ++
             "      --html-title=TITLE Sets the title of the document\n" ++
             "      --html-css=URL   In full HTML mode add a css link\n" ++
             "\n",
@@ -265,6 +269,7 @@ const Opt = struct {
 const options = [_]Opt{
     .{ .short = 'o', .long = "output", .id = 'o', .required_arg = true },
     .{ .short = 'f', .long = "full-html", .id = 'f', .required_arg = false },
+    .{ .short = 0, .long = "heading-ids", .id = '5', .required_arg = false },
     .{ .short = 0, .long = "heal", .id = '4', .required_arg = false },
     .{ .short = 's', .long = "stat", .id = 's', .required_arg = false },
     .{ .short = 'h', .long = "help", .id = 'h', .required_arg = false },
@@ -286,6 +291,7 @@ fn handle_opt(id: u8, value: ?[:0]const u8) void {
     switch (id) {
         'o' => output_path = value,
         'f' => want_fullhtml = true,
+        '5' => want_heading_ids = true,
         '4' => want_heal = true,
         's' => want_stat = true,
         'r' => want_replay_fuzz = true,

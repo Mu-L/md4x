@@ -394,6 +394,48 @@ Main content here
 ]
 ```
 
+#### The default slot
+
+Content placed directly in a component, with no `#name` marker, becomes the component's children —
+there is no wrapping `template` node:
+
+```mdc
+::card
+Implicit default content.
+::
+```
+
+```json
+["card", {}, ["p", {}, "Implicit default content."]]
+```
+
+Writing `#default` explicitly is **not** equivalent: it produces a named slot like any other, so the
+content is wrapped in `["template", { "name": "default" }, …]`. This matters when mixing the default
+slot with named ones, which is the case the explicit form exists for:
+
+```mdc
+::card
+#default
+Explicit default content.
+
+#footer
+Footer content.
+::
+```
+
+```json
+[
+  "card",
+  {},
+  ["template", { "name": "default" }, "Explicit default content."],
+  ["template", { "name": "footer" }, "Footer content."]
+]
+```
+
+Note the slot bodies above are bare strings, not `["p", {}, …]`: a slot whose content is a single
+paragraph is unwrapped, per the AST renderer's unwrap rules (see
+[renderers.md](renderers.md#ast-renderer)).
+
 ### Nested Components
 
 ```mdc

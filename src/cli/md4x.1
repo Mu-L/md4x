@@ -113,6 +113,13 @@ Enable task lists
 Generate full HTML document, including header
 .
 .TP
+.B --heading-ids
+Add a generated \fBid="..."\fR anchor to every heading. The id is a
+GitHub-compatible slug of the heading text, de-duplicated within the document
+\(em the same id the \fBjson\fR output publishes. Off by default, so plain
+output matches CommonMark.
+.
+.TP
 .B --fverbatim-entities
 Do not translate entities
 .

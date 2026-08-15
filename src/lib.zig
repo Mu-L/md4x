@@ -1,8 +1,8 @@
 //! MD4X library root.
 //!
-//! Aggregates the parser, the entity table, and every renderer into ONE Zig
-//! module so that each artifact (CLI, WASM, NAPI, fuzz harness) imports a single
-//! thing and the pieces call each other by **direct Zig call**.
+//! Aggregates the parser, the entity/emoji tables, and every renderer into ONE
+//! Zig module so that each artifact (CLI, WASM, NAPI, fuzz harness) imports a
+//! single thing and the pieces call each other by **direct Zig call**.
 //!
 //! Before this, each unit was compiled as its own static library and they found
 //! each other through C-ABI symbols: the definitions were `export fn ...
@@ -25,6 +25,9 @@
 
 const parser = @import("md4x.zig");
 const entity = @import("entity.zig");
+// The emoji table (or its stub) is reached through its only consumer, so the
+// `-Demoji` switch has exactly one definition; see src/parser/inlines.zig.
+const emoji = @import("parser/inlines.zig").emoji;
 const html = @import("renderers/md4x-html.zig");
 const ast = @import("renderers/md4x-ast.zig");
 const ansi = @import("renderers/md4x-ansi.zig");
@@ -40,9 +43,14 @@ pub const highlight = @import("renderers/md4x-highlight.zig");
 /// Shared MD_* types, enums, and flags.
 pub const abi = @import("abi");
 
-// --- Parser + entity table ---
+// --- Parser + entity/emoji tables ---
 pub const md_parse = parser.md_parse;
 pub const entity_lookup = entity.entity_lookup;
+/// Emoji shortcode lookup. Always callable; returns null in a default
+/// (`-Demoji=false`) build, where the table itself is not in the artifact.
+pub const emoji_lookup = emoji.emoji_lookup;
+/// Whether this artifact carries the emoji shortcode table (`-Demoji`).
+pub const emoji_enabled = @import("build_config").emoji;
 
 // --- Renderers ---
 pub const MD_HTML_OPTS = html.MD_HTML_OPTS;
@@ -66,6 +74,7 @@ comptime {
     // and both go through this root).
     _ = parser;
     _ = entity;
+    _ = emoji;
     _ = html;
     _ = ast;
     _ = ansi;

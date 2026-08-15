@@ -188,6 +188,52 @@ Content
 </level-1>
 ````````````````````````````````
 
+## Nested block components where the inner has more colons
+
+Nesting is resolved by matching opening and closing tags, not by requiring the
+outer component to carry more colons than the inner one. The canonical spec
+example puts the extra colons on the *inner* component.
+
+```````````````````````````````` example
+::outer-component
+Content in outer
+
+:::inner-component{variant="compact"}
+Content in inner
+:::
+
+More content in outer
+::
+.
+<outer-component>
+<p>Content in outer</p>
+<inner-component variant="compact">
+<p>Content in inner</p>
+</inner-component>
+<p>More content in outer</p>
+</outer-component>
+````````````````````````````````
+
+## Nesting with the same colon count at every level
+
+```````````````````````````````` example
+::level-1
+  ::level-2
+    ::level-3
+    Content
+    ::
+  ::
+::
+.
+<level-1>
+<level-2>
+<level-3>
+<p>Content</p>
+</level-3>
+</level-2>
+</level-1>
+````````````````````````````````
+
 ## Block component with id and class
 
 ```````````````````````````````` example
@@ -328,6 +374,81 @@ Message
 <p><widget data="{&quot;x&quot;:1}"></widget></p>
 ````````````````````````````````
 
+## Object/JSON value in inline component props
+
+```````````````````````````````` example
+:component{obj='{"key": "value"}'}
+.
+<p><component obj="{&quot;key&quot;: &quot;value&quot;}"></component></p>
+````````````````````````````````
+
+## Object/JSON value in block component props
+
+The `{...}` scanner has to count brace depth, not stop at the first `}`: an
+inner `{` ... `}` inside a quoted value belongs to the value. The inline
+scanner already does this, so the two forms must agree.
+
+```````````````````````````````` example
+::component{obj='{"key": "value"}'}
+x
+::
+.
+<component obj="{&quot;key&quot;: &quot;value&quot;}">
+<p>x</p>
+</component>
+````````````````````````````````
+
+## Object/JSON value in block component props in JSON output
+
+```````````````````````````````` example [no-normalize]
+::component{obj='{"key": "value"}'}
+x
+::
+.
+{"nodes":[["component",{"obj":"{\"key\": \"value\"}"},["p",{},"x"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Nested object and array JSON values in block component props
+
+```````````````````````````````` example [no-normalize]
+::component{:obj='{"a":[1,2],"b":{"c":3}}'}
+x
+::
+.
+{"nodes":[["component",{":obj":"{\"a\":[1,2],\"b\":{\"c\":3}}"},["p",{},"x"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Object/JSON value in the title form of block component props
+
+The title form (`::name Title {props}`) runs its own copy of the `{...}` scanner,
+so it needs the same brace-depth counting as the plain form above.
+
+```````````````````````````````` example
+::component Some Title {obj='{"key": "value"}'}
+x
+::
+.
+<component title="Some Title" obj="{&quot;key&quot;: &quot;value&quot;}">
+<p>x</p>
+</component>
+````````````````````````````````
+
+## Block component combining key-value, boolean, id and class props
+
+```````````````````````````````` example
+::component{multiple="props" bool #id .class}
+Content
+::
+.
+<component id="id" multiple="props" bool class="class">
+<p>Content</p>
+</component>
+````````````````````````````````
+
 
 # Component Slots
 
@@ -391,6 +512,47 @@ Card Title
 </card>
 ````````````````````````````````
 
+## Explicit `#default` slot
+
+`#default` may be written out, which is useful when mixing the default slot
+with named slots. It yields a named `default` template rather than bare
+children.
+
+```````````````````````````````` example
+::card
+#default
+This is the **default** slot content.
+
+#footer
+Footer content here.
+::
+.
+<card>
+<template name="default">
+<p>This is the <strong>default</strong> slot content.</p>
+</template>
+<template name="footer">
+<p>Footer content here.</p>
+</template>
+</card>
+````````````````````````````````
+
+## Explicit `#default` slot in JSON output
+
+```````````````````````````````` example [no-normalize]
+::card
+#default
+This is the **default** slot content.
+
+#footer
+Footer content here.
+::
+.
+{"nodes":[["card",{},["template",{"name":"default"},"This is the ",["strong",{},"default"]," slot content."],["template",{"name":"footer"},"Footer content here."]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
 ## Slot with rich markdown content
 
 ```````````````````````````````` example
@@ -429,6 +591,32 @@ Text here
 <p>Text here</p>
 </template>
 </card>
+````````````````````````````````
+
+## A YAML block after a slot is not block props
+
+Block props must come immediately after the opening `::component` line, before
+any slot definition. Written after a slot, the block is ordinary content — here
+a thematic break followed by a setext heading — and the component keeps an
+empty prop set.
+
+```````````````````````````````` example
+::component
+#slot-name
+Slot content
+
+---
+yaml: props
+---
+::
+.
+<component>
+<template name="slot-name">
+<p>Slot content</p>
+<hr>
+<h2>yaml: props</h2>
+</template>
+</component>
 ````````````````````````````````
 
 ## Slot name outside component is literal text
@@ -602,6 +790,72 @@ Content here
 </card>
 ````````````````````````````````
 
+## Component frontmatter needs no surrounding blank lines
+
+The blank lines around the `---` block are optional; the spec spells the block
+flush against the opening `::component` line and against the content that
+follows it.
+
+```````````````````````````````` example
+::card
+---
+icon: star
+title: Hello
+---
+Content here
+::
+.
+<card icon="star" title="Hello">
+<p>Content here</p>
+</card>
+````````````````````````````````
+
+## Component props keep their YAML types
+
+Objects remain objects, arrays remain arrays, and numbers/booleans are parsed
+as their respective types rather than strings.
+
+```````````````````````````````` example [no-normalize]
+::component
+---
+title: My Component
+count: 42
+enabled: true
+items:
+  - First item
+  - Second item
+config:
+  theme: dark
+  mode: auto
+---
+Component content goes here
+::
+.
+{"nodes":[["component",{"title":"My Component","count":42,"enabled":true,"items":["First item","Second item"],"config":{"theme":"dark","mode":"auto"}},["p",{},"Component content goes here"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Deeply structured component props
+
+```````````````````````````````` example [no-normalize]
+::data-table
+---
+columns:
+  - name: Name
+    field: name
+    sortable: true
+options:
+  striped: true
+  pageSize: 10
+---
+::
+.
+{"nodes":[["data-table",{"columns":[{"name":"Name","field":"name","sortable":true}],"options":{"striped":true,"pageSize":10}}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
 ## Component frontmatter with existing props merges both
 
 ```````````````````````````````` example
@@ -617,6 +871,116 @@ Content
 <card type="info" icon="star">
 <p>Content</p>
 </card>
+````````````````````````````````
+
+## Inline attributes take precedence over component frontmatter
+
+The two prop syntaxes are merged, and a key present in both resolves to the
+inline value. The merge has to happen before emission — a component must not
+carry the same key twice.
+
+```````````````````````````````` example
+::card{title="FromInline" color="inline"}
+---
+title: FromYaml
+icon: star
+---
+Content
+::
+.
+<card title="FromInline" icon="star" color="inline">
+<p>Content</p>
+</card>
+````````````````````````````````
+
+## Inline attributes take precedence over component frontmatter in JSON output
+
+```````````````````````````````` example [no-normalize]
+::card{title="FromInline" color="inline"}
+---
+title: FromYaml
+icon: star
+---
+Content
+::
+.
+{"nodes":[["card",{"title":"FromInline","icon":"star","color":"inline"},["p",{},"Content"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Inline props are literal strings, never coerced
+
+Unlike frontmatter props, a plain `prop="value"` attribute is always passed
+through as a literal string. Only the `:` prefix opts a prop into JSON /
+dot-path handling.
+
+```````````````````````````````` example [no-normalize]
+::card{count="42" flag="true"}
+x
+::
+.
+{"nodes":[["card",{"count":"42","flag":"true"},["p",{},"x"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Component frontmatter, inline attributes and named slots combined
+
+```````````````````````````````` example
+::card{.featured}
+---
+variant: elevated
+actions:
+  - label: Read More
+    url: /article
+---
+#header
+## Article Title
+
+#content
+Main content with **markdown**.
+
+#footer
+Published
+::
+.
+<card class="featured" variant="elevated">
+<template name="header">
+<h2>Article Title</h2>
+</template>
+<template name="content">
+<p>Main content with <strong>markdown</strong>.</p>
+</template>
+<template name="footer">
+<p>Published</p>
+</template>
+</card>
+````````````````````````````````
+
+## Component frontmatter, inline attributes and named slots in JSON output
+
+```````````````````````````````` example [no-normalize]
+::card{.featured}
+---
+variant: elevated
+actions:
+  - label: Read More
+    url: /article
+---
+#header
+## Article Title
+
+#content
+Main content with **markdown**.
+
+#footer
+Published
+::
+.
+{"nodes":[["card",{"variant":"elevated","actions":[{"label":"Read More","url":"/article"}],"class":"featured"},["template",{"name":"header"},["h2",{"id":"article-title"},"Article Title"]],["template",{"name":"content"},"Main content with ",["strong",{},"markdown"],"."],["template",{"name":"footer"},"Published"]]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"Article Title","id":"article-title"}]}}
+.
+--format=json
 ````````````````````````````````
 
 ## No component frontmatter after first content line
@@ -656,6 +1020,126 @@ Content
 <p>Content</p>
 </inner>
 </outer>
+````````````````````````````````
+
+## A `---` whose body is not YAML opens no props
+
+Block props carry a mapping, so the same body test that gates document
+frontmatter gates this position: the classifier looks at the first line of
+substance below the fence and requires a `key:` there. `::` is not one, so the
+`---` is an ordinary thematic break inside the component. Before the test, the
+props parser consumed the closer and the component came out carrying a bogus
+`":"` prop.
+
+```````````````````````````````` example [no-normalize]
+::card
+---
+::
+.
+{"nodes":[["card",{},["hr",{}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A paragraph below the fence is content, not props
+
+```````````````````````````````` example
+::card
+---
+Some text
+---
+More text
+::
+.
+<card>
+<hr>
+<h2>Some text</h2>
+<p>More text</p>
+</card>
+````````````````````````````````
+
+## An empty or comment-only props block is still consumed
+
+Nothing is lost by consuming it, and Comark resolves both to an empty props
+object rather than to markdown -- see `spec-comark.txt`, `## Empty and
+comment-only property blocks`.
+
+```````````````````````````````` example
+::card
+---
+# just a note
+---
+Body
+::
+.
+<card>
+<p>Body</p>
+</card>
+````````````````````````````````
+
+# Block Props (Codeblock Style)
+
+Block props have two co-equal spellings: the `---` frontmatter style above and
+a ```` ```yaml [props] ```` fence. Both must be recognised only at the very
+beginning of the component content, both produce the same typed prop object,
+and in both cases the block itself is consumed rather than rendered.
+
+## Codeblock-style block props
+
+```````````````````````````````` example
+::component
+```yaml [props]
+title: My Component
+count: 42
+```
+Component content goes here
+::
+.
+<component title="My Component" count="42">
+<p>Component content goes here</p>
+</component>
+````````````````````````````````
+
+## Codeblock-style block props keep their YAML types
+
+```````````````````````````````` example [no-normalize]
+::component
+```yaml [props]
+title: My Component
+count: 42
+enabled: true
+items:
+  - First item
+  - Second item
+config:
+  theme: dark
+  mode: auto
+```
+Component content goes here
+::
+.
+{"nodes":[["component",{"title":"My Component","count":42,"enabled":true,"items":["First item","Second item"],"config":{"theme":"dark","mode":"auto"}},["p",{},"Component content goes here"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Codeblock-style block props combine with inline attributes
+
+```````````````````````````````` example
+::card{.featured}
+```yaml [props]
+title: Featured Article
+author: Jane Doe
+tags:
+  - markdown
+  - documentation
+```
+This combines inline class `.featured` with YAML props
+::
+.
+<card class="featured" title="Featured Article" author="Jane Doe">
+<p>This combines inline class <code>.featured</code> with YAML props</p>
+</card>
 ````````````````````````````````
 
 # Block Component Title (VitePress-style custom containers)
@@ -820,6 +1304,57 @@ Content
 {"nodes":[["widget",{":count":"5"}]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
+````````````````````````````````
+
+## A bind prop holding a dot-path is preserved verbatim
+
+Resolution of a `:prefixed` value against the render context happens at render
+time; the parser's contract is passthrough. The dot-path is neither resolved
+nor rewritten, and the `:` stays on the key.
+
+```````````````````````````````` example [no-normalize]
+::question{:answer="frontmatter.theAnswer"}
+::
+.
+{"nodes":[["question",{":answer":"frontmatter.theAnswer"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Bind props in a nested component are preserved too
+
+```````````````````````````````` example [no-normalize]
+::card{title="Hello" variant="primary"}
+:::badge{:color="props.variant" :text="props.title"}
+:::
+::
+.
+{"nodes":[["card",{"title":"Hello","variant":"primary"},["badge",{":color":"props.variant",":text":"props.title"}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Bind prop values are never coerced, resolved, or dropped
+
+An unknown dot-path and the JSON literals `true`, `5` and `"foo"` all survive
+as the exact source text.
+
+```````````````````````````````` example [no-normalize]
+:x{:a="unknown.path" :b="true" :c="5" :d='"foo"'}
+.
+{"nodes":[["x",{":a":"unknown.path",":b":"true",":c":"5",":d":"\"foo\""}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A bind prop dot-path loses only its colon in HTML output
+
+```````````````````````````````` example
+::question{:answer="frontmatter.theAnswer"}
+::
+.
+<question answer="frontmatter.theAnswer">
+</question>
 ````````````````````````````````
 
 ## Bind prop on a block component cannot inject sibling props

@@ -39,6 +39,9 @@ const heal = @import("md4x-heal.zig");
 const yaml = @import("../yaml/yaml.zig");
 const diag = @import("md4x-diag.zig");
 const hl = @import("md4x-highlight.zig");
+// Heading text accumulation + GitHub-compatible slugging, shared with the AST
+// and meta renderers so the three never disagree about a heading's id.
+const slug = @import("md4x-slug.zig");
 
 const c_allocator = std.heap.c_allocator;
 
@@ -53,6 +56,7 @@ const MD_HTML_FLAG_FULL_HTML: c_uint = 0x0008;
 // flag, and the byte-offset bookkeeping it needed, are gone. The bit is left
 // unused rather than reassigned: a caller passing the old value gets a no-op
 // instead of full-document mode or heal.
+const MD_HTML_FLAG_HEADING_IDS: c_uint = 0x0020;
 const MD_HTML_FLAG_HEAL: c_uint = 0x0100;
 
 const NEED_URL_ESC_FLAG: u8 = 0x2;
@@ -117,6 +121,12 @@ const MD_HTML = struct {
     comp_fm_text: ?[*]u8 = null,
     comp_fm_text_size: c.MD_SIZE = 0,
     comp_fm_text_cap: c.MD_SIZE = 0,
+    /// The pending component's inline `{...}` (a slice of the input document,
+    /// which outlives the render) and whether it carried a `::name Title`.
+    /// Consulted while the YAML block props are emitted, so a key both syntaxes
+    /// define is emitted once — see comp_fm_key_shadowed.
+    comp_fm_props: []const u8 = &.{},
+    comp_fm_has_title: bool = false,
 
     // Full-HTML mode state.
     opts: ?*const MD_HTML_OPTS = null,
@@ -135,6 +145,25 @@ const MD_HTML = struct {
     hl_active: bool = false,
     hl_code: hl.Buf = .{},
 
+    // Heading auto-ids (MD_HTML_FLAG_HEADING_IDS only; all of this stays unused
+    // and unallocated without it). The id is a function of the heading's TEXT,
+    // which a streaming renderer only has once the heading is over -- so a
+    // heading's markup is diverted into `heading_html` and its plain text
+    // accumulated in `heading_text` while it renders, and leave_block emits
+    // `<hN id="..." ...>` + the buffer + `</hN>` in one go. Same slugger and
+    // same accumulation rules as the AST and meta renderers (md4x-slug.zig), so
+    // the three entry points cannot publish different ids for one heading.
+    heading_active: bool = false,
+    heading_level: c_uint = 0,
+    heading_attrs: []const u8 = &.{},
+    heading_html: hl.Buf = .{},
+    heading_text: slug.TextBuf = .empty,
+    heading_err: bool = false,
+    heading_saved_userdata: ?*anyopaque = null,
+    // Slugs, and the slugger's own keys, live here for the whole render.
+    slug_arena: ?*std.heap.ArenaAllocator = null,
+    slugger: slug.Slugger = .{},
+
     // Internal output buffer: batches render_verbatim appends into a single
     // process_output callback to reduce per-call overhead. `real_process_output`
     // holds the caller's original callback; `process_output` may be temporarily
@@ -143,7 +172,24 @@ const MD_HTML = struct {
     out_buf: ?[*]u8 = null,
     out_size: c.MD_SIZE = 0,
     out_cap: c.MD_SIZE = 0,
+
+    // Last byte handed to render_verbatim, for `cr()`. Seeded with '\n' so the
+    // very first block does not open with a blank line. Tracked at the single
+    // funnel every emission passes through, including the diverted ones
+    // (heading capture, highlight capture), so it stays truthful about what the
+    // *document* last saw rather than what reached the caller's callback.
+    last_byte: u8 = '\n',
 };
+
+// cmark's `cr()`: guarantee a block-level tag starts on its own line. A no-op
+// everywhere md4x already ends its block tags with '\n' -- which is everywhere
+// but `<li>`, whose content may be inline (`<li>a`) or a block (`<li><p>`).
+// CommonMark and GitHub both break the line there; md4x did not. See the
+// `.li` arm of enter_block_callback.
+fn cr(r: *MD_HTML) void {
+    if (r.last_byte != '\n')
+        render_verbatim_lit(r, "\n");
+}
 
 // Flush threshold: when the internal buffer reaches this size, emit it.
 const OUT_BUF_THRESHOLD: c.MD_SIZE = 8 * 1024;
@@ -221,6 +267,7 @@ fn render_verbatim(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE) void {
     // original callback (component-frontmatter capture), bypass the internal
     // buffer and call the swapped callback directly. Otherwise batch into
     // out_buf.
+    if (size > 0) r.last_byte = text[size - 1];
     if (r.process_output == r.real_process_output) {
         out_buf_append(r, text, size);
     } else {
@@ -459,14 +506,14 @@ fn render_attribute(r: *MD_HTML, attr: *const c.Attribute, fn_append: AppendFn) 
 }
 
 fn render_open_ol_block(r: *MD_HTML, det: *const c.BlockOlDetail) void {
-    if (det.start == 1) {
-        render_verbatim_lit(r, "<ol>\n");
-        return;
+    render_verbatim_lit(r, "<ol");
+    if (det.start != 1) {
+        var buf: [64]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, " start=\"{d}\"", .{det.start}) catch unreachable;
+        render_verbatim(r, s.ptr, @intCast(s.len));
     }
-
-    var buf: [64]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "<ol start=\"{d}\">\n", .{det.start}) catch unreachable;
-    render_verbatim(r, s.ptr, @intCast(s.len));
+    render_block_attrs(r, det.raw_attrs);
+    render_verbatim_lit(r, ">\n");
 }
 
 // `[^1]` -> `<sup><a href="#fn-1" id="fnref-1-1">1</a></sup>`. The span is
@@ -499,18 +546,33 @@ fn render_close_footnote_def_block(r: *MD_HTML, det: *const c.BlockFootnoteDefDe
 
 fn render_open_li_block(r: *MD_HTML, det: *const c.BlockLiDetail) void {
     if (det.is_task) {
-        render_verbatim_lit(r, "<li class=\"task-list-item\">" ++
-            "<input type=\"checkbox\" class=\"task-list-item-checkbox\" disabled");
+        render_verbatim_lit(r, "<li class=\"task-list-item\"");
+        render_block_attrs(r, det.raw_attrs);
+        render_verbatim_lit(r, "><input type=\"checkbox\" class=\"task-list-item-checkbox\" disabled");
         if (det.task_mark == 'x' or det.task_mark == 'X')
             render_verbatim_lit(r, " checked");
         render_verbatim_lit(r, ">");
     } else {
-        render_verbatim_lit(r, "<li>");
+        render_verbatim_lit(r, "<li");
+        render_block_attrs(r, det.raw_attrs);
+        render_verbatim_lit(r, ">");
     }
 }
 
+// A block's trailing `{...}` run, rendered as attributes on its opening tag.
+fn render_block_attrs(r: *MD_HTML, raw_attrs: []const u8) void {
+    if (raw_attrs.len > 0)
+        render_html_component_props(r, raw_attrs.ptr, @intCast(raw_attrs.len));
+}
+
 fn render_open_code_block(r: *MD_HTML, det: *const c.BlockCodeDetail) void {
-    render_verbatim_lit(r, "<pre><code");
+    // The info-string language surfaces only as the <code> class here. The AST's
+    // `pre` node also carries it as a `language` prop, and
+    // `.agents/comark/attributes.md:358` shows it on <pre> too, but emitting a
+    // non-standard attribute on every fenced block is not worth the parity.
+    render_verbatim_lit(r, "<pre");
+    render_block_attrs(r, det.raw_attrs);
+    render_verbatim_lit(r, "><code");
 
     // If known, output the HTML 5 attribute class="language-LANGNAME".
     if (det.lang.text.len > 0) {
@@ -571,51 +633,45 @@ fn render_close_img_span(r: *MD_HTML, det: *const c.SpanImgDetail) void {
     render_verbatim_lit(r, ">");
 }
 
-fn render_open_wikilink_span(r: *MD_HTML, det: *const c.SpanWikilinkDetail) void {
-    render_verbatim_lit(r, "<x-wikilink data-target=\"");
-    render_attribute(r, &det.target, render_html_escaped);
-
-    render_verbatim_lit(r, "\">");
-}
-
 // Render parsed component props as HTML attributes.
 fn render_html_component_props(r: *MD_HTML, raw: [*]const u8, size: c.MD_SIZE) void {
     var parsed: MD_PARSED_PROPS = undefined;
 
     md_parse_props(raw, size, &parsed);
 
-    // Write #id.
-    if (parsed.id != null and parsed.id_size > 0) {
-        render_verbatim_lit(r, " id=\"");
-        render_html_escaped(r, parsed.id.?, parsed.id_size);
-        render_verbatim_lit(r, "\"");
-    }
+    // Source order: the `#id` and the merged `.class` are emitted at the
+    // position they were written, not flushed first and last.
+    var it = props.slots(&parsed);
+    while (it.next()) |slot| render_html_prop_slot(r, slot);
+}
 
-    // Write regular props.
-    var i: usize = 0;
-    while (i < @as(usize, @intCast(parsed.n_props))) : (i += 1) {
-        const p = &parsed.props[i];
-
-        render_verbatim_lit(r, " ");
-        render_html_attr_name(r, p.key, p.key_size);
-
-        switch (p.type) {
-            .string, .bind => {
-                render_verbatim_lit(r, "=\"");
-                render_html_escaped(r, p.value.?, p.value_size);
-                render_verbatim_lit(r, "\"");
-            },
-            .boolean => {
-                // Bare attribute (no value).
-            },
-        }
-    }
-
-    // Write merged class.
-    if (parsed.class_len > 0) {
-        render_verbatim_lit(r, " class=\"");
-        render_html_escaped(r, &parsed.class_buf, parsed.class_len);
-        render_verbatim_lit(r, "\"");
+// One parsed prop, as an HTML attribute on the tag currently being opened.
+fn render_html_prop_slot(r: *MD_HTML, slot: props.Slot) void {
+    switch (slot) {
+        .id => |id| {
+            render_verbatim_lit(r, " id=\"");
+            render_html_escaped(r, id.ptr, @intCast(id.len));
+            render_verbatim_lit(r, "\"");
+        },
+        .class => |cls| {
+            render_verbatim_lit(r, " class=\"");
+            render_html_escaped(r, cls.ptr, @intCast(cls.len));
+            render_verbatim_lit(r, "\"");
+        },
+        .prop => |p| {
+            render_verbatim_lit(r, " ");
+            render_html_attr_name(r, p.key, p.key_size);
+            switch (p.type) {
+                .string, .bind => {
+                    render_verbatim_lit(r, "=\"");
+                    render_html_escaped(r, p.value.?, p.value_size);
+                    render_verbatim_lit(r, "\"");
+                },
+                .boolean => {
+                    // Bare attribute (no value).
+                },
+            }
+        },
     }
 }
 
@@ -691,6 +747,26 @@ fn parse_ok(yp: *yaml.Parser, event: *yaml.Event) bool {
     return true;
 }
 
+// True when the component's inline `{...}` (or its `::name Title`) already
+// emitted an attribute named `key`, so the YAML block prop of that name must be
+// dropped rather than emitted a second time.
+//
+// Inline attributes take precedence over YAML block props
+// (`.agents/comark/components.md:182`), and the tag buffer holds the inline
+// half already — so precedence here is "skip the YAML pair". Emitting both
+// relied on the HTML parser's first-wins tie-break over a DUPLICATE attribute,
+// which the AST renderer resolved the opposite way round.
+fn comp_fm_key_shadowed(r: *MD_HTML, key: []const u8) bool {
+    if (r.comp_fm_has_title and std.mem.eql(u8, key, "title"))
+        return true;
+    if (r.comp_fm_props.len == 0)
+        return false;
+
+    var parsed: MD_PARSED_PROPS = undefined;
+    md_parse_props(r.comp_fm_props.ptr, @intCast(r.comp_fm_props.len), &parsed);
+    return props.propsHaveKey(&parsed, key);
+}
+
 // Flush the buffered component open tag. If YAML text was captured,
 // parse it and emit as HTML attributes before closing ">".
 fn comp_fm_flush_tag(r: *MD_HTML) void {
@@ -709,6 +785,11 @@ fn comp_fm_flush_tag(r: *MD_HTML) void {
     r.comp_fm_text_size = 0;
     r.comp_fm_pending = false;
     r.comp_fm_capturing = false;
+    // Cleared only after the YAML walk below, which consults them.
+    defer {
+        r.comp_fm_props = &.{};
+        r.comp_fm_has_title = false;
+    }
 
     if (tag == null or tag_size == 0)
         return;
@@ -762,7 +843,7 @@ fn comp_fm_flush_tag(r: *MD_HTML) void {
                                 // rather than emit the malformed ` ="v"`, which
                                 // a browser recovers from by inventing an
                                 // attribute literally named `="v"`.
-                                if (key_len > 0) {
+                                if (key_len > 0 and !comp_fm_key_shadowed(r, key_buf[0..key_len])) {
                                     const val = event.data.scalar.value;
                                     render_verbatim_lit(r, " ");
                                     render_html_attr_name(r, &key_buf, @intCast(key_len));
@@ -806,6 +887,8 @@ fn render_open_block_component(r: *MD_HTML, det: *const c.BlockComponentDetail) 
     // frontmatter YAML attributes if a frontmatter block follows.
     r.comp_fm_tag_size = 0;
     r.comp_fm_text_size = 0;
+    r.comp_fm_props = det.raw_props;
+    r.comp_fm_has_title = det.title.len > 0;
     _ = comp_fm_tag_append(r, "<", 1);
 
     // Append tag name, through render_attribute(..., render_html_escaped) with
@@ -918,20 +1001,134 @@ fn hl_end(r: *MD_HTML, det: *const c.BlockCodeDetail) void {
     render_verbatim_lit(r, "</code></pre>\n");
 }
 
-fn render_open_alert_block(r: *MD_HTML, det: *const c.BlockAlertDetail) void {
-    render_verbatim_lit(r, "<blockquote class=\"alert alert-");
-    // Lowercase the type name for the CSS class.
-    //
-    // Emitted in chunks, not byte by byte: every single-byte render_verbatim
-    // ran a full out_buf_append (capacity check, 1-byte @memcpy, flush-threshold
-    // check) for one character. The parser puts NO length cap on the `[!TYPE]`
-    // name (blocks.zig accepts `[a-zA-Z0-9_-]*` up to the `]`), so this loops
-    // over the buffer rather than assuming the name fits in it — a longer name
-    // takes several chunks and is never truncated.
-    //
-    // The total byte count is unchanged either way: N one-byte appends and
-    // ceil(N/64) chunked ones commit exactly the same N bytes.
-    const name = det.type_name.text;
+// ***  Heading auto-ids  ***
+//
+// `<h1 id="hello-world">Hello World</h1>`: the id is a GitHub-compatible slug of
+// the heading's rendered text, de-duplicated within the document, and it is the
+// SAME id the AST and meta renderers publish (all three drive md4x-slug.zig from
+// the SAX text stream, the only form in which entities are resolved and raw HTML
+// excluded). Without it, HTML output and `meta.headings` disagree about where a
+// table-of-contents link points.
+//
+// Opt-in via MD_HTML_FLAG_HEADING_IDS, because an `id` on every heading is an
+// addition to what CommonMark specifies: plain `md_html` stays spec-exact (the
+// spec suite in test/spec.txt is run without the flag), and a caller that wants
+// anchors -- the JS `headingIds` option, the CLI's `--heading-ids` -- asks for
+// them. The AST and meta renderers publish ids unconditionally; those outputs
+// are Comark's own, not CommonMark's.
+//
+// A streaming renderer only knows the text once the heading is over, so the
+// heading's markup is diverted into a scratch buffer and replayed after the
+// opening tag. Diversion is the same mechanism the highlight hook uses; without
+// the flag nothing is diverted and the opening tag goes straight out.
+
+const HEADING_OPEN = [_][]const u8{ "<h1", "<h2", "<h3", "<h4", "<h5", "<h6" };
+const HEADING_CLOSE = [_][]const u8{ "</h1>\n", "</h2>\n", "</h3>\n", "</h4>\n", "</h5>\n", "</h6>\n" };
+
+fn heading_level_of(level: c_uint) c_uint {
+    return if (level >= 1 and level <= 6) level else 1;
+}
+
+fn heading_begin(r: *MD_HTML, det: *const c.BlockHDetail) void {
+    // No auto-id wanted: nothing depends on the heading's text, so emit the
+    // opening tag now and leave `heading_active` false. heading_end then takes
+    // its no-diversion path and only writes the closing tag.
+    if (r.flags & MD_HTML_FLAG_HEADING_IDS == 0) {
+        render_verbatim_lit_runtime(r, HEADING_OPEN[heading_level_of(det.level) - 1]);
+        render_block_attrs(r, det.raw_attrs);
+        render_verbatim_lit(r, ">");
+        return;
+    }
+
+    r.heading_active = true;
+    r.heading_level = det.level;
+    r.heading_attrs = det.raw_attrs;
+    r.heading_html.reset();
+    r.heading_text.clearRetainingCapacity();
+    r.heading_err = false;
+    r.heading_saved_userdata = r.userdata;
+    r.process_output = heading_capture;
+    r.userdata = r;
+}
+
+// ProcessOutputFn shape: diverts the heading's markup into `heading_html`.
+fn heading_capture(text: [*c]const c.MD_CHAR, size: c.MD_SIZE, userdata: ?*anyopaque) void {
+    const r: *MD_HTML = @ptrCast(@alignCast(userdata.?));
+    r.heading_html.append(@ptrCast(text), size);
+}
+
+fn heading_end(r: *MD_HTML, det: *const c.BlockHDetail) void {
+    // Either the opening tag already went out (no MD_HTML_FLAG_HEADING_IDS), or
+    // an unbalanced leave_block arrived — in which case replaying a stale buffer
+    // would be worse than the bare closing tag.
+    if (!r.heading_active) {
+        render_verbatim_lit_runtime(r, HEADING_CLOSE[heading_level_of(det.level) - 1]);
+        return;
+    }
+    r.heading_active = false;
+    r.process_output = r.real_process_output;
+    r.userdata = r.heading_saved_userdata;
+
+    const level = heading_level_of(r.heading_level);
+    render_verbatim_lit_runtime(r, HEADING_OPEN[level - 1]);
+
+    // An explicit `{#id}` in the block attributes wins over the generated slug —
+    // emitting both would put two `id` attributes on one tag (and a duplicate key
+    // in the AST). The attrs themselves are rendered just below.
+    if (!heading_attrs_have_id(r)) {
+        // An OOM anywhere in the id path degrades to the id-less heading rather
+        // than to a wrong or truncated one; the markup is emitted either way.
+        if (heading_id(r)) |id| {
+            if (id.len > 0) {
+                render_verbatim_lit(r, " id=\"");
+                render_html_escaped(r, id.ptr, @intCast(id.len));
+                render_verbatim_lit(r, "\"");
+            }
+        }
+    }
+    render_block_attrs(r, r.heading_attrs);
+    render_verbatim_lit(r, ">");
+
+    const body = r.heading_html.slice();
+    if (body.len > 0)
+        render_verbatim(r, body.ptr, @intCast(body.len));
+    render_verbatim_lit_runtime(r, HEADING_CLOSE[level - 1]);
+}
+
+fn heading_id(r: *MD_HTML) ?[]const u8 {
+    if (r.heading_err) return null;
+    const arena = r.slug_arena orelse return null;
+    return r.slugger.slug(arena.allocator(), r.heading_text.items) catch null;
+}
+
+// Whether the heading's trailing `{...}` run carries an explicit id, in either
+// the `#id` shorthand or the `id="..."` key-value spelling. Both land on the
+// same attribute name, so either one must suppress the generated slug.
+fn heading_attrs_have_id(r: *MD_HTML) bool {
+    if (r.heading_attrs.len == 0) return false;
+    var parsed: props.MD_PARSED_PROPS = .{};
+    props.md_parse_props(r.heading_attrs.ptr, @intCast(r.heading_attrs.len), &parsed);
+    return props.parsedHasId(&parsed);
+}
+
+// Case-fold the `[!TYPE]` name into the output, optionally with an initial
+// capital (the title row's label).
+//
+// Emitted in chunks, not byte by byte: every single-byte render_verbatim
+// ran a full out_buf_append (capacity check, 1-byte @memcpy, flush-threshold
+// check) for one character. The parser puts NO length cap on the `[!TYPE]`
+// name (blocks.zig accepts `[a-zA-Z0-9_-]*` up to the `]`), so this loops
+// over the buffer rather than assuming the name fits in it — a longer name
+// takes several chunks and is never truncated.
+//
+// The total byte count is unchanged either way: N one-byte appends and
+// ceil(N/64) chunked ones commit exactly the same N bytes.
+//
+// Nothing here escapes, in either the attribute or the text position: that
+// same recognizer charset is ASCII alphanumerics plus `-` and `_`, so a name
+// can carry neither a quote nor a `<`/`&`. Widening the charset in blocks.zig
+// would make this an injection site.
+fn render_alert_type_name(r: *MD_HTML, name: []const u8, capitalize: bool) void {
     var i: usize = 0;
     while (i < name.len) {
         var chunk: [64]u8 = undefined;
@@ -939,10 +1136,42 @@ fn render_open_alert_block(r: *MD_HTML, det: *const c.BlockAlertDetail) void {
         for (name[i..][0..n], chunk[0..n]) |src, *dst| {
             dst.* = if (src >= 'A' and src <= 'Z') src + 32 else src;
         }
+        if (capitalize and i == 0 and chunk[0] >= 'a' and chunk[0] <= 'z')
+            chunk[0] -= 32;
         render_verbatim(r, &chunk, @intCast(n));
         i += n;
     }
+}
+
+fn render_open_alert_block(r: *MD_HTML, det: *const c.BlockAlertDetail) void {
+    const name = det.type_name.text;
+
+    // Both class sets, deliberately. An alert *is* a block quote, so the
+    // element stays `<blockquote>` where GitHub substitutes a `<div>` — that
+    // is semantics md4x is not giving up for a stylesheet. But GitHub's alert
+    // CSS is class-based, so carrying `markdown-alert markdown-alert-<type>`
+    // alongside md4x's own `alert alert-<type>` makes GitHub's stylesheet
+    // match md4x output unchanged, without invalidating the `alert-` selectors
+    // that md4x's own docs, website and 30-odd spec assertions rely on.
+    render_verbatim_lit(r, "<blockquote class=\"alert alert-");
+    render_alert_type_name(r, name, false);
+    render_verbatim_lit(r, " markdown-alert markdown-alert-");
+    render_alert_type_name(r, name, false);
     render_verbatim_lit(r, "\">\n");
+
+    // The title row GitHub generates, minus its inline octicon: the label is
+    // the whole of what the marker says, and an SVG in every alert is a
+    // presentation choice belonging to a stylesheet, not to the parser's
+    // output. Without it, a reader of md4x HTML sees an unlabelled quote.
+    //
+    // The label is derived from the case-folded name rather than copied from
+    // the source, so `[!NOTE]`, `[!note]` and `[!Note]` — one node, one class
+    // — also render one label, and the five GitHub names come out exactly as
+    // GitHub spells them. The markdown renderer is the one that round-trips
+    // the author's casing.
+    render_verbatim_lit(r, "<p class=\"markdown-alert-title\">");
+    render_alert_type_name(r, name, true);
+    render_verbatim_lit(r, "</p>\n");
 }
 
 // *********************************************
@@ -1132,7 +1361,6 @@ fn ensure_head_emitted(r: *MD_HTML) void {
 // **************************************
 
 fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.CallbackResult {
-    const head = [_][]const u8{ "<h1>", "<h2>", "<h3>", "<h4>", "<h5>", "<h6>" };
     const r: *MD_HTML = @ptrCast(@alignCast(userdata.?));
     const block_type = std.meta.activeTag(detail.*);
 
@@ -1155,16 +1383,43 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
     if ((r.flags & MD_HTML_FLAG_FULL_HTML != 0) and block_type != c.BlockType.doc)
         ensure_head_emitted(r);
 
+    // Break the line before a CommonMark block tag if we are not already at the
+    // start of one. Only `<li>` can leave us mid-line, so in practice this fires
+    // for a list item's first child and for a nested list opening after the
+    // item's own inline text. Deliberately not applied to md4x's own block kinds
+    // (components, alerts, templates, footnotes, frontmatter): their output
+    // shape is theirs to define, and CommonMark has nothing to say about it.
+    switch (block_type) {
+        c.BlockType.quote,
+        c.BlockType.ul,
+        c.BlockType.ol,
+        c.BlockType.li,
+        c.BlockType.hr,
+        c.BlockType.h,
+        c.BlockType.code,
+        c.BlockType.html,
+        c.BlockType.p,
+        c.BlockType.table,
+        => cr(r),
+        else => {},
+    }
+
     switch (detail.*) {
         .doc => {}, // noop
-        .quote => render_verbatim_lit(r, "<blockquote>\n"),
-        .ul => render_verbatim_lit(r, "<ul>\n"),
+        .quote => |*d| {
+            render_verbatim_lit(r, "<blockquote");
+            render_block_attrs(r, d.raw_attrs);
+            render_verbatim_lit(r, ">\n");
+        },
+        .ul => |*d| {
+            render_verbatim_lit(r, "<ul");
+            render_block_attrs(r, d.raw_attrs);
+            render_verbatim_lit(r, ">\n");
+        },
         .ol => |*d| render_open_ol_block(r, d),
         .li => |*d| render_open_li_block(r, d),
         .hr => render_verbatim_lit(r, "<hr>\n"),
-        .h => |*d| {
-            render_verbatim_lit_runtime(r, head[d.level - 1]);
-        },
+        .h => |*d| heading_begin(r, d),
         .code => |*det| {
             // With a highlighter installed the opening tag is deferred to
             // leave_block, which knows whether the block is being replaced.
@@ -1175,8 +1430,16 @@ fn enter_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
             }
         },
         .html => {}, // noop
-        .p => render_verbatim_lit(r, "<p>"),
-        .table => render_verbatim_lit(r, "<table>\n"),
+        .p => |*d| {
+            render_verbatim_lit(r, "<p");
+            render_block_attrs(r, d.raw_attrs);
+            render_verbatim_lit(r, ">");
+        },
+        .table => |*d| {
+            render_verbatim_lit(r, "<table");
+            render_block_attrs(r, d.raw_attrs);
+            render_verbatim_lit(r, ">\n");
+        },
         .thead => render_verbatim_lit(r, "<thead>\n"),
         .tbody => render_verbatim_lit(r, "<tbody>\n"),
         .tr => render_verbatim_lit(r, "<tr>\n"),
@@ -1206,7 +1469,6 @@ fn render_verbatim_lit_runtime(r: *MD_HTML, lit: []const u8) void {
 }
 
 fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.CallbackResult {
-    const head = [_][]const u8{ "</h1>\n", "</h2>\n", "</h3>\n", "</h4>\n", "</h5>\n", "</h6>\n" };
     const r: *MD_HTML = @ptrCast(@alignCast(userdata.?));
     const block_type = std.meta.activeTag(detail.*);
 
@@ -1232,9 +1494,7 @@ fn leave_block_callback(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.C
         .ol => render_verbatim_lit(r, "</ol>\n"),
         .li => render_verbatim_lit(r, "</li>\n"),
         .hr => {}, // noop
-        .h => |*d| {
-            render_verbatim_lit_runtime(r, head[d.level - 1]);
-        },
+        .h => |*d| heading_end(r, d),
         .code => |*det| {
             if (r.hl_active) {
                 hl_end(r, det);
@@ -1283,7 +1543,6 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .mark => |*d| render_open_tag_with_attrs(r, "mark", d),
         .latexmath => render_verbatim_lit(r, "<x-equation>"),
         .latexmath_display => render_verbatim_lit(r, "<x-equation type=\"display\">"),
-        .wikilink => |*d| render_open_wikilink_span(r, d),
         .component => |*d| render_open_component_span(r, d),
         .span => |*d| render_open_span_span(r, d),
         .footnote_ref => |*d| render_open_footnote_ref_span(r, d),
@@ -1309,7 +1568,6 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .del => render_verbatim_lit(r, "</del>"),
         .mark => render_verbatim_lit(r, "</mark>"),
         .latexmath, .latexmath_display => render_verbatim_lit(r, "</x-equation>"),
-        .wikilink => render_verbatim_lit(r, "</x-wikilink>"),
         .component => |*d| render_close_component_span(r, d),
         .span => render_verbatim_lit(r, "</span>"),
         // enter_span already emitted the whole `<sup>…</sup>`.
@@ -1343,6 +1601,12 @@ fn text_callback(text_type: c.TextType, text_slice: []const c.MD_CHAR, userdata:
     // byte inside a fenced block arrives as `.nullchar`: letting that fall
     // through would emit it into the stream ahead of the deferred block and
     // leave it out of what the highlighter sees.
+    if (r.heading_active) {
+        slug.appendText(&r.heading_text, c_allocator, text_type, text[0..size]) catch {
+            r.heading_err = true;
+        };
+    }
+
     if (r.hl_active) {
         if (text_type == c.TextType.nullchar)
             r.hl_code.append(&[_]u8{ 0xef, 0xbf, 0xbd }, 3)
@@ -1464,6 +1728,16 @@ pub fn md_html_ex(
     render.opts = opts;
     if (opts) |o| render.highlighter = o.highlighter;
 
+    // Heading slugs and the slugger's own keys all live exactly as long as the
+    // render. Held by pointer so `MD_HTML` stays movable (the struct is passed
+    // to md_parse by address, but an ArenaAllocator is not position-independent).
+    // Left null without MD_HTML_FLAG_HEADING_IDS: nothing slugs, so the arena is
+    // never reached (heading_id would bail on the null anyway).
+    var slug_arena = std.heap.ArenaAllocator.init(c_allocator);
+    defer slug_arena.deinit();
+    if (renderer_flags & MD_HTML_FLAG_HEADING_IDS != 0)
+        render.slug_arena = &slug_arena;
+
     const parser: c.Parser = .{
         .flags = parser_flags,
         .enter_block = enter_block_callback,
@@ -1488,8 +1762,16 @@ pub fn md_html_ex(
     // Flush any remaining buffered body bytes. A parse aborted inside a code
     // block drops that block's collected text with the buffer -- the output is
     // truncated at the abort either way.
+    // A parse aborted inside a heading drops the diverted markup with it; the
+    // output is truncated at the abort either way. Restore the sink first so the
+    // flush below cannot land in the heading buffer.
+    render.process_output = render.real_process_output;
+    render.userdata = userdata;
     flush_output(&render);
     render.hl_code.deinit();
+    render.heading_html.deinit();
+    render.heading_text.deinit(c_allocator);
+    render.slugger.deinit(slug_arena.allocator());
     if (render.out_buf) |p| c_allocator.free(p[0..render.out_cap]);
 
     if (render.fm_text) |p| c_allocator.free(p[0..render.fm_cap]);

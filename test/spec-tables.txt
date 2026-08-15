@@ -229,6 +229,44 @@ quux     | [quuz](/url2)
 </table>
 ````````````````````````````````
 
+Strike-through, code spans and images work in a cell just as they do in a
+paragraph; the delimiter runs and the `![` opener survive the cell-splitting
+pass:
+
+```````````````````````````````` example
+| Feature  | Status     | Link                                   |
+| -------- | ---------- | -------------------------------------- |
+| **Bold** | *Italic*   | [Link](https://example)                |
+| `Code`   | ~~Strike~~ | ![Image](https://picsum.photos/120/30) |
+.
+<table>
+<thead>
+<tr><th>Feature</th><th>Status</th><th>Link</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Bold</strong></td><td><em>Italic</em></td><td><a href="https://example">Link</a></td></tr>
+<tr><td><code>Code</code></td><td><del>Strike</del></td><td><img src="https://picsum.photos/120/30" alt="Image"></td></tr>
+</tbody>
+</table>
+````````````````````````````````
+
+A single-tilde strike-through is recognized in a cell too:
+
+```````````````````````````````` example
+| Column 1 | Column 2 |
+|----------|----------|
+| ~foo~    | ~~bar~~  |
+.
+<table>
+<thead>
+<tr><th>Column 1</th><th>Column 2</th></tr>
+</thead>
+<tbody>
+<tr><td><del>foo</del></td><td><del>bar</del></td></tr>
+</tbody>
+</table>
+````````````````````````````````
+
 However pipes which are inside a code span are not recognized as cell
 boundaries.
 

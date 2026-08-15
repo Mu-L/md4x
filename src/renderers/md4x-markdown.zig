@@ -151,8 +151,8 @@ fn render_newline(r: *MD_MARKDOWN) void {
 //     after leading digits.
 //
 // Anything else (`!`, `{`, `}`, `(`, `)`, `"`, `'`) cannot start markup on its
-// own in md4x's dialect -- `![`, `[text]{...}`, `:name[...]` and `[[wiki]]` all
-// need a `[`, which is always escaped -- so escaping them would only add noise.
+// own in md4x's dialect -- `![`, `[text]{...}` and `:name[...]` all need a `[`,
+// which is always escaped -- so escaping them would only add noise.
 
 fn is_ascii_word(ch: u8) bool {
     return (ch >= '0' and ch <= '9') or ((ch | 0x20) >= 'a' and (ch | 0x20) <= 'z');
@@ -908,11 +908,6 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
             render_verbatim_lit(r, "$$");
         },
 
-        .wikilink => {
-            // Convert wiki link to regular link: [target](
-            render_verbatim_lit(r, "[");
-        },
-
         .component => |*comp| {
             render_verbatim_lit(r, "<");
             if (comp.tag_name.text.len > 0)
@@ -990,12 +985,6 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
 
         .latexmath_display => {
             render_verbatim_lit(r, "$$");
-        },
-
-        .wikilink => |*wl| {
-            render_verbatim_lit(r, "](");
-            render_destination(r, &wl.target);
-            render_verbatim_lit(r, ")");
         },
 
         .component => |*comp| {

@@ -31,5 +31,4 @@ Inside other constructs:
 
 :badge[[^1]] and [link with [^1] inside](/u) and ![img [^1]](/i).
 
-Wiki-link interaction: [[[^|]]]
-[^|]:
+Swallowed by a link destination: [x]([^a) b]

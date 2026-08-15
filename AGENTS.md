@@ -4,19 +4,21 @@
 
 ## Guides
 
-| Area                                                 | Read when                                                                  |
-| ---------------------------------------------------- | -------------------------------------------------------------------------- |
-| [.agents/build.md](.agents/build.md)                 | Building, targets, module graph rules                                      |
-| [.agents/testing.md](.agents/testing.md)             | Running tests, fuzzing, the parser invariants only unit tests pin          |
-| [.agents/conventions.md](.agents/conventions.md)     | Touching parser or renderer internals                                      |
-| [.agents/safety.md](.agents/safety.md)               | Reviewing changes — bug classes and the audit checklist                    |
-| [.agents/performance.md](.agents/performance.md)     | Byte scans, SIMD, libc, benchmarking                                       |
-| [.agents/extending.md](.agents/extending.md)         | Adding a block/span type, a renderer, or regenerating tables               |
-| [.agents/upstream-sync.md](.agents/upstream-sync.md) | Syncing with mity/md4c — ledger of reviewed commits, do-not-port decisions |
-| [docs/parser-api.md](docs/parser-api.md)             | SAX callback table, detail types, parser flags                             |
-| [docs/renderers.md](docs/renderers.md)               | Renderer entry points and their flags                                      |
-| [docs/js-bindings.md](docs/js-bindings.md)           | WASM / standalone / NAPI targets and the JS package API                    |
-| [docs/markdown-syntax.md](docs/markdown-syntax.md)   | Supported syntax and extensions                                            |
+| Area                                                 | Read when                                                                                      |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [.agents/build.md](.agents/build.md)                 | Building, targets, module graph rules                                                          |
+| [.agents/testing.md](.agents/testing.md)             | Running tests, fuzzing, the parser invariants only unit tests pin                              |
+| [.agents/conventions.md](.agents/conventions.md)     | Touching parser or renderer internals                                                          |
+| [.agents/safety.md](.agents/safety.md)               | Reviewing changes — bug classes and the audit checklist                                        |
+| [.agents/performance.md](.agents/performance.md)     | Byte scans, SIMD, libc, benchmarking                                                           |
+| [.agents/extending.md](.agents/extending.md)         | Adding a block/span type, a renderer, or regenerating tables                                   |
+| [.agents/upstream-sync.md](.agents/upstream-sync.md) | Syncing with mity/md4c — ledger of reviewed commits, do-not-port decisions                     |
+| [.agents/github-parity.md](.agents/github-parity.md) | Changing output — md4x has one dialect, measured against GitHub; parity baseline and not-goals |
+| [docs/parser-api.md](docs/parser-api.md)             | SAX callback table, detail types, parser flags                                                 |
+| [docs/renderers.md](docs/renderers.md)               | Renderer entry points and their flags                                                          |
+| [docs/js-bindings.md](docs/js-bindings.md)           | WASM / standalone / NAPI targets and the JS package API                                        |
+| [docs/markdown-syntax.md](docs/markdown-syntax.md)   | Supported syntax and extensions                                                                |
+| [docs/compatibility.md](docs/compatibility.md)       | How the default preset scores against CommonMark, GitHub and Comark — matrix and known bugs    |
 
 ## Quick start
 
@@ -25,6 +27,7 @@ zig build                       # all artifacts (ReleaseFast); CLI at zig-out/bi
 bun run build:js                # wasm + host NAPI + standalone (what the JS suites load)
 bun scripts/run-tests.ts        # full test suite (does build:js itself, then runs vitest)
 bash scripts/diff-corpus.sh     # output-parity gate — must diff-clean after any internal change
+bun scripts/gh-parity.ts        # GitHub parity vs the committed baseline (needs a token)
 bun fmt
 ```
 
@@ -38,7 +41,7 @@ src/
   parser/
     types.zig         # MD_CTX + internal structs, enums
     util.zig          # char/UTF-8/unicode helpers, buffers, entity recognizers, attributes
-    refdefs.zig       # ref-def dictionary + link/autolink/wiki recognizers
+    refdefs.zig       # ref-def dictionary + link/autolink recognizers
     inlines.zig       # inline mark engine (emphasis mod-3) + span/text emission
     blocks.zig        # line classification + container/block analysis
     process.zig       # block-content processing + md_process_doc
@@ -64,6 +67,7 @@ test/
   spec.txt            # CommonMark 0.31.2
   spec-*.txt          # Per-extension suites
   regressions.txt     # Bug regression tests
+  gh-parity.baseline.json # GitHub parity baseline, per-divergence causes
   coverage.txt        # Code coverage tests
   run-testsuite.py    # Individual suite runner
   pathological-tests.py, prog.py, normalize.py
@@ -75,6 +79,7 @@ scripts/
   diff-corpus.sh      # Output-parity harness (sha256 of all 6 formats over the corpus)
   build-standalone.ts # Bundles lib/standalone.mjs (rolldown, gzip+Z85 inlined wasm)
   upstream-sync.ts    # Lists md4c commits newer than .agents/upstream-sync.json
+  gh-parity.ts        # GitHub Markdown parity harness (see .agents/github-parity.md)
   _gen-*.py           # Zig table generators (unicode, entities)
   build-*.ts          # Legacy C table generators
   unicode/            # Unicode data files

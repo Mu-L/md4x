@@ -1,0 +1,979 @@
+{
+  "note": "Regenerate with `bun scripts/gh-parity.ts --update`. See .agents/github-parity.md.",
+  "suites": {
+    "spec.txt": {
+      "cases": 652,
+      "diverge": 107
+    },
+    "spec-gfm.txt": {
+      "cases": 17,
+      "diverge": 3
+    },
+    "spec-tables.txt": {
+      "cases": 14,
+      "diverge": 3
+    },
+    "spec-tasklists.txt": {
+      "cases": 9,
+      "diverge": 8
+    },
+    "spec-footnotes.txt": {
+      "cases": 36,
+      "diverge": 27
+    },
+    "spec-alerts.txt": {
+      "cases": 43,
+      "diverge": 32
+    },
+    "spec-strikethrough.txt": {
+      "cases": 5,
+      "diverge": 0
+    },
+    "spec-permissive-autolinks.txt": {
+      "cases": 15,
+      "diverge": 6
+    }
+  },
+  "causes": {
+    "entity-escaping": 21,
+    "sanitizer": 62,
+    "markup-shape": 63,
+    "unclassified": 23,
+    "unicode-punct": 2,
+    "scheme-allowlist": 7,
+    "autolink-rules": 5,
+    "md4x-extension": 3
+  },
+  "divergences": [
+    {
+      "suite": "spec.txt",
+      "n": 12,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 14,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 21,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 24,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 27,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 28,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 31,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 34,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 41,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 91,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 142,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 143,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 144,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 146,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 148,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 149,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 150,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 151,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 152,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 153,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 154,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 155,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 156,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 157,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 158,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 160,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 163,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 164,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 165,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 169,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 170,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 171,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 172,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 173,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 174,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 175,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 176,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 177,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 178,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 179,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 180,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 181,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 182,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 183,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 184,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 187,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 190,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 191,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 201,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 209,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 210,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 211,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 308,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 309,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 343,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 344,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 352,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 354,
+      "cause": "unicode-punct"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 359,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 363,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 380,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 385,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 389,
+      "cause": "unicode-punct"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 395,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 417,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 425,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 426,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 427,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 464,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 465,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 466,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 468,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 475,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 476,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 477,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 491,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 494,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 500,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 508,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 524,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 536,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 590,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 596,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 598,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 599,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 601,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 602,
+      "cause": "autolink-rules"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 606,
+      "cause": "autolink-rules"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 613,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 614,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 615,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 616,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 617,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 619,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 620,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 623,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 624,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 625,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 626,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 627,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 628,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 629,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 630,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 631,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 632,
+      "cause": "entity-escaping"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 642,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec.txt",
+      "n": 643,
+      "cause": "sanitizer"
+    },
+    {
+      "suite": "spec-gfm.txt",
+      "n": 7,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-gfm.txt",
+      "n": 8,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-gfm.txt",
+      "n": 14,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec-tables.txt",
+      "n": 7,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-tables.txt",
+      "n": 12,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tables.txt",
+      "n": 14,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 1,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 2,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 3,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 4,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 5,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 7,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 8,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-tasklists.txt",
+      "n": 9,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 1,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 2,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 3,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 4,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 7,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 8,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 9,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 10,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 11,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 12,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 14,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 18,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 21,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 22,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 23,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 24,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 26,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 27,
+      "cause": "md4x-extension"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 28,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 29,
+      "cause": "md4x-extension"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 30,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 31,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 32,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 33,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 34,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 35,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-footnotes.txt",
+      "n": 36,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 1,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 2,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 3,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 4,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 5,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 6,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 7,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 8,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 9,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 12,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 13,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 15,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 16,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 17,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 18,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 19,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 21,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 22,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 23,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 25,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 26,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 27,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 28,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 34,
+      "cause": "md4x-extension"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 35,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 37,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 38,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 39,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 40,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 41,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 42,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-alerts.txt",
+      "n": 43,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-permissive-autolinks.txt",
+      "n": 3,
+      "cause": "autolink-rules"
+    },
+    {
+      "suite": "spec-permissive-autolinks.txt",
+      "n": 5,
+      "cause": "unclassified"
+    },
+    {
+      "suite": "spec-permissive-autolinks.txt",
+      "n": 8,
+      "cause": "autolink-rules"
+    },
+    {
+      "suite": "spec-permissive-autolinks.txt",
+      "n": 9,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec-permissive-autolinks.txt",
+      "n": 13,
+      "cause": "scheme-allowlist"
+    },
+    {
+      "suite": "spec-permissive-autolinks.txt",
+      "n": 15,
+      "cause": "autolink-rules"
+    }
+  ]
+}

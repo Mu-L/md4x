@@ -24,6 +24,11 @@
  * CLI:
  *   bun scripts/js-artifacts.ts check    # report problems, exit 1 if any
  *   bun scripts/js-artifacts.ts build    # (re)build wasm + host NAPI + standalone
+ *
+ * Anything after `build` is forwarded verbatim to each `zig build` step, so a
+ * comptime feature switch reaches the artifacts the JS suites load:
+ *
+ *   bun scripts/js-artifacts.ts build -Demoji=true
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -232,12 +237,13 @@ export function setup(): void {
  * suites only ever dlopen the host target, and cross-building the other eight
  * would cost far more than it buys.
  */
-export function build(): void {
+export function build(zigArgs: string[] = []): void {
   const napi = hostNapi();
   const steps: [string, string[]][] = [
-    ["zig", ["build", "wasm"]],
-    ["zig", ["build", "wasm-small"]],
-    ["zig", ["build", napi.step]],
+    ["zig", ["build", "wasm", ...zigArgs]],
+    ["zig", ["build", "wasm-small", ...zigArgs]],
+    ["zig", ["build", napi.step, ...zigArgs]],
+    // Bundles the already-built md4x-small.wasm; it never invokes zig itself.
     ["bun", [join("scripts", "build-standalone.ts")]],
   ];
   for (const [cmd, args] of steps) {
@@ -263,7 +269,7 @@ const invokedDirectly =
 if (invokedDirectly) {
   const mode = process.argv[2] ?? "check";
   if (mode === "build") {
-    build();
+    build(process.argv.slice(3));
   } else if (mode === "check") {
     const problems = check();
     if (problems.length > 0) {

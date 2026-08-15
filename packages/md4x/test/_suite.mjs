@@ -278,6 +278,80 @@ export function defineSuite({
     });
   });
 
+  describe("renderToHtml { headingIds }", () => {
+    it("omits ids by default, at every level", async () => {
+      const html = await renderToHtml("# a\n\n## b\n\n###### c");
+      expect(html).toBe("<h1>a</h1>\n<h2>b</h2>\n<h6>c</h6>\n");
+    });
+
+    it("slugs the heading text and de-duplicates within the document", async () => {
+      const html = await renderToHtml("# Hello World\n\n# Hello World", {
+        headingIds: true,
+      });
+      expect(html).toBe(
+        '<h1 id="hello-world">Hello World</h1>\n' +
+          '<h1 id="hello-world-1">Hello World</h1>\n',
+      );
+    });
+
+    it("slugs the rendered text, not the source", async () => {
+      const html = await renderToHtml("# Hello **world** &amp; co", {
+        headingIds: true,
+      });
+      expect(html).toBe(
+        '<h1 id="hello-world--co">Hello <strong>world</strong> &amp; co</h1>\n',
+      );
+    });
+
+    it("agrees with the id parseMeta publishes", async () => {
+      const md = "# Hello World\n\n## Hello World\n";
+      const html = await renderToHtml(md, { headingIds: true });
+      const meta = await parseMeta(md);
+      for (const heading of meta.headings) {
+        expect(html).toContain(`id="${heading.id}"`);
+      }
+    });
+
+    it("lets an explicit {#id} win, without emitting two ids", async () => {
+      const html = await renderToHtml("# Hello World {#custom}", {
+        headingIds: true,
+      });
+      expect(html).toBe('<h1 id="custom">Hello World</h1>\n');
+    });
+
+    it("composes with { full: true }", async () => {
+      const html = await renderToHtml("# Hello", {
+        full: true,
+        headingIds: true,
+      });
+      expect(html).toContain("<!DOCTYPE html>");
+      expect(html).toContain('<h1 id="hello">Hello</h1>');
+    });
+
+    it("composes with { heal: true }", async () => {
+      const html = await renderToHtml("# Hello **world", {
+        heal: true,
+        headingIds: true,
+      });
+      expect(html).toBe(
+        '<h1 id="hello-world">Hello <strong>world</strong></h1>\n',
+      );
+    });
+
+    it("composes with a highlighter", async () => {
+      const html = await renderToHtml("# Hello\n\n```js\nx\n```\n", {
+        headingIds: true,
+        highlighter: (code) => `<pre class="hl">${code.trim()}</pre>`,
+      });
+      expect(html).toBe('<h1 id="hello">Hello</h1>\n<pre class="hl">x</pre>');
+    });
+
+    it("gives a heading with no sluggable text no id at all", async () => {
+      const html = await renderToHtml("# ***", { headingIds: true });
+      expect(html).toBe("<h1>***</h1>\n");
+    });
+  });
+
   describe("renderToAST", () => {
     it("returns a string", async () => {
       const json = await renderToAST("# Hello");
@@ -1324,14 +1398,22 @@ export function defineSuite({
       expect(strong[1]["data-value"]).toBe("custom");
     });
 
-    it.skip("renders heading with auto-id", async () => {
+    it("renders heading without an auto-id by default", async () => {
       const html = await renderToHtml("# Hello World");
+      expect(html).toBe("<h1>Hello World</h1>\n");
+    });
+
+    it("renders heading with auto-id under { headingIds: true }", async () => {
+      const html = await renderToHtml("# Hello World", { headingIds: true });
       expect(html).toContain('id="hello-world"');
     });
 
-    it.skip("renders emoji", async () => {
+    // Emoji shortcodes are a `-Demoji=true` build-time opt-in; the shipped
+    // artifacts do not carry the table, so a shortcode is ordinary text.
+    it("leaves emoji shortcodes as text", async () => {
       const html = await renderToHtml("Hello :wave:");
-      expect(html).toContain("\u{1F44B}");
+      expect(html).toContain(":wave:");
+      expect(html).not.toContain("\u{1F44B}");
     });
   });
 
@@ -2575,6 +2657,40 @@ export function defineSuite({
     });
   });
 
+  // A leading UTF-8 BOM is an encoding artifact, not document text. The CLI has
+  // always skipped it; the bindings did not, which made a BOM derail the first
+  // block -- `﻿---` stopped reading as a frontmatter fence, so the whole
+  // frontmatter came back as a setext heading and `frontmatter` came back empty.
+  describe("UTF-8 BOM", () => {
+    const BOM = "﻿";
+    const doc = `${BOM}---\ntitle: Hello\n---\n\nBody text.\n`;
+
+    it("does not hide frontmatter", async () => {
+      const tree = await parseAST(doc);
+      expect(tree.frontmatter).toEqual({ title: "Hello" });
+      expect(tree.nodes).toEqual([["p", {}, "Body text."]]);
+      expect(tree.meta.title).toBe("Hello");
+    });
+
+    it("is stripped by every renderer", async () => {
+      expect(await renderToHtml(doc)).toBe("<p>Body text.</p>\n");
+      expect(await renderToText(doc)).toBe("Body text.\n");
+      expect(await renderToAnsi(`${BOM}plain\n`)).not.toContain(BOM);
+      expect(await renderToMeta(doc)).not.toContain(BOM);
+      expect(await parseMeta(doc)).toMatchObject({ title: "Hello" });
+    });
+
+    it("leaves a BOM in the middle of a document alone", async () => {
+      expect(await renderToHtml(`a${BOM}b\n`)).toBe(`<p>a${BOM}b</p>\n`);
+    });
+
+    it("does not change documents without one", async () => {
+      const clean = doc.slice(BOM.length);
+      expect(await renderToHtml(clean)).toBe("<p>Body text.</p>\n");
+      expect((await parseAST(clean)).frontmatter).toEqual({ title: "Hello" });
+    });
+  });
+
   describe("memory safety regressions", () => {
     // Regression: dynamic component named "pre" or "code" must NOT flatten
     // children into literal text. The AST renderer must check tag_is_dynamic
@@ -2799,13 +2915,6 @@ export function defineSuite({
     const NUL = "\u0000";
     const FFFD = "\uFFFD";
 
-    it("keeps a wiki-link target consistent with its text child", async () => {
-      const ast = await parseAST(`[[a${NUL}b]]`);
-      const wikilink = ast.nodes[0][2];
-      expect(wikilink[1].target).toBe(`a${FFFD}b`);
-      expect(wikilink[2]).toBe(`a${FFFD}b`);
-    });
-
     it("keeps a link href and title", async () => {
       const ast = await parseAST(`[t](<a${NUL}b> "x${NUL}y")`);
       expect(ast.nodes[0][2][1]).toEqual({
@@ -2860,7 +2969,6 @@ export function defineSuite({
 
     it("emits parseable JSON for every NUL-bearing attribute kind", async () => {
       const doc = [
-        `[[a${NUL}b]]`,
         `[t](<a${NUL}b> "x${NUL}y")`,
         `![a${NUL}t](<s${NUL}rc> "x${NUL}y")`,
         "```j" + NUL + "s [f" + NUL + "n.js] m" + NUL + "eta\nc\n```",
@@ -2873,8 +2981,8 @@ export function defineSuite({
     });
 
     it("matches the HTML renderer, which already substitutes U+FFFD", async () => {
-      expect(await renderToHtml(`[[a${NUL}b]]`)).toBe(
-        `<p><x-wikilink data-target="a${FFFD}b">a${FFFD}b</x-wikilink></p>\n`,
+      expect(await renderToHtml(`[t](<a${NUL}b> "x${NUL}y")`)).toBe(
+        `<p><a href="a${FFFD}b" title="x${FFFD}y">t</a></p>\n`,
       );
     });
   });

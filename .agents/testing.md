@@ -14,7 +14,7 @@ Suite format: Markdown examples with a `.` separator and expected HTML. The runn
 through `md4x` and compares normalized output.
 
 Suites: `spec.txt`, `spec-tables.txt`, `spec-strikethrough.txt`, `spec-tasklists.txt`,
-`spec-wiki-links.txt`, `spec-latex-math.txt`, `spec-permissive-autolinks.txt`,
+`spec-latex-math.txt`, `spec-permissive-autolinks.txt`,
 `spec-hard-soft-breaks.txt`, `spec-underline.txt`, `spec-frontmatter.txt`, `spec-components.txt`,
 `spec-attributes.txt`, `spec-alerts.txt`, `spec-highlight.txt`, `spec-footnotes.txt`,
 `spec-markdown.txt`,
@@ -109,7 +109,7 @@ Covers `md_parse` (no-op SAX callbacks), the six renderers, and `md_heal`. Input
 NUL-free UTF-8, matching the JS binding surface. libyaml is linked for the html/ast/meta paths but is
 not instrumented.
 
-Seed corpus at `test/fuzzers/seed-corpus/` (CommonMark, GFM, LaTeX math, wiki links, frontmatter,
+Seed corpus at `test/fuzzers/seed-corpus/` (CommonMark, GFM, LaTeX math, frontmatter,
 components, attributes, alerts, code block metadata, heal edge cases) is shared with
 `scripts/diff-corpus.sh`.
 

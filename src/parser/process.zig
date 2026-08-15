@@ -28,6 +28,11 @@ const MD_BLOCK_CONTAINER_OPENER = types.MD_BLOCK_CONTAINER_OPENER;
 const MD_BLOCK_CONTAINER_CLOSER = types.MD_BLOCK_CONTAINER_CLOSER;
 const MD_BLOCK_LOOSE_LIST = types.MD_BLOCK_LOOSE_LIST;
 const MD_BLOCK_SETEXT_HEADER = types.MD_BLOCK_SETEXT_HEADER;
+const MD_BLOCK_HAS_ATTRS = types.MD_BLOCK_HAS_ATTRS;
+const MD_BLOCK_ATTRS_HOISTED = types.MD_BLOCK_ATTRS_HOISTED;
+const MD_BLOCK_UNWRAP_P = types.MD_BLOCK_UNWRAP_P;
+const MD_BLOCK_FOLDED_WRAPPER = types.MD_BLOCK_FOLDED_WRAPPER;
+const ISBLANK_ = util.ISBLANK_;
 
 const MD_ATTRIBUTE_BUILD = util.MD_ATTRIBUTE_BUILD;
 const md_build_attribute = util.md_build_attribute;
@@ -673,8 +678,357 @@ fn md_free_code_detail(ctx: *MD_CTX, code: *const c.BlockCodeDetail) void {
         util.free_array_a(c_uint, ctx.alloc, @constCast(code.highlights.ptr), code.highlights.len);
 }
 
+// --- block attributes --------------------------------------------------------
+//
+// A trailing `{...}` run on a block's LAST line attaches its attributes to that
+// block. The run has to be separated from the text before it by a blank, and
+// that blank is the whole rule that tells the block form apart from the inline
+// one: `[span]{a}` binds to the span, `[span] {a}` binds to the paragraph.
+//
+// Nothing is copied and no side table is kept. `md_resolve_block_attrs` shortens
+// the line to just before the run and records the fact in the block's flag byte;
+// the bytes are recovered at emission time by re-scanning forward from the
+// shortened end. Which element the run lands on is decided by the same pass,
+// because a paragraph's run lifts to the enclosing element in the two cases the
+// syntax spells out — a tight list item, and a blockquote holding nothing but
+// that one paragraph (which then also loses its `<p>` wrapper).
+
+// Does the line `[beg, end)` end in an attribute run? Returns where its text
+// ends once the run and the blanks before it are cut off, or null when there is
+// no run. The run's bytes are not reported: `md_recover_block_attrs` reads them
+// straight back off the shortened line.
+fn md_find_block_attrs(ctx: *MD_CTX, beg: OFF, end: OFF) ?OFF {
+    if (end <= beg or ctx.ch(end - 1) != '}')
+        return null;
+
+    // The last top-level '{' of the line. Depth counting (not "the last '{'"),
+    // so a brace inside a quoted value cannot be mistaken for the opener.
+    var depth: c_int = 0;
+    var open: OFF = 0;
+    var seen: bool = false;
+    var i: OFF = beg;
+    while (i < end) : (i += 1) {
+        if (ctx.ch(i) == '{') {
+            if (depth == 0) {
+                open = i;
+                seen = true;
+            }
+            depth += 1;
+        } else if (ctx.ch(i) == '}') {
+            if (depth > 0) depth -= 1;
+        }
+    }
+    if (!seen or depth != 0)
+        return null;
+
+    // A blank must precede the run: without it this is an inline attribute list
+    // bound to whatever ends right before the brace.
+    if (open <= beg or !ISBLANK_(ctx.ch(open - 1)))
+        return null;
+
+    // ... and the run has to be the one closing the line.
+    var d: c_int = 0;
+    i = open;
+    while (i < end) : (i += 1) {
+        if (ctx.ch(i) == '{') {
+            d += 1;
+        } else if (ctx.ch(i) == '}') {
+            d -= 1;
+            if (d == 0) break;
+        }
+    }
+    if (i != end - 1)
+        return null;
+
+    // `{}` carries nothing; leave it as literal text rather than eating it.
+    if (open + 1 >= end - 1)
+        return null;
+
+    var text_end: OFF = open;
+    while (text_end > beg and ISBLANK_(ctx.ch(text_end - 1)))
+        text_end -= 1;
+    if (text_end == beg)
+        return null;
+
+    return text_end;
+}
+
+// Re-scan the run `md_resolve_block_attrs` cut off the end of `line`. Written
+// defensively rather than trusting the flag: an unexpected shape yields the
+// empty attribute string, never an out-of-range slice.
+fn md_recover_block_attrs(ctx: *MD_CTX, line: *const MD_LINE) []const CHAR {
+    var i: OFF = line.end;
+    while (i < ctx.size and ISBLANK_(ctx.ch(i)))
+        i += 1;
+    if (i >= ctx.size or ctx.ch(i) != '{')
+        return &.{};
+
+    const open: OFF = i;
+    var depth: c_int = 0;
+    while (i < ctx.size and !ctx.isNewline(i)) : (i += 1) {
+        if (ctx.ch(i) == '{') {
+            depth += 1;
+        } else if (ctx.ch(i) == '}') {
+            depth -= 1;
+            if (depth == 0)
+                return ctx.str(open + 1)[0 .. i - open - 1];
+        }
+    }
+    return &.{};
+}
+
+// The attribute run a leaf block kept for itself (empty once it was lifted to
+// an enclosing container).
+fn md_block_own_attrs(ctx: *MD_CTX, block: *const MD_BLOCK) []const CHAR {
+    const flags: c_uint = block.bits.flags;
+    if (flags & MD_BLOCK_HAS_ATTRS == 0 or flags & MD_BLOCK_ATTRS_HOISTED != 0)
+        return &.{};
+    if (block.n_lines == 0)
+        return &.{};
+    const lines: [*]const MD_LINE = @ptrCast(@alignCast(@as([*]const MD_BLOCK, @ptrCast(block)) + 1));
+    return md_recover_block_attrs(ctx, &lines[block.n_lines - 1]);
+}
+
+// The attribute run lifted onto a container from its first child. The child is
+// always the block immediately after the opener in the arena, which is exactly
+// what `md_resolve_block_attrs` requires before it sets MD_BLOCK_ATTRS_HOISTED.
+fn md_block_hoisted_attrs(ctx: *MD_CTX, byte_off: usize, block: *const MD_BLOCK) []const CHAR {
+    if (block.bits.flags & @as(u8, @truncate(MD_BLOCK_CONTAINER_OPENER)) == 0)
+        return &.{};
+
+    const child_off: usize = byte_off + @sizeOf(MD_BLOCK);
+    if (child_off + @sizeOf(MD_BLOCK) > ctx.n_block_bytes)
+        return &.{};
+
+    const child: *const MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + child_off));
+    const flags: c_uint = child.bits.flags;
+    if (flags & MD_BLOCK_HAS_ATTRS == 0 or flags & MD_BLOCK_ATTRS_HOISTED == 0)
+        return &.{};
+    if (child.n_lines == 0)
+        return &.{};
+
+    const lines: [*]const MD_LINE = @ptrCast(@alignCast(@as([*]const MD_BLOCK, @ptrCast(child)) + 1));
+    return md_recover_block_attrs(ctx, &lines[child.n_lines - 1]);
+}
+
+// One frame per open container while md_resolve_block_attrs walks the arena.
+const MD_BLOCK_ATTR_FRAME = struct {
+    btype: c.BlockType,
+    /// Arena offset of the container's own opener block.
+    self_off: usize,
+    /// Only meaningful on a `ul`/`ol` frame: the list's final looseness, which
+    /// the block layer may have flipped on retroactively.
+    is_loose: bool,
+    /// Set for an `li` whose list is tight — the only case where the item's
+    /// paragraph is suppressed, hence the only one where lifting to the item is
+    /// the right call.
+    in_tight_list: bool,
+    /// Direct children seen so far, and the arena offset of the first of them.
+    child_count: MD_SIZE,
+    first_child_off: usize,
+};
+
+// Consume every block's trailing `{...}` and decide which element it lands on,
+// and fold every `::ul` / `::ol` / `::table` / `::blockquote` / `::pre` wrapper
+// into the single same-tagged child it holds. Runs once, over the finished
+// block arena, before any callback fires — both decisions need the whole block
+// tree, which a streaming renderer never has in hand.
+fn md_resolve_block_attrs(ctx: *MD_CTX) error{OutOfMemory}!void {
+    const do_attrs = ctx.parser.flags & c.MD_FLAG_ATTRIBUTES != 0;
+    const do_fold = ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0;
+    if (!do_attrs and !do_fold)
+        return;
+
+    // Local to the pass — deliberately not an MD_CTX field, since nothing
+    // outside it ever reads the stack.
+    var stack: std.ArrayListUnmanaged(MD_BLOCK_ATTR_FRAME) = .empty;
+    defer stack.deinit(ctx.alloc);
+
+    var byte_off: usize = 0;
+    while (byte_off < ctx.n_block_bytes) {
+        const block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + byte_off));
+        const btype = block.getType();
+        const flags: c_uint = block.bits.flags;
+
+        if (flags & MD_BLOCK_CONTAINER != 0) {
+            // Closer first, then opener — the order md_process_all_blocks emits
+            // them in, so the frames nest the same way.
+            if (flags & MD_BLOCK_CONTAINER_CLOSER != 0 and stack.items.len > 0) {
+                const frame = stack.pop().?;
+                if (do_attrs) md_close_block_attr_frame(ctx, &frame);
+                // After md_close_block_attr_frame: a quote that just took a
+                // lifted run must not also take a wrapper's props.
+                if (do_fold) md_fold_wrapper_component(ctx, &frame, block);
+            }
+
+            if (flags & MD_BLOCK_CONTAINER_OPENER != 0) {
+                md_count_block_attr_child(&stack, byte_off);
+                // Read the parent out as a plain bool before appending: the
+                // append may reallocate, so nothing may survive it as a pointer.
+                const in_tight_list = btype == c.BlockType.li and stack.items.len > 0 and blk: {
+                    const parent = stack.items[stack.items.len - 1];
+                    break :blk (parent.btype == c.BlockType.ul or parent.btype == c.BlockType.ol) and
+                        !parent.is_loose;
+                };
+                stack.append(ctx.alloc, .{
+                    .btype = btype,
+                    .self_off = byte_off,
+                    .is_loose = flags & MD_BLOCK_LOOSE_LIST != 0,
+                    .in_tight_list = in_tight_list,
+                    .child_count = 0,
+                    .first_child_off = 0,
+                }) catch {
+                    ctx.log("realloc() failed.");
+                    return error.OutOfMemory;
+                };
+            }
+
+            byte_off += @sizeOf(MD_BLOCK);
+            continue;
+        }
+
+        md_count_block_attr_child(&stack, byte_off);
+
+        if (do_attrs and (btype == c.BlockType.p or btype == c.BlockType.h) and block.n_lines > 0) {
+            const lines: [*]MD_LINE = @ptrCast(@alignCast(@as([*]MD_BLOCK, @ptrCast(block)) + 1));
+            const last = &lines[block.n_lines - 1];
+            if (md_find_block_attrs(ctx, last.beg, last.end)) |text_end| {
+                last.end = text_end;
+                block.bits.flags |= @as(u8, @truncate(MD_BLOCK_HAS_ATTRS));
+            }
+        }
+
+        const line_size: usize = if (btype == c.BlockType.code or btype == c.BlockType.html or btype == c.BlockType.frontmatter)
+            @sizeOf(MD_VERBATIMLINE)
+        else
+            @sizeOf(MD_LINE);
+        byte_off += @as(usize, block.n_lines) * line_size;
+        byte_off += @sizeOf(MD_BLOCK);
+    }
+}
+
+fn md_count_block_attr_child(stack: *std.ArrayListUnmanaged(MD_BLOCK_ATTR_FRAME), byte_off: usize) void {
+    if (stack.items.len == 0)
+        return;
+    const frame = &stack.items[stack.items.len - 1];
+    if (frame.child_count == 0)
+        frame.first_child_off = byte_off;
+    frame.child_count +|= 1;
+}
+
+// Decide, now that the container is complete, whether its first child's run
+// belongs to the container rather than to the child.
+fn md_close_block_attr_frame(ctx: *MD_CTX, frame: *const MD_BLOCK_ATTR_FRAME) void {
+    const lift_to_li = frame.btype == c.BlockType.li and frame.in_tight_list and frame.child_count >= 1;
+    // The blockquote form is the single-paragraph one only: with a second block
+    // in the quote the attributes stay on the paragraphs.
+    const lift_to_quote = frame.btype == c.BlockType.quote and frame.child_count == 1;
+    if (!lift_to_li and !lift_to_quote)
+        return;
+
+    if (frame.first_child_off + @sizeOf(MD_BLOCK) > ctx.n_block_bytes)
+        return;
+    const child: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + frame.first_child_off));
+    if (child.bits.flags & @as(u8, @truncate(MD_BLOCK_CONTAINER)) != 0)
+        return;
+    if (child.getType() != c.BlockType.p)
+        return;
+    if (child.bits.flags & @as(u8, @truncate(MD_BLOCK_HAS_ATTRS)) == 0)
+        return;
+
+    child.bits.flags |= @as(u8, @truncate(MD_BLOCK_ATTRS_HOISTED));
+    // A one-paragraph blockquote renders its text directly, with the attributes
+    // on the <blockquote>; a list item's paragraph is already suppressed by the
+    // tight-list rule, so it needs no extra marker.
+    if (lift_to_quote)
+        child.bits.flags |= @as(u8, @truncate(MD_BLOCK_UNWRAP_P));
+}
+
+// The block type a `::name` wrapper folds into, or null when `name` is not one
+// of the five wrapper tags. `::pre` folds into the `code` block that renders as
+// `<pre><code>`; the other four name their block type directly.
+// `.agents/comark/attributes.md:306-360`.
+fn md_wrapper_fold_target(name: []const CHAR) ?c.BlockType {
+    if (std.mem.eql(u8, name, "ul")) return c.BlockType.ul;
+    if (std.mem.eql(u8, name, "ol")) return c.BlockType.ol;
+    if (std.mem.eql(u8, name, "table")) return c.BlockType.table;
+    if (std.mem.eql(u8, name, "blockquote")) return c.BlockType.quote;
+    if (std.mem.eql(u8, name, "pre")) return c.BlockType.code;
+    return null;
+}
+
+fn md_block_at(ctx: *MD_CTX, byte_off: usize) *MD_BLOCK {
+    return @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + byte_off));
+}
+
+// Now that the container is complete: is it a wrapper component holding exactly
+// one same-tagged child? If so, mark both of its bookend blocks so nothing is
+// emitted for them, and the child takes the wrapper's props instead.
+//
+// A wrapper emitted as a second, OUTER element of the same tag is invalid HTML
+// that browsers reparent (`<ul>` directly inside `<ul>`, `<table>` inside
+// `<table>`) and a wrong AST shape for every consumer.
+fn md_fold_wrapper_component(ctx: *MD_CTX, frame: *const MD_BLOCK_ATTR_FRAME, closer: *MD_BLOCK) void {
+    // Anything but "exactly one child, tags match" keeps today's nesting.
+    if (frame.btype != c.BlockType.component or frame.child_count != 1)
+        return;
+    if (frame.self_off + @sizeOf(MD_BLOCK) > ctx.n_block_bytes)
+        return;
+    if (frame.first_child_off + @sizeOf(MD_BLOCK) > ctx.n_block_bytes)
+        return;
+
+    const opener = md_block_at(ctx, frame.self_off);
+    const comp_idx: usize = opener.bits.data;
+    if (comp_idx >= ctx.block_component_info.items.len)
+        return;
+    const info = &ctx.block_component_info.items[comp_idx];
+    if (info.name_end <= info.name_beg)
+        return;
+    // A `::pre Some Title{...}` title has no home on the folded element, so the
+    // wrapper stays a component rather than silently losing it.
+    if (info.title_end > info.title_beg)
+        return;
+
+    const name = ctx.str(info.name_beg)[0 .. info.name_end - info.name_beg];
+    const target = md_wrapper_fold_target(name) orelse return;
+
+    const child = md_block_at(ctx, frame.first_child_off);
+    if (child.getType() != target)
+        return;
+
+    // `table` and `code` are leaf blocks; the other three are containers, and
+    // `first_child_off` is where their OPENER sits.
+    const want_container = target != c.BlockType.table and target != c.BlockType.code;
+    const is_container = child.bits.flags & @as(u8, @truncate(MD_BLOCK_CONTAINER)) != 0;
+    if (want_container != is_container)
+        return;
+    if (want_container and child.bits.flags & @as(u8, @truncate(MD_BLOCK_CONTAINER_OPENER)) == 0)
+        return;
+
+    // A one-paragraph blockquote already carries a lifted `{...}` run in the one
+    // `raw_attrs` slot the detail has. Two attribute sources, one slot: leave
+    // the pair nested rather than drop either.
+    if (target == c.BlockType.quote and
+        md_block_hoisted_attrs(ctx, frame.first_child_off, child).len > 0)
+        return;
+
+    opener.bits.flags |= @as(u8, @truncate(MD_BLOCK_FOLDED_WRAPPER));
+    closer.bits.flags |= @as(u8, @truncate(MD_BLOCK_FOLDED_WRAPPER));
+}
+
+// The `{props}` of a folded wrapper, read off its opener block.
+fn md_folded_wrapper_attrs(ctx: *MD_CTX, block: *const MD_BLOCK) []const CHAR {
+    const comp_idx: usize = block.bits.data;
+    if (comp_idx >= ctx.block_component_info.items.len)
+        return &.{};
+    const info = &ctx.block_component_info.items[comp_idx];
+    if (info.props_beg == 0 or info.props_end <= info.props_beg)
+        return &.{};
+    return ctx.str(info.props_beg)[0 .. info.props_end - info.props_beg];
+}
+
 // md4x.c ~5714.
-pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
+pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK, fold_attrs: []const CHAR) c_int {
     var info_build: MD_ATTRIBUTE_BUILD = .{};
     var lang_build: MD_ATTRIBUTE_BUILD = .{};
     var filename_build: MD_ATTRIBUTE_BUILD = .{};
@@ -725,7 +1079,11 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
     var det: c.BlockDetail = .default(btype);
 
     switch (btype) {
-        c.BlockType.h => det.h.level = block.bits.data,
+        c.BlockType.h => {
+            det.h.level = block.bits.data;
+            det.h.raw_attrs = md_block_own_attrs(ctx, block);
+        },
+        c.BlockType.p => det.p.raw_attrs = md_block_own_attrs(ctx, block),
         c.BlockType.code => {
             // For fenced code block, we may need to set the info string.
             if (block.bits.data != 0) {
@@ -739,16 +1097,23 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
                     return ret;
                 }
             }
+            det.code.raw_attrs = fold_attrs;
         },
         c.BlockType.table => {
             det.table.col_count = block.bits.data;
             det.table.head_row_count = 1;
             det.table.body_row_count = block.n_lines - 2;
+            det.table.raw_attrs = fold_attrs;
         },
         else => {},
     }
 
-    if (!is_in_tight_list or btype != c.BlockType.p) {
+    // A paragraph loses its bookends inside a tight list item, and in the
+    // one-paragraph blockquote form where the quote carries the attributes.
+    const suppress_p = btype == c.BlockType.p and
+        (is_in_tight_list or block.bits.flags & @as(u8, @truncate(MD_BLOCK_UNWRAP_P)) != 0);
+
+    if (!suppress_p) {
         ret = mdEnterBlock(ctx, &det);
         if (ret != 0) {
             if (clean_fence_code_detail) {
@@ -784,7 +1149,7 @@ pub fn md_process_leaf_block(ctx: *MD_CTX, block: *const MD_BLOCK) c_int {
         return ret;
     }
 
-    if (!is_in_tight_list or btype != c.BlockType.p) {
+    if (!suppress_p) {
         ret = mdLeaveBlock(ctx, &det);
         if (ret != 0) {
             if (clean_fence_code_detail) {
@@ -814,12 +1179,35 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
     var comp_name_build: MD_ATTRIBUTE_BUILD = .{};
     var clean_component_detail: bool = false;
 
+    // Consume trailing `{...}` runs and settle which element each one belongs to
+    // before a single callback fires — the decision needs the whole block tree.
+    md_resolve_block_attrs(ctx) catch return -1;
+
     // ctx.containers now is reused for tracking loose/tight lists.
     ctx.containers.clearRetainingCapacity();
+
+    // The props of a folded `::ul` / `::ol` / `::table` / `::blockquote` /
+    // `::pre` wrapper, waiting for the block that swallowed it — always the very
+    // next one in the arena, which is what the fold decision required.
+    var fold_attrs: []const CHAR = &.{};
 
     while (byte_off < ctx.n_block_bytes) {
         const block: *MD_BLOCK = @ptrCast(@alignCast(@as([*]u8, @ptrCast(ctx.block_bytes)) + byte_off));
         const btype = block.getType();
+
+        // A folded wrapper emits nothing at all: its opener hands its props to
+        // the child, its closer is dropped, and neither touches ctx.containers
+        // (only the `p` bookends read that, and no fold target is a `p`).
+        if ((block.bits.flags & @as(u8, @truncate(MD_BLOCK_FOLDED_WRAPPER))) != 0) {
+            if ((block.bits.flags & @as(u8, @truncate(MD_BLOCK_CONTAINER_OPENER))) != 0)
+                fold_attrs = md_folded_wrapper_attrs(ctx, block);
+            byte_off += @sizeOf(MD_BLOCK);
+            continue;
+        }
+
+        const block_fold_attrs = fold_attrs;
+        fold_attrs = &.{};
+
         // The detail is the union arm named by the runtime block type (see
         // md_process_leaf_block); the switch below fills in its fields.
         var det: c.BlockDetail = .default(btype);
@@ -828,17 +1216,26 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
             c.BlockType.ul => {
                 det.ul.is_tight = (block.bits.flags & @as(u8, @truncate(MD_BLOCK_LOOSE_LIST))) == 0;
                 det.ul.mark = @intCast(block.bits.data);
+                det.ul.raw_attrs = block_fold_attrs;
             },
             c.BlockType.ol => {
                 det.ol.start = block.n_lines;
                 det.ol.is_tight = (block.bits.flags & @as(u8, @truncate(MD_BLOCK_LOOSE_LIST))) == 0;
                 det.ol.mark_delimiter = @intCast(block.bits.data);
+                det.ol.raw_attrs = block_fold_attrs;
             },
             c.BlockType.li => {
                 det.li.is_task = block.bits.data != 0;
                 det.li.task_mark = @intCast(block.bits.data);
                 det.li.task_mark_offset = @intCast(block.n_lines);
+                det.li.raw_attrs = md_block_hoisted_attrs(ctx, byte_off, block);
             },
+            // Mutually exclusive by construction: md_fold_wrapper_component
+            // refuses a quote that already carries a lifted run.
+            c.BlockType.quote => det.quote.raw_attrs = if (block_fold_attrs.len > 0)
+                block_fold_attrs
+            else
+                md_block_hoisted_attrs(ctx, byte_off, block),
             c.BlockType.component => {
                 const comp_idx: c_int = @intCast(block.bits.data);
                 if (comp_idx >= 0 and comp_idx < @as(c_int, @intCast(ctx.block_component_info.items.len))) {
@@ -940,7 +1337,7 @@ pub fn md_process_all_blocks(ctx: *MD_CTX) c_int {
                 }
             }
         } else {
-            ret = md_process_leaf_block(ctx, block);
+            ret = md_process_leaf_block(ctx, block, block_fold_attrs);
             if (ret < 0) {
                 if (clean_component_detail) md_free_attribute(ctx, &comp_name_build);
                 return ret;

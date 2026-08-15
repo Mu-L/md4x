@@ -1698,7 +1698,6 @@ const TraceProbe = struct {
             c.SpanType.mark => "MARK",
             c.SpanType.latexmath => "LATEXMATH",
             c.SpanType.latexmath_display => "LATEXMATH_DISPLAY",
-            c.SpanType.wikilink => "WIKILINK",
             c.SpanType.component => "COMPONENT",
             c.SpanType.span => "SPAN",
             c.SpanType.footnote_ref => "FOOTNOTE_REF",
@@ -1725,25 +1724,41 @@ const TraceProbe = struct {
 
     /// The pre-4c emission path signalled "this block carries no detail" two
     /// different ways: a NULL pointer for DOC/THEAD/TBODY/TR, and a non-null
-    /// pointer into an unread union slot for QUOTE/HR/HTML/P/FRONTMATTER. The
-    /// union's `void` arms carry neither, so the two spellings below are a
-    /// purely cosmetic reproduction of that historical split — kept so the
-    /// golden trace stays byte-identical across the representation change.
+    /// pointer into an unread union slot for HR/HTML/FRONTMATTER. The union's
+    /// `void` arms carry neither, so the two spellings below are a purely
+    /// cosmetic reproduction of that historical split.
+    ///
+    /// QUOTE and P used to print `<detail:opaque>` too, and H and LI printed
+    /// only their pre-attribute fields. All four now carry a block-level
+    /// `raw_attrs`, and UL/OL/TABLE/CODE carry a wrapper-fold one, so the trace
+    /// under-covered eight arms against its own stated contract ("each detail
+    /// union arm's field values spelled out"). Every arm that has a field prints
+    /// it; only the three genuinely empty arms keep the opaque spelling.
     fn blockDetail(self: *TraceProbe, detail: *const c.BlockDetail) void {
         switch (detail.*) {
             c.BlockType.doc, c.BlockType.thead, c.BlockType.tbody, c.BlockType.tr => self.raw(" <no-detail>", .{}),
-            c.BlockType.quote, c.BlockType.hr, c.BlockType.html, c.BlockType.p, c.BlockType.frontmatter => self.raw(" <detail:opaque>", .{}),
+            c.BlockType.hr, c.BlockType.html, c.BlockType.frontmatter => self.raw(" <detail:opaque>", .{}),
+            c.BlockType.quote => |x| {
+                self.rawStr("attrs", x.raw_attrs);
+            },
+            c.BlockType.p => |x| {
+                self.rawStr("attrs", x.raw_attrs);
+            },
             c.BlockType.ul => |x| {
                 self.raw(" is_tight={d} mark='{c}'", .{ @intFromBool(x.is_tight), x.mark });
+                self.rawStr("attrs", x.raw_attrs);
             },
             c.BlockType.ol => |x| {
                 self.raw(" start={d} is_tight={d} delim='{c}'", .{ x.start, @intFromBool(x.is_tight), x.mark_delimiter });
+                self.rawStr("attrs", x.raw_attrs);
             },
             c.BlockType.li => |x| {
                 self.raw(" is_task={d} task_mark='{c}' off={d}", .{ @intFromBool(x.is_task), if (x.task_mark == 0) @as(u8, '-') else x.task_mark, x.task_mark_offset });
+                self.rawStr("attrs", x.raw_attrs);
             },
             c.BlockType.h => |x| {
                 self.raw(" level={d}", .{x.level});
+                self.rawStr("attrs", x.raw_attrs);
             },
             c.BlockType.code => |x| {
                 self.attr("info", x.info);
@@ -1757,9 +1772,11 @@ const TraceProbe = struct {
                     self.raw("{d}", .{h});
                 }
                 self.raw("]", .{});
+                self.rawStr("attrs", x.raw_attrs);
             },
             c.BlockType.table => |x| {
                 self.raw(" cols={d} head_rows={d} body_rows={d}", .{ x.col_count, x.head_row_count, x.body_row_count });
+                self.rawStr("attrs", x.raw_attrs);
             },
             c.BlockType.th, c.BlockType.td => |x| {
                 self.raw(" align={d}", .{@intFromEnum(x.@"align")});
@@ -1798,9 +1815,6 @@ const TraceProbe = struct {
                 self.attr("src", x.src);
                 self.attr("title", x.title);
                 self.rawStr("attrs", x.raw_attrs);
-            },
-            c.SpanType.wikilink => |x| {
-                self.attr("target", x.target);
             },
             c.SpanType.component => |x| {
                 self.attr("tag", x.tag_name);
@@ -1894,7 +1908,7 @@ const trace_doc =
     \\
     \\![alt](/img.png "img title"){.responsive}
     \\
-    \\Math $x^2$ and $$y_1$$ and [[Wiki Target]].
+    \\Math $x^2$ and $$y_1$$.
     \\
     \\Attrs: **bold**{.hi} *it*{#id} `cs`{.l} ~~d~~{.r} _uu_{.a} ==hl=={.m} [sp]{.cls}
     \\
@@ -1967,6 +1981,25 @@ const trace_doc =
     \\[^two]: second.
     \\[^unused]: never referenced.
     \\
+    \\Block attrs {data-p="1"}
+    \\
+    \\## Attributed heading {.hcls}
+    \\
+    \\- item {data-li="2"}
+    \\
+    \\> single quoted {data-q="3"}
+    \\
+    \\::ul{data-ul="4"}
+    \\- folded a
+    \\- folded b
+    \\::
+    \\
+    \\::pre{data-pre="5"}
+    \\```ts
+    \\const v = 1;
+    \\```
+    \\::
+    \\
 ;
 
 test "SAX event trace: golden baseline (freezes detail packaging for Phase 4c)" {
@@ -1993,16 +2026,16 @@ const expected_trace =
     \\    text NORMAL "tags: [a, b]"
     \\    text NORMAL "\n"
     \\  -block FRONTMATTER
-    \\  +block H level=1
+    \\  +block H level=1 attrs=<null>
     \\    text NORMAL "Heading "
     \\    +span EM <no-detail>
     \\      text NORMAL "one"
     \\    -span EM
     \\  -block H
-    \\  +block H level=1
+    \\  +block H level=1 attrs=<null>
     \\    text NORMAL "Setext"
     \\  -block H
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Para "
     \\    +span STRONG <no-detail>
     \\      text NORMAL "strong"
@@ -2033,7 +2066,7 @@ const expected_trace =
     \\    text ENTITY "&#65;"
     \\    text NORMAL " num."
     \\  -block P
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Link "
     \\    +span A href="/url"[NORMAL@0|end@4] title="the title"[NORMAL@0|end@9] attrs=<null> autolink=0
     \\      text NORMAL "text"
@@ -2058,12 +2091,12 @@ const expected_trace =
     \\    -span A
     \\    text NORMAL "."
     \\  -block P
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    +span IMG src="/img.png"[NORMAL@0|end@8] title="img title"[NORMAL@0|end@9] attrs=".responsive"
     \\      text NORMAL "alt"
     \\    -span IMG
     \\  -block P
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Math "
     \\    +span LATEXMATH <no-detail>
     \\      text LATEXMATH "x^2"
@@ -2072,13 +2105,9 @@ const expected_trace =
     \\    +span LATEXMATH_DISPLAY <no-detail>
     \\      text LATEXMATH "y_1"
     \\    -span LATEXMATH_DISPLAY
-    \\    text NORMAL " and "
-    \\    +span WIKILINK target="Wiki Target"[NORMAL@0|end@11]
-    \\      text NORMAL "Wiki Target"
-    \\    -span WIKILINK
     \\    text NORMAL "."
     \\  -block P
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Attrs: "
     \\    +span STRONG attrs=".hi"
     \\      text NORMAL "bold"
@@ -2108,61 +2137,61 @@ const expected_trace =
     \\      text NORMAL "sp"
     \\    -span SPAN
     \\  -block P
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Hard break"
     \\    text BR "\n"
     \\    text NORMAL "after break, soft"
     \\    text SOFTBR "\n"
     \\    text NORMAL "break here."
     \\  -block P
-    \\  +block QUOTE <detail:opaque>
-    \\    +block P <detail:opaque>
+    \\  +block QUOTE attrs=<null>
+    \\    +block P attrs=<null>
     \\      text NORMAL "quoted"
     \\    -block P
     \\  -block QUOTE
     \\  +block ALERT type="WARNING"[NORMAL@0|end@7]
-    \\    +block P <detail:opaque>
+    \\    +block P attrs=<null>
     \\      text NORMAL "alert body"
     \\    -block P
     \\  -block ALERT
-    \\  +block UL is_tight=1 mark='-'
-    \\    +block LI is_task=1 task_mark=' ' off=523
+    \\  +block UL is_tight=1 mark='-' attrs=<null>
+    \\    +block LI is_task=1 task_mark=' ' off=503 attrs=<null>
     \\      text NORMAL "todo"
     \\    -block LI
-    \\    +block LI is_task=1 task_mark='x' off=534
+    \\    +block LI is_task=1 task_mark='x' off=514 attrs=<null>
     \\      text NORMAL "done"
     \\    -block LI
-    \\    +block LI is_task=0 task_mark='-' off=0
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
     \\      text NORMAL "plain"
     \\    -block LI
     \\  -block UL
-    \\  +block OL start=1 is_tight=1 delim='.'
-    \\    +block LI is_task=0 task_mark='-' off=0
+    \\  +block OL start=1 is_tight=1 delim='.' attrs=<null>
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
     \\      text NORMAL "one"
     \\    -block LI
-    \\    +block LI is_task=0 task_mark='-' off=0
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
     \\      text NORMAL "two"
     \\    -block LI
     \\  -block OL
-    \\  +block UL is_tight=0 mark='*'
-    \\    +block LI is_task=0 task_mark='-' off=0
-    \\      +block P <detail:opaque>
+    \\  +block UL is_tight=0 mark='*' attrs=<null>
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
+    \\      +block P attrs=<null>
     \\        text NORMAL "loose"
     \\      -block P
     \\    -block LI
-    \\    +block LI is_task=0 task_mark='-' off=0
-    \\      +block P <detail:opaque>
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
+    \\      +block P attrs=<null>
     \\        text NORMAL "list"
     \\      -block P
     \\    -block LI
     \\  -block UL
     \\  +block HR <detail:opaque>
     \\  -block HR
-    \\  +block CODE info=<null> lang=<null> fence='-' filename=<null> meta=<null> highlights=[]
+    \\  +block CODE info=<null> lang=<null> fence='-' filename=<null> meta=<null> highlights=[] attrs=<null>
     \\    text CODE "indented code"
     \\    text CODE "\n"
     \\  -block CODE
-    \\  +block CODE info="js [app.js] {1-2,4}"[NORMAL@0|end@19] lang="js"[NORMAL@0|end@2] fence='`' filename="app.js"[NORMAL@0|end@6] meta=<null> highlights=[1,2,4]
+    \\  +block CODE info="js [app.js] {1-2,4}"[NORMAL@0|end@19] lang="js"[NORMAL@0|end@2] fence='`' filename="app.js"[NORMAL@0|end@6] meta=<null> highlights=[1,2,4] attrs=<null>
     \\    text CODE "const x = 1;"
     \\    text CODE "\n"
     \\    text CODE "const y = 2;"
@@ -2176,14 +2205,14 @@ const expected_trace =
     \\    text HTML "</div>"
     \\    text HTML "\n"
     \\  -block HTML
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Inline "
     \\    text HTML "<b>"
     \\    text NORMAL "html"
     \\    text HTML "</b>"
     \\    text NORMAL " span."
     \\  -block P
-    \\  +block TABLE cols=4 head_rows=1 body_rows=2
+    \\  +block TABLE cols=4 head_rows=1 body_rows=2 attrs=<null>
     \\    +block THEAD <no-detail>
     \\      +block TR <no-detail>
     \\        +block TH align=1
@@ -2236,26 +2265,26 @@ const expected_trace =
     \\      text NORMAL "icon: star"
     \\      text NORMAL "\n"
     \\    -block FRONTMATTER
-    \\    +block P <detail:opaque>
+    \\    +block P attrs=<null>
     \\      text NORMAL "default slot"
     \\    -block P
     \\    +block TEMPLATE name="header"[NORMAL@0|end@6]
-    \\      +block H level=2
+    \\      +block H level=2 attrs=<null>
     \\        text NORMAL "Slot heading"
     \\      -block H
     \\    -block TEMPLATE
     \\    +block TEMPLATE name="footer"[NORMAL@0|end@6]
-    \\      +block P <detail:opaque>
+    \\      +block P attrs=<null>
     \\        text NORMAL "footer text"
     \\      -block P
     \\    -block TEMPLATE
     \\  -block COMPONENT
     \\  +block COMPONENT tag="danger"[NORMAL@0|end@6] props="level=\"high\"" title="STOP"
-    \\    +block P <detail:opaque>
+    \\    +block P attrs=<null>
     \\      text NORMAL "titled container"
     \\    -block P
     \\  -block COMPONENT
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Inline "
     \\    +span COMPONENT tag="badge"[NORMAL@0|end@5] props="color=\"red\""
     \\      text NORMAL "New"
@@ -2269,7 +2298,7 @@ const expected_trace =
     \\    text HTML "<!-- a comment -->"
     \\    text HTML "\n"
     \\  -block HTML
-    \\  +block P <detail:opaque>
+    \\  +block P attrs=<null>
     \\    text NORMAL "Note"
     \\    +span FOOTNOTE_REF id=1 ref_id=1 label="fn"[NORMAL@0|end@2]
     \\    -span FOOTNOTE_REF
@@ -2281,7 +2310,33 @@ const expected_trace =
     \\    -span FOOTNOTE_REF
     \\    text NORMAL "."
     \\  -block P
-    \\  +block P <detail:opaque>
+    \\  +block P attrs="data-p=\"1\""
+    \\    text NORMAL "Block attrs"
+    \\  -block P
+    \\  +block H level=2 attrs=".hcls"
+    \\    text NORMAL "Attributed heading"
+    \\  -block H
+    \\  +block UL is_tight=1 mark='-' attrs=<null>
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs="data-li=\"2\""
+    \\      text NORMAL "item"
+    \\    -block LI
+    \\  -block UL
+    \\  +block QUOTE attrs="data-q=\"3\""
+    \\    text NORMAL "single quoted"
+    \\  -block QUOTE
+    \\  +block UL is_tight=1 mark='-' attrs="data-ul=\"4\""
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
+    \\      text NORMAL "folded a"
+    \\    -block LI
+    \\    +block LI is_task=0 task_mark='-' off=0 attrs=<null>
+    \\      text NORMAL "folded b"
+    \\    -block LI
+    \\  -block UL
+    \\  +block CODE info="ts"[NORMAL@0|end@2] lang="ts"[NORMAL@0|end@2] fence='`' filename=<null> meta=<null> highlights=[] attrs="data-pre=\"5\""
+    \\    text CODE "const v = 1;"
+    \\    text CODE "\n"
+    \\  -block CODE
+    \\  +block P attrs=<null>
     \\    text NORMAL "nul"
     \\    text NULLCHAR "\0"
     \\    text NORMAL "char"

@@ -22,6 +22,7 @@ const { values, positionals } = parseArgs({
       default: process.stdout.isTTY ? "ansi" : "text",
     },
     "full-html": { type: "boolean", short: "f", default: false },
+    "heading-ids": { type: "boolean", default: false },
     "html-title": { type: "string" },
     "html-css": { type: "string" },
     heal: { type: "boolean", default: false },
@@ -63,6 +64,7 @@ ${_g("Input:")}
 
 ${_g("HTML options:")}
       ${_c("-f")}, ${_c("--full-html")}     Full HTML document with header
+      ${_c("--heading-ids")}       Add a generated ${_c("id")} anchor to every heading
       ${_c("--html-title")}=${_d("TITLE")}  Document title
       ${_c("--html-css")}=${_d("URL")}      CSS link
 
@@ -175,7 +177,10 @@ const healOpt = values.heal ? { heal: true } : undefined;
 let output;
 switch (format) {
   case "html":
-    output = renderToHtml(input, healOpt);
+    output = renderToHtml(input, {
+      ...healOpt,
+      headingIds: values["heading-ids"],
+    });
     break;
   case "ansi":
     output = renderToAnsi(input, {

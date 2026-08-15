@@ -9,6 +9,23 @@ const std = @import("std");
 const types = @import("types.zig");
 const util = @import("util.zig");
 const refdefs = @import("refdefs.zig");
+const build_config = @import("build_config");
+
+/// Emoji shortcode table, or a stub that matches nothing.
+///
+/// The stub is the DEFAULT (`-Demoji=false`, see build.zig) and is the ONLY way
+/// to keep the generated 1913-entry table out of the artifact: with the real
+/// table imported, every `:name:` probe references `EMOJI_MAP` and the ~110 KB
+/// of table data is linked in regardless of any runtime flag. The stub's
+/// `MAX_NAME_LEN = 0` also collapses the recognizer's name scan, so the whole
+/// feature folds away instead of merely never matching — `:wave:` then reaches
+/// the output verbatim.
+pub const emoji = if (build_config.emoji) @import("../emoji.zig") else struct {
+    pub const MAX_NAME_LEN: OFF = 0;
+    pub fn emoji_lookup(_: []const u8) ?[]const u8 {
+        return null;
+    }
+};
 
 const c = types.c;
 const CHAR = types.CHAR;
@@ -352,9 +369,8 @@ pub fn md_rollback(ctx: *MD_CTX, opener_index: c_int, closer_index: c_int, how: 
 
             // Same asymmetry md_disable_marks guards against (md4c 326fe25):
             // a footnote-reference opener inside the rolled-back range may have
-            // its `]` closer outside it. md4x reaches the wiki-link case through
-            // md_rollback rather than md_disable_marks, so the guard is needed
-            // in both.
+            // its `]` closer outside it. Both entry points need the guard —
+            // rollback and disable reach overlapping mark ranges.
             if (mark.ch == '[' and (mark.flags & MarkFlags.footnote_ref) != 0 and
                 mark.next >= 0 and mark.next >= closer_index)
             {
@@ -381,9 +397,9 @@ pub fn md_disable_marks(ctx: *MD_CTX, mark_index0: c_int, mark_index1: c_int) vo
         const mark = &ctx.marks.items[@intCast(i)];
 
         // A footnote-reference opener's `]` closer may live OUTSIDE the disabled
-        // range (it does when the opener is swallowed by a wiki-link
-        // destination). Leaving it behind is what tripped md4c's assert in
-        // #348 — kill it with its opener. md4c 326fe25.
+        // range (it does when the opener is swallowed by a link destination).
+        // Leaving it behind is what tripped md4c's assert in #348 — kill it with
+        // its opener. md4c 326fe25.
         if (mark.ch == '[' and (mark.flags & MarkFlags.footnote_ref) != 0 and
             mark.next >= 0 and mark.next >= mark_index1)
         {
@@ -413,15 +429,17 @@ pub fn md_build_mark_char_map(ctx: *MD_CTX) void {
     ctx.mark_char_map['!'] = 1;
     ctx.mark_char_map[']'] = 1;
     ctx.mark_char_map[0] = 1;
+    // ':' is unconditional because emoji shortcodes are, unlike the two other
+    // ':' features below, not behind a dialect flag.
+    ctx.mark_char_map[':'] = 1;
 
     const flags = ctx.parser.flags;
     if (flags & c.MD_FLAG_STRIKETHROUGH != 0) ctx.mark_char_map['~'] = 1;
     if (flags & c.MD_FLAG_LATEXMATHSPANS != 0) ctx.mark_char_map['$'] = 1;
     if (flags & c.MD_FLAG_HIGHLIGHT != 0) ctx.mark_char_map['='] = 1;
     if (flags & c.MD_FLAG_PERMISSIVEEMAILAUTOLINKS != 0) ctx.mark_char_map['@'] = 1;
-    if (flags & (c.MD_FLAG_PERMISSIVEURLAUTOLINKS | c.MD_FLAG_COMPONENTS) != 0) ctx.mark_char_map[':'] = 1;
     if (flags & c.MD_FLAG_PERMISSIVEWWWAUTOLINKS != 0) ctx.mark_char_map['.'] = 1;
-    if ((flags & c.MD_FLAG_TABLES != 0) or (flags & c.MD_FLAG_WIKILINKS != 0)) ctx.mark_char_map['|'] = 1;
+    if (flags & c.MD_FLAG_TABLES != 0) ctx.mark_char_map['|'] = 1;
 
     if (flags & c.MD_FLAG_COLLAPSEWHITESPACE != 0) {
         var i: usize = 0;
@@ -525,6 +543,38 @@ pub fn md_is_code_span(ctx: *MD_CTX, lines: []const MD_LINE, beg: OFF, opener: *
     closer.beg = closer_beg;
     closer.end = closer_end;
     closer.flags = MarkFlags.potential_closer;
+    return true;
+}
+
+// The byte class github/gemoji's shortcode aliases use (`+1`, `100`, `wave`,
+// `non-potable_water`). A pure `CHAR` predicate in the style of util.zig's
+// `IS*_` helpers; it lives here because the recognizer below is its only caller.
+inline fn ISEMOJINAME_(ch: CHAR) bool {
+    const b: u8 = @bitCast(ch);
+    return (b >= 'a' and b <= 'z') or (b >= '0' and b <= '9') or b == '_' or b == '+' or b == '-';
+}
+
+// Detect an emoji shortcode `:name:` opening at `beg`. `*p_end` receives the
+// offset just past the closing colon.
+//
+// The name scan is bounded by the table's longest name as well as by the line,
+// and the first byte after the colon is already outside the class for the
+// colons ordinary text is full of (`http://x`, `a:b`, `10:30`, `::component`),
+// so a non-shortcode colon is rejected in a byte or two. The table probe — the
+// only part that is not O(1) — runs solely once a well-formed `:name:` has been
+// spelled out.
+pub fn md_is_emoji_shortcode(ctx: *MD_CTX, beg: OFF, line_end: OFF, p_end: *OFF) bool {
+    const name_beg: OFF = beg + 1;
+    const max_end: OFF = @min(line_end, name_beg +| emoji.MAX_NAME_LEN);
+    var off: OFF = name_beg;
+
+    while (off < max_end and ISEMOJINAME_(ctx.ch(off))) off += 1;
+    if (off == name_beg or off >= line_end or ctx.ch(off) != ':') return false;
+
+    const name: [*]const u8 = @ptrCast(ctx.str(name_beg));
+    if (emoji.emoji_lookup(name[0 .. off - name_beg]) == null) return false;
+
+    p_end.* = off + 1;
     return true;
 }
 
@@ -755,7 +805,7 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
 
             // A potential footnote reference: `[^label]`. Collected BEFORE the
             // generic `[` arm so the opener swallows the `^` and can never be
-            // mistaken for a link / image / wikilink opener. The opener spans
+            // mistaken for a link / image opener. The opener spans
             // `[^` (end - beg == 2); the `]` is collected by the generic closer
             // arm below and paired by md_analyze_bracket like any other bracket.
             if ((ctx.parser.flags & c.MD_FLAG_FOOTNOTES != 0) and
@@ -825,8 +875,29 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 continue :scan;
             }
 
-            // Potential inline component or permissive URL autolink.
+            // Potential emoji shortcode, inline component or permissive URL
+            // autolink.
             if (ch == ':') {
+                // Emoji shortcodes come first: a shortcode name may itself be
+                // component-shaped (`t-rex`, `e-mail`), or hide one in front of
+                // an underscore (`non-potable_water` — the component name class
+                // stops at `_`, leaving the hyphenated `non-potable` behind),
+                // and the component recognizer below would swallow the prefix.
+                // Going first cannot shadow a component in return: the name has
+                // to be in the table AND be closed by a second colon, which
+                // `:icon-star`, `:badge[New]` and `:icon{name=x}` are not.
+                {
+                    var emoji_end: OFF = undefined;
+                    if (md_is_emoji_shortcode(ctx, off, line.*.end, &emoji_end)) {
+                        if (addMark(ctx, 'E', off, emoji_end, MarkFlags.resolved) == null) {
+                            ret = -1;
+                            return ret;
+                        }
+                        off = emoji_end;
+                        continue :scan;
+                    }
+                }
+
                 comp: {
                     if ((ctx.parser.flags & c.MD_FLAG_COMPONENTS != 0) and
                         off + 1 < line.*.end and ctx.isAlpha(off + 1) and
@@ -995,8 +1066,8 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                 continue :scan;
             }
 
-            // Potential table cell boundary or wiki link label delimiter.
-            if ((table_mode or ctx.parser.flags & c.MD_FLAG_WIKILINKS != 0) and ch == '|') {
+            // Potential table cell boundary.
+            if (table_mode and ch == '|') {
                 if (addMark(ctx, ch, off, off + 1, 0) == null) {
                     ret = -1;
                     return ret;
@@ -1295,85 +1366,6 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
             continue;
         }
 
-        // Wiki links: [[destination]] or [[destination|label]].
-        if ((ctx.parser.flags & c.MD_FLAG_WIKILINKS != 0) and
-            (opener.end - opener.beg == 1) and
-            next_opener != null and
-            next_opener.?.ch == '[' and
-            (next_opener.?.beg == opener.beg -% 1) and
-            (next_opener.?.end - next_opener.?.beg == 1) and
-            next_closer != null and
-            next_closer.?.ch == ']' and
-            (next_closer.?.beg == closer.beg + 1) and
-            (next_closer.?.end - next_closer.?.beg == 1))
-        {
-            var delim: ?*MD_MARK = null;
-            var delim_index: c_int = opener_index + 1;
-            var dest_beg: OFF = undefined;
-            var dest_end: OFF = undefined;
-
-            is_link = 1;
-
-            while (delim_index < closer_index) {
-                const m = &ctx.marks.items[@intCast(delim_index)];
-                if (m.ch == '|') {
-                    delim = m;
-                    break;
-                }
-                if (m.ch != 'D') {
-                    if (m.beg - opener.end > 100) break;
-                    if (m.ch != 'D' and (m.flags & MarkFlags.opener != 0)) delim_index = m.next;
-                }
-                delim_index += 1;
-            }
-
-            dest_beg = opener.end;
-            dest_end = if (delim != null) delim.?.beg else closer.beg;
-            if (dest_end - dest_beg == 0 or dest_end - dest_beg > 100) is_link = 0;
-
-            if (is_link != 0) {
-                var off: OFF = dest_beg;
-                while (off < dest_end) : (off += 1) {
-                    if (ctx.isNewline(off)) {
-                        is_link = 0;
-                        break;
-                    }
-                }
-            }
-
-            if (is_link != 0) {
-                if (delim != null) {
-                    if (delim.?.end < closer.beg) {
-                        md_rollback(ctx, opener_index, delim_index, MD_ROLLBACK_ALL);
-                        md_rollback(ctx, delim_index, closer_index, MD_ROLLBACK_CROSSING);
-                        delim.?.flags |= MarkFlags.resolved;
-                        opener.end = delim.?.beg;
-                    } else {
-                        md_rollback(ctx, opener_index, closer_index, MD_ROLLBACK_ALL);
-                        closer.beg = delim.?.beg;
-                        delim = null;
-                    }
-                }
-
-                opener.beg = next_opener.?.beg;
-                opener.next = closer_index;
-                opener.flags |= MarkFlags.opener | MarkFlags.resolved;
-
-                closer.end = next_closer.?.end;
-                closer.prev = opener_index;
-                closer.flags |= MarkFlags.closer | MarkFlags.resolved;
-
-                last_link_beg = opener.beg;
-                last_link_end = closer.end;
-
-                if (delim != null)
-                    md_analyze_link_contents(ctx, lines, delim_index + 1, closer_index);
-
-                opener_index = next_opener.?.prev;
-                continue;
-            }
-        }
-
         if (next_opener != null and next_opener.?.beg == closer.end) {
             if (next_closer.?.beg > closer.end + 1) {
                 // Might be full reference link.
@@ -1510,7 +1502,7 @@ pub fn md_resolve_links(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
 
 // Resolve every `[^label]` footnote reference in the current block. Runs after
 // md_resolve_links, so all real links are already resolved and any footnote
-// opener that a link URL / wiki-link destination swallowed has been turned into
+// opener that a link URL swallowed has been turned into
 // a 'D' dummy (which is what the `ch != '['` guard below rejects — md4c
 // 54bfec0, since the footnote_ref FLAG survives disabling but the char does not).
 //
@@ -2190,24 +2182,6 @@ inline fn spanADetailFor(ty: c.SpanType, det: c.SpanADetail) c.SpanDetail {
     };
 }
 
-// md4x.c ~4623.
-pub fn md_enter_leave_span_wikilink(ctx: *MD_CTX, enter: bool, target: [*c]const CHAR, target_size: SZ) c_int {
-    var target_build: MD_ATTRIBUTE_BUILD = .{};
-    var det: c.SpanWikilinkDetail = .{};
-    var ret: c_int = 0;
-
-    md_build_attribute(ctx, target, target_size, 0, &det.target, &target_build) catch {
-        ret = -1;
-    };
-    if (ret == 0) {
-        const d: c.SpanDetail = .{ .wikilink = det };
-        ret = if (enter) mdEnterSpan(ctx, &d) else mdLeaveSpan(ctx, &d);
-    }
-
-    md_free_attribute(ctx, &target_build);
-    return ret;
-}
-
 // md4x.c ~4643.
 pub fn md_enter_leave_span_component(ctx: *MD_CTX, enter: bool, tag: [*c]const CHAR, tag_size: SZ, raw_props: [*c]const CHAR, raw_props_size: SZ) c_int {
     var tag_build: MD_ATTRIBUTE_BUILD = .{};
@@ -2291,6 +2265,9 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
     var off: OFF = lines[0].beg;
     const end: OFF = lines[lines.len - 1].end;
     var tmp: OFF = undefined;
+    // While a code/latexmath span is open, where its closer begins. The
+    // line-joining rule below needs the span's own end, not the paragraph's.
+    var span_end: OFF = 0;
     var attr_skip_to: OFF = 0;
     var enforce_hardbreak: c_int = 0;
     var ret: c_int = 0;
@@ -2337,6 +2314,7 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                         ret = mdEnterSpan(ctx, &det);
                         if (ret != 0) return ret;
                         text_type = c.TextType.code;
+                        span_end = ctx.marks.items[@intCast(mark.*.next)].beg;
                     } else {
                         ret = mdLeaveSpan(ctx, &det);
                         if (ret != 0) return ret;
@@ -2396,6 +2374,7 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                         ret = mdEnterSpan(ctx, if ((mark.*.end - off) % 2 != 0) &math_inline else &math_display);
                         if (ret != 0) return ret;
                         text_type = c.TextType.latexmath;
+                        span_end = ctx.marks.items[@intCast(mark.*.next)].beg;
                     } else {
                         ret = mdLeaveSpan(ctx, if ((mark.*.end - off) % 2 != 0) &math_inline else &math_display);
                         if (ret != 0) return ret;
@@ -2416,15 +2395,6 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                         ret = md_enter_leave_span_footnote_ref(ctx, index_mark.*.beg, index_mark.*.end, ctx.str(opener.*.end), closer.*.beg - opener.*.end);
                         if (ret != 0) return ret;
                         mark.*.end = closer.*.end;
-                    } else if ((opener.*.ch == '[' and closer.*.ch == ']') and
-                        opener.*.end - opener.*.beg >= 2 and
-                        closer.*.end - closer.*.beg >= 2)
-                    {
-                        const has_label = (opener.*.end - opener.*.beg > 2);
-                        const target_sz: SZ = if (has_label) opener.*.end - (opener.*.beg + 2) else closer.*.beg - opener.*.end;
-
-                        ret = md_enter_leave_span_wikilink(ctx, mark.*.ch != ']', if (has_label) ctx.str(opener.*.beg + 2) else ctx.str(opener.*.end), target_sz);
-                        if (ret != 0) return ret;
                     } else {
                         const dest_mark: [*c]MD_MARK = opener + 1;
                         const title_mark: [*c]MD_MARK = opener + 2;
@@ -2481,6 +2451,24 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
 
                 '&' => {
                     ret = mdText(ctx, c.TextType.entity, ctx.str(mark.*.beg), mark.*.end - mark.*.beg);
+                    if (ret != 0) return ret;
+                },
+
+                // Emoji shortcode: the whole `:name:` run is replaced by the
+                // emoji's UTF-8 bytes, as ordinary text, so every renderer
+                // inherits the substitution with no new SAX surface.
+                //
+                // The table is re-probed here rather than parked in the mark:
+                // MD_MARK has no field to spare (the `prev`/`next` pointer-store
+                // trick is the link machinery's), and this runs once per emoji
+                // actually emitted over a name the collector already matched.
+                'E' => {
+                    const name: [*]const u8 = @ptrCast(ctx.str(mark.*.beg + 1));
+                    if (emoji.emoji_lookup(name[0 .. mark.*.end - mark.*.beg - 2])) |chars| {
+                        ret = mdText(ctx, text_type, @ptrCast(chars.ptr), @intCast(chars.len));
+                    } else {
+                        ret = mdText(ctx, text_type, ctx.str(mark.*.beg), mark.*.end - mark.*.beg);
+                    }
                     if (ret != 0) return ret;
                 },
 
@@ -2547,7 +2535,25 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
                     ret = mdText(ctx, text_type, ctx.str(tmp), off - tmp);
                     if (ret != 0) return ret;
                 }
-                if (off == line.*.end) {
+                // The line ending itself becomes one space (CommonMark 6.1:
+                // "line endings are converted to spaces"). Testing `off ==
+                // line->end` -- what md4c does -- silently drops that space
+                // whenever the line carried trailing blanks, because
+                // md_analyze_line has already trimmed them off `line->end`
+                // while the loop above re-emits them verbatim: `off` then sits
+                // past `line->end`, not on it. Ask the question directly
+                // instead -- are we standing on the line terminator? -- which
+                // is also false in the one case the old test was guarding
+                // against, a span closer having advanced `off` into a later
+                // line. Spec examples 335, 337 and 640.
+                //
+                // `off < span_end` keeps the span's *final* line ending out of
+                // it: md_resolve_codespans has already pulled the closer in
+                // past a stripped leading/trailing space, so a newline at the
+                // closer was consumed by that strip and owes no space. Note
+                // `end` is the whole paragraph's end and is useless here.
+                // Example 336 (`` ``\nfoo \n`` `` -> `foo `, not `foo  `).
+                if (off < span_end and ctx.isNewline(off)) {
                     ret = mdText(ctx, text_type, " ", 1);
                     if (ret != 0) return ret;
                 }

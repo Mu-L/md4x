@@ -17,7 +17,7 @@ Fast and Small markdown parser and renderer based on [mity/md4c](https://github.
 - **Full CommonMark** — Passes the CommonMark spec
 - **GitHub Flavored Markdown** — Tables, task lists, strikethrough, autolinks, alerts
 - **Built-in YAML parser** — Frontmatter and standalone YAML, no external dependency
-- **Extra extensions** — LaTeX math, wiki links, underline, highlight, footnotes, inline attributes
+- **Extra extensions** — LaTeX math, underline, highlight, footnotes, inline attributes
 - **Comark (MDC) support** — Block and inline components with props, slots
 - **Universal JS** — Native Node.js addon (NAPI) + portable WASM for browsers, Deno, Bun, edge workers
 - **C library** — SAX-like streaming parser, zero-copy, no AST allocation overhead
@@ -443,7 +443,7 @@ md_text(input, input_size, output, stdout, MD_DIALECT_GITHUB, 0);
 
 #### Markdown Renderer
 
-Converts extended markdown (MDC/Comark) to clean, standard markdown. Strips frontmatter, HTML comments, raw HTML, and inline attributes. Converts block/inline components to HTML tags, wiki links to regular links.
+Converts extended markdown (MDC/Comark) to clean, standard markdown. Strips frontmatter, HTML comments, raw HTML, and inline attributes. Converts block/inline components to HTML tags.
 
 ```c
 #include "md4x.h"

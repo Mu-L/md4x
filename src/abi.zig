@@ -91,7 +91,6 @@ pub const SpanType = enum(c_uint) {
     del,
     latexmath,
     latexmath_display,
-    wikilink,
     component,
     span,
     mark,
@@ -149,11 +148,31 @@ pub const Attribute = struct {
     }
 };
 
+/// A block-level trailing `{...}` run. Empty means "no attributes", exactly as
+/// for the span details below — there is no separate "absent" state.
+pub const BlockQuoteDetail = struct {
+    /// Raw attrs lifted off the single paragraph of a one-paragraph blockquote,
+    /// or the props of a `::blockquote{...}` wrapper this quote was folded into
+    /// (never both — a quote that already carries a lifted run does not fold).
+    /// Empty when absent (which is also every multi-paragraph blockquote without
+    /// a wrapper — there the attrs stay on the paragraphs).
+    raw_attrs: []const MD_CHAR = &.{},
+};
+
+pub const BlockPDetail = struct {
+    /// Raw attrs from a trailing `{...}` on the paragraph's last line. Empty when
+    /// absent, or when the run was lifted to the enclosing list item / blockquote.
+    raw_attrs: []const MD_CHAR = &.{},
+};
+
 pub const BlockUlDetail = struct {
     /// True for a tight list, false for a loose one.
     is_tight: bool = false,
     /// Bullet character: '-', '+' or '*'.
     mark: MD_CHAR = 0,
+    /// Props of a `::ul{...}` wrapper this list was folded into. Empty when
+    /// absent — see `BlockCodeDetail.raw_attrs`.
+    raw_attrs: []const MD_CHAR = &.{},
 };
 
 pub const BlockOlDetail = struct {
@@ -162,6 +181,9 @@ pub const BlockOlDetail = struct {
     is_tight: bool = false,
     /// '.' or ')'.
     mark_delimiter: MD_CHAR = 0,
+    /// Props of a `::ol{...}` wrapper this list was folded into. Empty when
+    /// absent — see `BlockCodeDetail.raw_attrs`.
+    raw_attrs: []const MD_CHAR = &.{},
 };
 
 pub const BlockLiDetail = struct {
@@ -171,10 +193,16 @@ pub const BlockLiDetail = struct {
     task_mark: MD_CHAR = 0,
     /// Offset of the character between '[' and ']'.
     task_mark_offset: MD_OFFSET = 0,
+    /// Raw attrs lifted off the item's first paragraph. Empty when absent.
+    raw_attrs: []const MD_CHAR = &.{},
 };
 
 pub const BlockHDetail = struct {
     level: c_uint = 0,
+    /// Raw attrs from a trailing `{...}` on the heading line. Empty when absent.
+    /// Consumed before the text is emitted, so the auto-generated slug never
+    /// sees it.
+    raw_attrs: []const MD_CHAR = &.{},
 };
 
 pub const BlockCodeDetail = struct {
@@ -189,12 +217,25 @@ pub const BlockCodeDetail = struct {
     meta: []const MD_CHAR = &.{},
     /// Expanded line numbers from `{1-3,5}`. Empty when absent.
     highlights: []const c_uint = &.{},
+    /// Props of a `::pre{...}` wrapper this code block was folded into. Empty
+    /// when absent.
+    ///
+    /// The five wrapper tags (`ul`, `ol`, `table`, `blockquote`, `pre`) are the
+    /// documented way to attach attributes to a construct with no natural
+    /// attribute slot: a wrapper holding a single same-tagged child collapses
+    /// into that child, which then carries the wrapper's props. The parser makes
+    /// that decision (it needs the whole block tree, which a streaming renderer
+    /// does not have), so every renderer sees one element either way.
+    raw_attrs: []const MD_CHAR = &.{},
 };
 
 pub const BlockTableDetail = struct {
     col_count: c_uint = 0,
     head_row_count: c_uint = 0,
     body_row_count: c_uint = 0,
+    /// Props of a `::table{...}` wrapper this table was folded into. Empty when
+    /// absent — see `BlockCodeDetail.raw_attrs`.
+    raw_attrs: []const MD_CHAR = &.{},
 };
 
 pub const BlockTdDetail = struct {
@@ -255,10 +296,6 @@ pub const SpanImgDetail = struct {
     raw_attrs: []const MD_CHAR = &.{},
 };
 
-pub const SpanWikilinkDetail = struct {
-    target: Attribute = .{},
-};
-
 pub const SpanComponentDetail = struct {
     /// Component name (e.g. "badge", "icon-star").
     tag_name: Attribute = .{},
@@ -284,7 +321,7 @@ pub const SpanSpanDetail = struct {
 /// Arms whose block type carries no detail are `void`.
 pub const BlockDetail = union(BlockType) {
     doc: void,
-    quote: void,
+    quote: BlockQuoteDetail,
     ul: BlockUlDetail,
     ol: BlockOlDetail,
     li: BlockLiDetail,
@@ -292,7 +329,7 @@ pub const BlockDetail = union(BlockType) {
     h: BlockHDetail,
     code: BlockCodeDetail,
     html: void,
-    p: void,
+    p: BlockPDetail,
     table: BlockTableDetail,
     thead: void,
     tbody: void,
@@ -327,7 +364,6 @@ pub const SpanDetail = union(SpanType) {
     del: SpanAttrsDetail,
     latexmath: void,
     latexmath_display: void,
-    wikilink: SpanWikilinkDetail,
     component: SpanComponentDetail,
     span: SpanSpanDetail,
     mark: SpanAttrsDetail,
@@ -406,7 +442,9 @@ pub const MD_FLAG_STRIKETHROUGH = @as(c_int, 0x0200);
 pub const MD_FLAG_PERMISSIVEWWWAUTOLINKS = @as(c_int, 0x0400);
 pub const MD_FLAG_TASKLISTS = @as(c_int, 0x0800);
 pub const MD_FLAG_LATEXMATHSPANS = @as(c_int, 0x1000);
-pub const MD_FLAG_WIKILINKS = @as(c_int, 0x2000);
+// 0x2000 is retired: it was MD_FLAG_WIKILINKS, removed along with the whole
+// `[[target]]` extension. Left unassigned so a stale caller still passing the
+// bit silently gets nothing instead of some unrelated new feature.
 pub const MD_FLAG_HARD_SOFT_BREAKS = __helpers.promoteIntLiteral(c_int, 0x8000, .hex);
 pub const MD_FLAG_FRONTMATTER = __helpers.promoteIntLiteral(c_int, 0x10000, .hex);
 pub const MD_FLAG_COMPONENTS = __helpers.promoteIntLiteral(c_int, 0x20000, .hex);
@@ -418,7 +456,7 @@ pub const MD_FLAG_PERMISSIVEAUTOLINKS = (MD_FLAG_PERMISSIVEEMAILAUTOLINKS | MD_F
 pub const MD_FLAG_NOHTML = MD_FLAG_NOHTMLBLOCKS | MD_FLAG_NOHTMLSPANS;
 pub const MD_DIALECT_COMMONMARK = @as(c_int, 0);
 pub const MD_DIALECT_GITHUB = ((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_ALERTS) | MD_FLAG_FOOTNOTES;
-pub const MD_DIALECT_ALL = ((((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_WIKILINKS) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT) | MD_FLAG_FOOTNOTES;
+pub const MD_DIALECT_ALL = (((((((((MD_FLAG_PERMISSIVEAUTOLINKS | MD_FLAG_TABLES) | MD_FLAG_STRIKETHROUGH) | MD_FLAG_TASKLISTS) | MD_FLAG_LATEXMATHSPANS) | MD_FLAG_FRONTMATTER) | MD_FLAG_COMPONENTS) | MD_FLAG_ATTRIBUTES) | MD_FLAG_ALERTS) | MD_FLAG_HIGHLIGHT) | MD_FLAG_FOOTNOTES;
 
 // ---------------------------------------------------------------------------
 // Renderer ABI types + flag values (formerly the md4x-*.h headers). The entry
@@ -437,6 +475,10 @@ pub const MD_HTML_FLAG_SKIP_UTF8_BOM: c_uint = 0x0004;
 pub const MD_HTML_FLAG_FULL_HTML: c_uint = 0x0008;
 // 0x0010 (MD_HTML_FLAG_CODE_META) retired with the code-block offset trailer;
 // highlighting is a renderer hook now — see src/renderers/md4x-highlight.zig.
+/// Emit a generated `id="..."` anchor on every heading (the same slug the AST
+/// and meta renderers publish). Off by default: bare CommonMark headings carry
+/// no id.
+pub const MD_HTML_FLAG_HEADING_IDS: c_uint = 0x0020;
 pub const MD_HTML_FLAG_HEAL: c_uint = 0x0100;
 
 pub const MD_ANSI_FLAG_DEBUG: c_uint = 0x0001;

@@ -1,0 +1,373 @@
+# GFM Spec — Extension Sections
+
+Examples imported verbatim from the official GitHub Flavored Markdown Spec, so
+that MD4X's GFM extensions are checked against the upstream corpus and not only
+against the hand-written md4c-inherited suites (`test/spec-tables.txt`,
+`test/spec-tasklists.txt`, `test/spec-strikethrough.txt`,
+`test/spec-permissive-autolinks.txt`).
+
+| | |
+| ---------- | -------------------------------------------------------------------------------- |
+| Source     | <https://raw.githubusercontent.com/github/cmark-gfm/master/test/spec.txt>         |
+| Version    | GFM 0.29 (spec dated 2019-04-06)                                                 |
+| Licence    | [CC-BY-SA 4.0](http://creativecommons.org/licenses/by-sa/4.0/) — attribution in `test/LICENSE.md` |
+| Retrieved  | 2026-08-14                                                                       |
+
+**Imported:** the five `(extension)` sections only — Tables, Task list items,
+Strikethrough, Autolinks and Disallowed Raw HTML. Those hold 24 of the upstream
+file's 672 examples; 17 of the 24 are here.
+
+**Deliberately not imported:** the other 648 examples. They are CommonMark
+**0.29**, which is *older* than `test/spec.txt` (CommonMark 0.31.2), so importing
+them would duplicate core coverage at a stale spec version. That includes the 19
+examples of the core (non-extension) `Autolinks` section: 13 of its 19 inputs are
+byte-identical to examples already in `test/spec.txt` and the other 6 are the same
+tests with cosmetically refreshed URLs (`http:` → `https:`, renamed hosts). Two of
+them — bare `http://example.com` and bare `foo@bar.example.com`, upstream examples
+619 and 620, expecting *no* link — additionally contradict the `Autolinks
+(extension)` section imported below, which is the behaviour MD4X implements.
+
+Upstream example numbers are recorded above each example so every block can be
+traced back to the source file.
+
+## Adjustments made to the imported expected output
+
+Two examples (upstream 279 and 280, task lists) carry an adjusted expected
+output. Category: **renderer output shape** — MD4X's HTML renderer emits GitHub's
+`class="task-list-item"` / `class="task-list-item-checkbox"` markers and valueless
+boolean attributes (`disabled`, `checked`), where GFM 0.29 emits a bare `<li>` and
+`disabled=""` / `checked=""`; MD4X also emits no space between `<input>` and the
+item text. This is the documented MD4X rendering (`docs/markdown-syntax.md`,
+"Extension: Task Lists"); the parse is identical. `normalize.py` sorts attributes
+but does not fold `x=""` into `x`, nor collapse the leading space, so the
+adjustment has to be made in the file.
+
+No other adjustment was needed. In particular the two categories that
+`test/spec.txt` carries — heading `id` attributes and XHTML `<hr />` / `<br />` /
+`<img />` void syntax — do not arise: no extension example contains a heading or a
+void element.
+
+## Examples excluded because MD4X and GFM 0.29 genuinely disagree
+
+Seven examples are left out rather than silently re-baselined to whatever MD4X
+prints. Each is listed here with its upstream number and the disagreement, so the
+omission is auditable and none of it is lost.
+
+- **200** (Tables) — a table cell holding a code span with an escaped pipe in it,
+  ``| b `\|` az |``. GFM unescapes `\|` to `|` while splitting the row, so the
+  escape takes effect even inside a code span: `<code>|</code>`. MD4X
+  (like md4c) treats `\|` as an ordinary inline backslash escape, which code spans
+  suppress, and emits `<code>\|</code>`. Undocumented divergence.
+- **203** (Tables) — a delimiter row with fewer cells than the header row
+  (`| abc | def |` over `| --- |`). GFM requires the counts to match and renders
+  the whole thing as a paragraph; MD4X (like md4c) lets the delimiter row set the
+  column count and builds a one-column table. Undocumented divergence.
+- **623, 625, 626, 627** (Autolinks) — MD4X implements md4c's permissive-autolink
+  grammar, which is a different design from GFM's: md4c matches a URL by a
+  character grammar per component and then requires the character *after* the match
+  to be whitespace or one of `)}].!?,;`, whereas GFM extends the match to the next
+  whitespace and then trims trailing punctuation. The design is described in
+  `test/spec-permissive-autolinks.txt`. The four divergent outcomes are:
+  `www.commonmark.org/a.b.` — MD4X keeps the sentence-final `.` inside the path
+  (`.` is an ordinary path character in md4c's grammar, only the *host* scan
+  rolls a trailing `.` back); `www.google.com/search?q=(business))+ok` — MD4X stops
+  the query at the unbalanced `)` and links only `…q=(business)`, GFM keeps
+  `))+ok` inside the link; `www.google.com/search?q=commonmark&hl;` — `&hl;` is
+  entity-shaped, so MD4X resolves an entity mark there and the whole autolink is
+  dropped, GFM trims the entity and links the rest;
+  `www.commonmark.org/he<lp` — `<` is not in MD4X's allowed trailing set, so again
+  the whole autolink is dropped, where GFM truncates at `<` and links the prefix.
+  The last two are the sharper gap: MD4X produces *no* link at all, not a shorter
+  one.
+- **652** (Disallowed Raw HTML) — GFM's `tagfilter` extension escapes `<title>`,
+  `<textarea>`, `<style>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`,
+  `<script>` and `<plaintext>` in raw HTML. MD4X does not implement `tagfilter`
+  (neither does md4c) and passes them through. Feature absent, not a parse bug.
+
+## Tables (extension)
+
+Upstream example 198.
+
+```````````````````````````````` example
+| foo | bar |
+| --- | --- |
+| baz | bim |
+.
+<table>
+<thead>
+<tr>
+<th>foo</th>
+<th>bar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>baz</td>
+<td>bim</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Upstream example 199.
+
+```````````````````````````````` example
+| abc | defghi |
+:-: | -----------:
+bar | baz
+.
+<table>
+<thead>
+<tr>
+<th align="center">abc</th>
+<th align="right">defghi</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td align="center">bar</td>
+<td align="right">baz</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Upstream example 201.
+
+```````````````````````````````` example
+| abc | def |
+| --- | --- |
+| bar | baz |
+> bar
+.
+<table>
+<thead>
+<tr>
+<th>abc</th>
+<th>def</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bar</td>
+<td>baz</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>bar</p>
+</blockquote>
+````````````````````````````````
+
+Upstream example 202.
+
+```````````````````````````````` example
+| abc | def |
+| --- | --- |
+| bar | baz |
+bar
+
+bar
+.
+<table>
+<thead>
+<tr>
+<th>abc</th>
+<th>def</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bar</td>
+<td>baz</td>
+</tr>
+<tr>
+<td>bar</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>bar</p>
+````````````````````````````````
+
+Upstream example 204.
+
+```````````````````````````````` example
+| abc | def |
+| --- | --- |
+| bar |
+| bar | baz | boo |
+.
+<table>
+<thead>
+<tr>
+<th>abc</th>
+<th>def</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bar</td>
+<td></td>
+</tr>
+<tr>
+<td>bar</td>
+<td>baz</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Upstream example 205.
+
+```````````````````````````````` example
+| abc | def |
+| --- | --- |
+.
+<table>
+<thead>
+<tr>
+<th>abc</th>
+<th>def</th>
+</tr>
+</thead>
+</table>
+````````````````````````````````
+
+## Task list items (extension)
+
+Upstream example 279, expected output adjusted for the MD4X renderer (see
+"Adjustments" above).
+
+```````````````````````````````` example
+- [ ] foo
+- [x] bar
+.
+<ul>
+<li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled>foo</li>
+<li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled checked>bar</li>
+</ul>
+````````````````````````````````
+
+Upstream example 280, expected output adjusted for the MD4X renderer.
+
+```````````````````````````````` example
+- [x] foo
+  - [ ] bar
+  - [x] baz
+- [ ] bim
+.
+<ul>
+<li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled checked>foo<ul>
+<li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled>bar</li>
+<li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled checked>baz</li>
+</ul>
+</li>
+<li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled>bim</li>
+</ul>
+````````````````````````````````
+
+## Strikethrough (extension)
+
+Upstream example 491.
+
+```````````````````````````````` example
+~~Hi~~ Hello, world!
+.
+<p><del>Hi</del> Hello, world!</p>
+````````````````````````````````
+
+Upstream example 492.
+
+```````````````````````````````` example
+This ~~has a
+
+new paragraph~~.
+.
+<p>This ~~has a</p>
+<p>new paragraph~~.</p>
+````````````````````````````````
+
+## Autolinks (extension)
+
+Upstream example 621.
+
+```````````````````````````````` example
+www.commonmark.org
+.
+<p><a href="http://www.commonmark.org">www.commonmark.org</a></p>
+````````````````````````````````
+
+Upstream example 622.
+
+```````````````````````````````` example
+Visit www.commonmark.org/help for more information.
+.
+<p>Visit <a href="http://www.commonmark.org/help">www.commonmark.org/help</a> for more information.</p>
+````````````````````````````````
+
+Upstream example 624.
+
+```````````````````````````````` example
+www.google.com/search?q=Markup+(business)
+
+www.google.com/search?q=Markup+(business)))
+
+(www.google.com/search?q=Markup+(business))
+
+(www.google.com/search?q=Markup+(business)
+.
+<p><a href="http://www.google.com/search?q=Markup+(business)">www.google.com/search?q=Markup+(business)</a></p>
+<p><a href="http://www.google.com/search?q=Markup+(business)">www.google.com/search?q=Markup+(business)</a>))</p>
+<p>(<a href="http://www.google.com/search?q=Markup+(business)">www.google.com/search?q=Markup+(business)</a>)</p>
+<p>(<a href="http://www.google.com/search?q=Markup+(business)">www.google.com/search?q=Markup+(business)</a></p>
+````````````````````````````````
+
+Upstream example 628. This example also appears verbatim in
+`test/spec-permissive-autolinks.txt`; the duplication is upstream's original and
+confirms the hand-written copy.
+
+```````````````````````````````` example
+http://commonmark.org
+
+(Visit https://encrypted.google.com/search?q=Markup+(business))
+
+Anonymous FTP is available at ftp://foo.bar.baz.
+.
+<p><a href="http://commonmark.org">http://commonmark.org</a></p>
+<p>(Visit <a href="https://encrypted.google.com/search?q=Markup+(business)">https://encrypted.google.com/search?q=Markup+(business)</a>)</p>
+<p>Anonymous FTP is available at <a href="ftp://foo.bar.baz">ftp://foo.bar.baz</a>.</p>
+````````````````````````````````
+
+Upstream example 629.
+
+```````````````````````````````` example
+foo@bar.baz
+.
+<p><a href="mailto:foo@bar.baz">foo@bar.baz</a></p>
+````````````````````````````````
+
+Upstream example 630.
+
+```````````````````````````````` example
+hello@mail+xyz.example isn't valid, but hello+xyz@mail.example is.
+.
+<p>hello@mail+xyz.example isn't valid, but <a href="mailto:hello+xyz@mail.example">hello+xyz@mail.example</a> is.</p>
+````````````````````````````````
+
+Upstream example 631.
+
+```````````````````````````````` example
+a.b-c_d@a.b
+
+a.b-c_d@a.b.
+
+a.b-c_d@a.b-
+
+a.b-c_d@a.b_
+.
+<p><a href="mailto:a.b-c_d@a.b">a.b-c_d@a.b</a></p>
+<p><a href="mailto:a.b-c_d@a.b">a.b-c_d@a.b</a>.</p>
+<p>a.b-c_d@a.b-</p>
+<p>a.b-c_d@a.b_</p>
+````````````````````````````````

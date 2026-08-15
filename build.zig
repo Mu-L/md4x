@@ -35,6 +35,9 @@ const PkgBuildOptions = struct {
     /// creating it twice puts src/abi.zig in two modules, which Zig rejects
     /// ("file exists in modules 'abi' and 'abi0'").
     abi: *std.Build.Module,
+    /// Shared "build_config" module (comptime feature switches). Same
+    /// one-instance rule as `abi`.
+    build_config: *std.Build.Module,
 };
 
 pub fn build(b: *std.Build) void {
@@ -60,6 +63,26 @@ pub fn build(b: *std.Build) void {
     // second instance would put src/abi.zig in two modules, which Zig rejects).
     const abi_mod = b.createModule(.{ .root_source_file = b.path("src/abi.zig") });
 
+    // --- Comptime feature switches ("build_config" module) ---
+    //
+    // Emoji shortcodes (`:wave:` -> the emoji's UTF-8 bytes) need a generated
+    // 1913-entry table (src/emoji.zig). This is deliberately a COMPTIME switch
+    // and not a parser flag: a runtime flag would still link the table in, and
+    // the table is the entire cost. With `-Demoji=false` src/emoji.zig is never
+    // referenced, so nothing of it reaches the artifact.
+    //
+    // Default OFF — the table costs ~26 KB gzipped on the standalone bundle
+    // (~24% of it), which is too much to charge every consumer for a feature
+    // most documents never use. No shipped artifact carries it and the test
+    // suite pins the default (shortcodes reach the output verbatim); the
+    // `-Demoji=true` path is supported but not exercised by CI.
+    //
+    // Like `abi`, ONE module instance is shared by every artifact.
+    const emoji_enabled = b.option(bool, "emoji", "Emoji shortcode support (`:wave:` -> the emoji); off by default — -Demoji=true links the 1913-entry table into the artifact") orelse false;
+    const build_config = b.addOptions();
+    build_config.addOption(bool, "emoji", emoji_enabled);
+    const build_config_mod = build_config.createModule();
+
     // --- CLI executable ---
 
     const exe = b.addExecutable(.{
@@ -77,7 +100,7 @@ pub fn build(b: *std.Build) void {
     // The CLI root lives in src/cli/, so it cannot `@import("../lib.zig")` (a
     // module may not reach outside its own directory). The other artifacts'
     // roots are in src/ and import it relatively. Same module graph either way.
-    exe.root_module.addImport("md4x", md4xLibModule(b, target, optimize, strip, include_paths, abi_mod));
+    exe.root_module.addImport("md4x", md4xLibModule(b, target, optimize, strip, include_paths, abi_mod, build_config_mod));
     const cli_options = b.addOptions();
     cli_options.addOption([]const u8, "version", zon.version);
     exe.root_module.addOptions("build_options", cli_options);
@@ -108,13 +131,14 @@ pub fn build(b: *std.Build) void {
     });
     for (include_paths) |p| unit_tests.root_module.addIncludePath(p);
     unit_tests.root_module.addImport("abi", abi_mod);
+    unit_tests.root_module.addImport("build_config", build_config_mod);
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run parser unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
     // --- Fuzzer target (Zig-native, coverage-instrumented) ---
 
-    addZigFuzzer(b, target, include_paths, abi_mod);
+    addZigFuzzer(b, target, include_paths, abi_mod, build_config_mod);
 
     // --- YAML port: differential harness against the vendored C libyaml ---
 
@@ -128,6 +152,7 @@ pub fn build(b: *std.Build) void {
         .strip = pkg_optimize != .Debug,
         .include_paths = include_paths,
         .abi = abi_mod,
+        .build_config = build_config_mod,
     };
     _ = addWasm(b, pkg_opts, .{
         .step_name = "wasm",
@@ -160,7 +185,7 @@ pub fn build(b: *std.Build) void {
 /// The library root (src/lib.zig) as a named module: parser + entity table +
 /// every renderer, in one module graph, calling each other by direct Zig call.
 /// Only the CLI needs this form; see the comment at its call site.
-fn md4xLibModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, strip: bool, include_paths: []const std.Build.LazyPath, abi: *std.Build.Module) *std.Build.Module {
+fn md4xLibModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, strip: bool, include_paths: []const std.Build.LazyPath, abi: *std.Build.Module, build_config: *std.Build.Module) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
@@ -170,6 +195,7 @@ fn md4xLibModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .single_threaded = true,
     });
     mod.addImport("abi", abi);
+    mod.addImport("build_config", build_config);
     for (include_paths) |p| mod.addIncludePath(p);
     return mod;
 }
@@ -215,6 +241,7 @@ fn addWasm(b: *std.Build, opts: PkgBuildOptions, variant: WasmVariant) *std.Buil
     });
     md4x_wasm.rdynamic = true;
     md4x_wasm.root_module.addImport("abi", opts.abi);
+    md4x_wasm.root_module.addImport("build_config", opts.build_config);
     for (opts.include_paths) |p| md4x_wasm.root_module.addIncludePath(p);
     md4x_wasm.root_module.export_symbol_names = &.{
         "md4x_alloc",
@@ -291,6 +318,7 @@ fn addNapi(b: *std.Build, opts: PkgBuildOptions) *std.Build.Step {
             }),
         });
         napi_lib.root_module.addImport("abi", opts.abi);
+        napi_lib.root_module.addImport("build_config", opts.build_config);
         for (opts.include_paths) |p| napi_lib.root_module.addIncludePath(p);
         // node_api.h lives outside the project tree (node_modules). Resolve to an
         // absolute path so the root Zig module's @cImport translate-c step finds
@@ -397,7 +425,7 @@ fn addYamlParity(
 /// overflow, unreachable, bad casts) are always armed during fuzzing; without
 /// them a miscompiled UB would pass silently. libyaml (C) is linked for the
 /// html/ast/meta paths but is not instrumented.
-fn addZigFuzzer(b: *std.Build, target: std.Build.ResolvedTarget, include_paths: []const std.Build.LazyPath, abi: *std.Build.Module) void {
+fn addZigFuzzer(b: *std.Build, target: std.Build.ResolvedTarget, include_paths: []const std.Build.LazyPath, abi: *std.Build.Module, build_config: *std.Build.Module) void {
     const fuzz_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/fuzz.zig"),
@@ -409,6 +437,7 @@ fn addZigFuzzer(b: *std.Build, target: std.Build.ResolvedTarget, include_paths: 
     });
     for (include_paths) |p| fuzz_tests.root_module.addIncludePath(p);
     fuzz_tests.root_module.addImport("abi", abi);
+    fuzz_tests.root_module.addImport("build_config", build_config);
     const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
     const fuzz_zig_step = b.step("fuzz-zig", "Run the Zig-native fuzz harness (add --fuzz for coverage-guided fuzzing)");
     fuzz_zig_step.dependOn(&run_fuzz_tests.step);

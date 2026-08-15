@@ -49,7 +49,111 @@ pub const MD_PARSED_PROPS = struct {
     class_len: c.MD_SIZE = 0,
     id: ?[*]const u8 = null,
     id_size: c.MD_SIZE = 0,
+    /// Emission position of `#id` / the merged `.class` among the key-value
+    /// props, so a consumer can reproduce SOURCE order instead of flushing the
+    /// shorthands first and last. `-1` when the shorthand is absent.
+    ///
+    /// The unit is a *slot*: one per key-value prop, plus one for the id and one
+    /// for the merged class, so the three kinds share a single ordering. Both
+    /// record the position of their FIRST occurrence (`#a #b` keeps `a`'s slot
+    /// and `b`'s value; every `.class` merges into the one buffer at the first
+    /// one's slot) — the same "position from first insertion, value from last
+    /// write" rule JS object spread uses.
+    id_slot: c_int = -1,
+    class_slot: c_int = -1,
 };
+
+/// One emittable attribute of a parse result, in source order.
+pub const Slot = union(enum) {
+    /// `#id` shorthand — emitted under the attribute name `id`.
+    id: []const u8,
+    /// Merged `.class` shorthands — emitted under the attribute name `class`.
+    class: []const u8,
+    /// A key-value, boolean or bind prop.
+    prop: *const MD_PROP,
+};
+
+/// Whether a parse result carries an explicit `id`, written either as the
+/// `#id` shorthand or as an ordinary `id="..."` key-value prop. Both emit under
+/// the attribute name `id`, so a caller that would otherwise supply one of its
+/// own (a heading's generated slug) must treat them alike — emitting both puts
+/// two `id` attributes on one tag and a duplicate key in the AST.
+pub fn parsedHasId(parsed: *const MD_PARSED_PROPS) bool {
+    if (parsed.id != null and parsed.id_size > 0) return true;
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(parsed.n_props))) : (i += 1) {
+        const p = &parsed.props[i];
+        if (p.key_size == 2 and std.mem.eql(u8, p.key[0..2], "id")) return true;
+    }
+    return false;
+}
+
+/// Walk a parse result in **source order**. `md_parse_props` accumulates the
+/// `#id` and the `.class` run out of band (last-wins / merged), and emitting
+/// them around the prop list reordered the attributes: `{#status .badge
+/// data-state="x"}` came out as id, data-state, class. The JSON key order is
+/// observable to AST consumers, so both renderers iterate slots instead.
+pub const SlotIterator = struct {
+    parsed: *const MD_PARSED_PROPS,
+    slot: c_int = 0,
+    next_prop: c_int = 0,
+
+    pub fn next(self: *SlotIterator) ?Slot {
+        const p = self.parsed;
+        const total = p.n_props +
+            @as(c_int, @intFromBool(p.id_slot >= 0)) +
+            @as(c_int, @intFromBool(p.class_slot >= 0));
+        while (self.slot < total) {
+            const s = self.slot;
+            self.slot += 1;
+            if (s == p.id_slot)
+                return .{ .id = p.id.?[0..p.id_size] };
+            if (s == p.class_slot)
+                return .{ .class = (&p.class_buf)[0..p.class_len] };
+            if (self.next_prop < p.n_props) {
+                const idx: usize = @intCast(self.next_prop);
+                self.next_prop += 1;
+                return .{ .prop = &p.props[idx] };
+            }
+        }
+        return null;
+    }
+};
+
+pub fn slots(parsed: *const MD_PARSED_PROPS) SlotIterator {
+    return .{ .parsed = parsed };
+}
+
+/// The attribute name a slot emits under. Note a `.bind` prop's key already has
+/// its leading `:` stripped by the parse, which is the name the HTML renderer
+/// emits; the AST renderer re-adds the `:` itself.
+pub fn slotKey(s: Slot) []const u8 {
+    return switch (s) {
+        .id => "id",
+        .class => "class",
+        .prop => |p| p.key[0..p.key_size],
+    };
+}
+
+/// True when the prop string defines `key` — used to decide which component
+/// frontmatter (YAML) keys an inline `{...}` shadows. Inline attributes take
+/// precedence over YAML block props (`.agents/comark/components.md:182`).
+pub fn propsHaveKey(parsed: *const MD_PARSED_PROPS, key: []const u8) bool {
+    var it = slots(parsed);
+    while (it.next()) |s| {
+        if (std.mem.eql(u8, slotKey(s), key)) return true;
+    }
+    return false;
+}
+
+// The slot the next attribute to be recorded would occupy: one per key-value
+// prop pushed so far, plus one each for an already-seen `#id` / `.class`.
+// Derived rather than tracked, so the three prop-push sites need no bookkeeping.
+fn next_slot(out: *const MD_PARSED_PROPS) c_int {
+    return out.n_props +
+        @as(c_int, @intFromBool(out.id_slot >= 0)) +
+        @as(c_int, @intFromBool(out.class_slot >= 0));
+}
 
 // Parse a raw component property string (`key="value" bool #id .class :bind='json'`)
 // into the structured MD_PARSED_PROPS form. All key/value pointers are zero-copy
@@ -83,6 +187,8 @@ pub fn md_parse_props(raw: ?[*]const u8, size: c.MD_SIZE, out: *MD_PARSED_PROPS)
     out.class_len = 0;
     out.id = null;
     out.id_size = 0;
+    out.id_slot = -1;
+    out.class_slot = -1;
 
     if (raw == null or size == 0)
         return;
@@ -103,6 +209,8 @@ pub fn md_parse_props(raw: ?[*]const u8, size: c.MD_SIZE, out: *MD_PARSED_PROPS)
             while (i < size and r[i] != ' ' and r[i] != '\t' and r[i] != '}')
                 i += 1;
             if (i > start) {
+                // Last wins for the value, first wins for the position.
+                if (out.id_slot < 0) out.id_slot = next_slot(out);
                 out.id = r + start;
                 out.id_size = i - start;
             }
@@ -119,6 +227,10 @@ pub fn md_parse_props(raw: ?[*]const u8, size: c.MD_SIZE, out: *MD_PARSED_PROPS)
                     out.class_len += 1;
                 }
                 if (out.class_len + len < MD_CLASS_BUF_SIZE) {
+                    // The slot is claimed only once bytes are actually in the
+                    // buffer, so a `.class` that did not fit cannot leave an
+                    // empty `class=""` slot behind.
+                    if (out.class_slot < 0) out.class_slot = next_slot(out);
                     @memcpy(out.class_buf[out.class_len .. out.class_len + len], (r + start)[0..len]);
                     out.class_len += len;
                 }

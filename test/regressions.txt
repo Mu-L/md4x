@@ -589,7 +589,7 @@ x
 </tr>
 </tbody>
 </table>
-<p><x-wikilink data-target=" "> </x-wikilink><x-wikilink data-target="![|]()"><img src="" alt="|"></x-wikilink></p>
+<p>[[ ]][[<img src="" alt="|">]]</p>
 ````````````````````````````````
 
 
@@ -2011,29 +2011,29 @@ percent-encoded into its `src`, and the remainder stays literal (md4c
 ````````````````````````````````
 
 
-## Footnote reference inside a wiki-link destination
+## Footnote reference swallowed by a link destination
 
-The `[^` opener is swallowed by the wiki-link destination; its `]` closer lives
+The `[^` opener is swallowed by the `(...)` destination; its `]` closer lives
 *outside* the disabled range and has to be killed along with it, or the emission
 pass meets a resolved closer whose opener is a dummy (md4c `326fe25`, #348).
+The original reproducer used a wiki-link destination, which md4x no longer has.
 
 ```````````````````````````````` example
-[[[^|]]]
-[^|]:
+[x]([^a) b]
+
+[^a]: N.
 .
-<p><x-wikilink data-target="[^">]</x-wikilink>
-[^|]:</p>
+<p><a href="%5B%5Ea">x</a> b]</p>
 ````````````````````````````````
 
-A well-formed reference and a well-formed wiki link in the same paragraph are
-both unaffected:
+A well-formed reference in the same paragraph is unaffected:
 
 ```````````````````````````````` example
-x[^1] [[foo|bar]]
+x[^1] [a](/u)
 
 [^1]: Note.
 .
-<p>x<sup><a href="#fn-1" id="fnref-1-1">1</a></sup> <x-wikilink data-target="foo">bar</x-wikilink></p>
+<p>x<sup><a href="#fn-1" id="fnref-1-1">1</a></sup> <a href="/u">a</a></p>
 <section class="footnotes">
 <ol>
 <li id="fn-1">
@@ -2054,24 +2054,6 @@ NUL was silently truncated at it while its own text child rendered in full.
 Attribute values now travel as exact-length slices with the same U+FFFD
 substitution, so the attribute and the text child agree.
 
-A wiki-link target, which is emitted both as a prop and as the link text:
-
-```````````````````````````````` example [no-normalize]
-[[a b]]
-.
-{"nodes":[["p",{},["wikilink",{"target":"a�b"},"a�b"]]],"frontmatter":{},"meta":{"headings":[]}}
-.
---format=json
-````````````````````````````````
-
-The HTML renderer already agreed with itself here; this pins that it still does:
-
-```````````````````````````````` example
-[[a b]]
-.
-<p><x-wikilink data-target="a�b">a�b</x-wikilink></p>
-````````````````````````````````
-
 A link destination and title (angle-bracket form, the only spelling that keeps
 a raw NUL inside the destination):
 
@@ -2081,6 +2063,14 @@ a raw NUL inside the destination):
 {"nodes":[["p",{},["a",{"href":"a�b","title":"x�y"},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
+````````````````````````````````
+
+The HTML renderer already agreed with itself here; this pins that it still does:
+
+```````````````````````````````` example
+[t](<a b> "x y")
+.
+<p><a href="a�b" title="x�y">t</a></p>
 ````````````````````````````````
 
 An image's `src`, `alt` and `title`:
@@ -2326,7 +2316,8 @@ the first tab contributes spaces and the second survives whole:
 		bar
 .
 <ul>
-<li><p>foo</p>
+<li>
+<p>foo</p>
 <pre><code>  bar
 </code></pre>
 </li>

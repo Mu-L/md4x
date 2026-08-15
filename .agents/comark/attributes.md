@@ -1,0 +1,414 @@
+# Attributes
+
+> Add custom classes, IDs, styles, and data attributes to native Markdown elements using the curly brace syntax.
+
+---
+
+title: Attributes
+description: Add custom classes, IDs, styles, and data attributes to native Markdown elements using the curly brace syntax.
+links:
+
+- label: Components
+  icon: i-lucide-component
+  to: /syntax/components
+  color: neutral
+  variant: soft
+- label: Attributes Plugin
+  icon: i-lucide-plug
+  to: /plugins/defaults/attributes
+  color: neutral
+  variant: soft
+  navigation:
+  title: Attributes
+
+---
+
+Comark allows adding custom attributes to native Markdown elements using `{...}` syntax after the element. Parsing is provided by the built-in [`attributes` plugin](/plugins/defaults/attributes) (enabled by default).
+
+## Element Attributes
+
+### Strong/Bold
+
+```mdc
+**bold text**{.highlight #important}
+**bold text**{data-value="custom"}
+**bold text**{bool}
+```
+
+### Italic/Emphasis
+
+```mdc
+*italic text*{.emphasized}
+_italic text_{#custom-id}
+```
+
+### Links
+
+```mdc
+[Link text](url){target="_blank" rel="noopener"}
+[Link text](url){.button .primary}
+[External](https://example.com){target="_blank" .external-link}
+```
+
+### Images
+
+```mdc
+![Alt text](image.png){.responsive width="800" height="600"}
+![Logo](logo.svg){.logo #site-logo}
+```
+
+### Inline Code
+
+```mdc
+`code snippet`{.language-js}
+`variable`{data-type="string"}
+```
+
+### Attribute Types Summary
+
+| Syntax                     | Output                | Description           |
+| -------------------------- | --------------------- | --------------------- |
+| `{bool}`                   | `:bool="true"`        | Boolean attribute     |
+| `{#my-id}`                 | `id="my-id"`          | ID attribute          |
+| `{.my-class}`              | `class="my-class"`    | Class attribute       |
+| `{key="value"}`            | `key="value"`         | Key-value attribute   |
+| `{:data='{"key": "val"}'}` | `data={"key": "val"}` | JSON object attribute |
+
+## Span Attributes
+
+Wrap inline text in a `<span>` element with custom attributes. This is useful for styling specific parts of text or adding metadata without creating custom components.
+
+### Syntax
+
+```mdc
+[text content]{attributes}
+```
+
+The text goes in square brackets `[...]` followed by attributes in curly braces `{...}`.
+
+### Examples
+
+**Class:**
+
+::code-group
+
+```mdc [Syntax]
+This is [highlighted text]{.highlight} in a paragraph.
+```
+
+```html [Output]
+<p>This is <span class="highlight">highlighted text</span> in a paragraph.</p>
+```
+
+::
+
+**Multiple classes:**
+
+::code-group
+
+```mdc [Syntax]
+[Important]{.badge .primary} information here.
+```
+
+```html [Output]
+<p><span class="badge primary">Important</span> information here.</p>
+```
+
+::
+
+**ID:**
+
+::code-group
+
+```mdc [Syntax]
+Reference this [specific text]{#ref-1} later.
+```
+
+```html [Output]
+<p>Reference this <span id="ref-1">specific text</span> later.</p>
+```
+
+::
+
+**Inline styles:**
+
+::code-group
+
+```mdc [Syntax]
+[Blue text]{style="color: blue; font-weight: bold"}
+```
+
+```html [Output]
+<p><span style="color: blue; font-weight: bold">Blue text</span></p>
+```
+
+::
+
+**Data attributes:**
+
+::code-group
+
+```mdc [Syntax]
+[Earth]{data-planet="earth" data-type="terrestrial"}
+```
+
+```html [Output]
+<p><span data-planet="earth" data-type="terrestrial">Earth</span></p>
+```
+
+::
+
+**Combined attributes:**
+
+::code-group
+
+```mdc [Syntax]
+[Status: Active]{#status .badge .success data-state="active"}
+```
+
+```html [Output]
+<p>
+  <span id="status" class="badge success" data-state="active"
+    >Status: Active</span
+  >
+</p>
+```
+
+::
+
+### Common Use Cases
+
+1. **Styling with utility classes:**
+   ```mdc
+   [Warning]{.text-red-500 .font-bold}: System maintenance in progress.
+   ```
+2. **Adding tooltips:**
+   ```mdc
+   Hover over [this text]{title="Additional information"} for more details.
+   ```
+3. **Adding metadata for JavaScript:**
+   ```mdc
+   Click [here]{data-action="open-modal" data-target="login"} to sign in.
+   ```
+4. **Accessibility attributes:**
+   ```mdc
+   [Important]{role="alert" aria-label="Critical notice"} security update available.
+   ```
+
+### Nested Markdown
+
+Span syntax supports nested markdown formatting:
+
+::code-group
+
+```mdc [Syntax]
+[**Bold** and *italic* text]{.highlight}
+```
+
+```html [Output]
+<p>
+  <span class="highlight"><strong>Bold</strong> and <em>italic</em> text</span>
+</p>
+```
+
+::
+
+## Block Attributes
+
+A trailing `{...}` on the last line of a block-level element attaches the attributes to that block. This works on paragraphs, headings, list items (bullet, ordered, and task list), and blockquote paragraphs.
+
+### Paragraph
+
+::code-group
+
+```mdc [Syntax]
+A paragraph {attr="value"}
+```
+
+```html [Output]
+<p attr="value">A paragraph</p>
+```
+
+::
+
+### Headings
+
+`{...}` after a heading attaches to that heading (alongside its auto-generated id when `headingIds` is enabled):
+
+::code-group
+
+```mdc [Syntax]
+# Heading 1 {.intro data-section="hero"}
+
+## Heading 2 {attr="value"}
+```
+
+```html [Output]
+<h1 id="heading-1" class="intro" data-section="hero">Heading 1</h1>
+<h2 id="heading-2" attr="value">Heading 2</h2>
+```
+
+::
+
+### List items
+
+Bullet, ordered, and task-list items all accept trailing attributes:
+
+::code-group
+
+```mdc [Syntax]
+- a list item {attr="value"}
+- another list item {attr2="value2"}
+
+1. List item {attr="value"}
+2. List item {attr2="value2"}
+
+- [ ] Task list item {attr="value"}
+- [x] Task list item {attr2="value2"}
+```
+
+```html [Output]
+<ul>
+  <li attr="value">a list item</li>
+  <li attr2="value2">another list item</li>
+</ul>
+<ol>
+  <li attr="value">List item</li>
+  <li attr2="value2">List item</li>
+</ol>
+<ul class="contains-task-list">
+  <li class="task-list-item" attr="value"><input ... /> Task list item</li>
+  <li class="task-list-item" attr2="value2"><input ... /> Task list item</li>
+</ul>
+```
+
+::
+
+### Blockquote
+
+A single-line blockquote attaches the attributes to the blockquote element:
+
+::code-group
+
+```mdc [Syntax]
+> Blockquote {attr="value"}
+```
+
+```html [Output]
+<blockquote attr="value">Blockquote</blockquote>
+```
+
+::
+
+When a blockquote has multiple paragraphs, each paragraph's trailing `{...}` attaches to that paragraph:
+
+::code-group
+
+```mdc [Syntax]
+> Blockquote paragraph 1 {attr="value"}
+>
+> Blockquote paragraph 2 {attr2="value2"}
+```
+
+```html [Output]
+<blockquote>
+  <p attr="value">Blockquote paragraph 1</p>
+  <p attr2="value2">Blockquote paragraph 2</p>
+</blockquote>
+```
+
+::
+
+### Span vs paragraph
+
+Whether the attributes attach to a span or to the surrounding paragraph depends on whether there is a space between the closing `]` and `{`:
+
+::code-group
+
+```mdc [Syntax]
+A paragraph [span] {attr="value"}
+
+A paragraph [span]{attr="value"}
+```
+
+```html [Output]
+<p attr="value">A paragraph <span>span</span></p>
+<p>A paragraph <span attr="value">span</span></p>
+```
+
+::
+
+### Wrapping a list, table, blockquote, or code block
+
+For attributes that don't have a natural slot in the native syntax (lists, tables, multi-paragraph blockquotes, and fenced code blocks), use the matching `::tag` block component. When a `::ul`, `::ol`, `::table`, `::blockquote`, or `::pre` wraps a single same-tagged child, Comark folds them into one element, and the wrapper's attributes land on the actual list/table/blockquote/pre.
+
+::code-group
+
+````mdc [Syntax]
+::ul{attr="value"}
+- item 1
+- item 2
+::
+
+::ol{attr="value"}
+1. item 1
+2. item 2
+::
+
+::table{attr="value"}
+| col1 | col2 |
+| ---- | ---- |
+| a    | b    |
+::
+
+::blockquote{attr="value"}
+> Paragraph 1
+>
+> Paragraph 2
+::
+
+::pre{attr="value"}
+```ts
+const variable = "value"
+```
+::
+````
+
+```html [Output]
+<ul attr="value">
+  <li>item 1</li>
+  <li>item 2</li>
+</ul>
+<ol attr="value">
+  <li>item 1</li>
+  <li>item 2</li>
+</ol>
+<table attr="value">
+  <thead>
+    <tr>
+      <th>col1</th>
+      <th>col2</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>a</td>
+      <td>b</td>
+    </tr>
+  </tbody>
+</table>
+<blockquote attr="value">
+  <p>Paragraph 1</p>
+  <p>Paragraph 2</p>
+</blockquote>
+<pre
+  language="ts"
+  attr="value"
+><code class="language-ts">const variable = "value"</code></pre>
+```
+
+::
+
+::callout{color="info" icon="i-lucide-info"}
+Block attributes work on the standard Markdown elements above. For larger custom block content, use [Components](/syntax/components) instead.
+::

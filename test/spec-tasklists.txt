@@ -88,6 +88,55 @@ Or in a parent task list:
 </ol>
 ````````````````````````````````
 
+In the JSON/AST output a task item is an ordinary `li` node carrying two extra
+props: `task` is `true` for every item that opened with a checkbox marker, and
+`checked` reports whether that marker was ticked.
+
+```````````````````````````````` example [no-normalize]
+- [x] done
+- [ ] todo
+.
+{"nodes":[["ul",{},["li",{"task":true,"checked":true},"done"],["li",{"task":true,"checked":false},"todo"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+An item with no checkbox marker carries neither prop, so `task` distinguishes a
+task item from a plain one:
+
+```````````````````````````````` example [no-normalize]
+- plain
+.
+{"nodes":[["ul",{},["li",{},"plain"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+The props are the same in an ordered list:
+
+```````````````````````````````` example [no-normalize]
+1. [x] a
+2. [ ] b
+.
+{"nodes":[["ol",{},["li",{"task":true,"checked":true},"a"],["li",{"task":true,"checked":false},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+And a nested task list is a nested `ul` inside the parent `li`:
+
+```````````````````````````````` example [no-normalize]
+- [x] Completed task
+- [ ] Pending task
+- [x] Another completed task
+  - [ ] Nested pending task
+  - [X] Nested completed task
+.
+{"nodes":[["ul",{},["li",{"task":true,"checked":true},"Completed task"],["li",{"task":true,"checked":false},"Pending task"],["li",{"task":true,"checked":true},"Another completed task",["ul",{},["li",{"task":true,"checked":false},"Nested pending task"],["li",{"task":true,"checked":true},"Nested completed task"]]]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
 Also, ordinary lists can be nested in the task lists.
 
 ```````````````````````````````` example

@@ -177,6 +177,113 @@ hello{.class}
 <p><strong highlighted>important</strong></p>
 ````````````````````````````````
 
+## Strong with data attribute
+
+```````````````````````````````` example
+**bold text**{data-value="custom"}
+.
+<p><strong data-value="custom">bold text</strong></p>
+````````````````````````````````
+
+## Underscore emphasis with id attribute
+
+```````````````````````````````` example
+_italic text_{#custom-id}
+.
+<p><em id="custom-id">italic text</em></p>
+````````````````````````````````
+
+## Link with classes only
+
+```````````````````````````````` example
+[Link text](url){.button .primary}
+.
+<p><a href="url" class="button primary">Link text</a></p>
+````````````````````````````````
+
+## Link with a key-value attribute and a class
+
+```````````````````````````````` example
+[External](https://example.com){target="_blank" .external-link}
+.
+<p><a href="https://example.com" target="_blank" class="external-link">External</a></p>
+````````````````````````````````
+
+## Image with class and id
+
+```````````````````````````````` example
+![Logo](logo.svg){.logo #site-logo}
+.
+<p><img src="logo.svg" alt="Logo" id="site-logo" class="logo"></p>
+````````````````````````````````
+
+## Code span with data attribute
+
+```````````````````````````````` example
+`variable`{data-type="string"}
+.
+<p><code data-type="string">variable</code></p>
+````````````````````````````````
+
+## Span with an inline style value
+
+```````````````````````````````` example
+[Blue text]{style="color: blue; font-weight: bold"}
+.
+<p><span style="color: blue; font-weight: bold">Blue text</span></p>
+````````````````````````````````
+
+## Span with multiple data attributes
+
+```````````````````````````````` example
+[Earth]{data-planet="earth" data-type="terrestrial"}
+.
+<p><span data-planet="earth" data-type="terrestrial">Earth</span></p>
+````````````````````````````````
+
+## Span with a title attribute mid-sentence
+
+```````````````````````````````` example
+Hover over [this text]{title="Additional information"} for more details.
+.
+<p>Hover over <span title="Additional information">this text</span> for more details.</p>
+````````````````````````````````
+
+## Span with role and aria attributes
+
+```````````````````````````````` example
+[Important]{role="alert" aria-label="Critical notice"} security update available.
+.
+<p><span role="alert" aria-label="Critical notice">Important</span> security update available.</p>
+````````````````````````````````
+
+# Attribute Ordering
+
+Attributes are documented to come out in source order. md4x accumulates the
+`.class` shorthands and flushes the merged `class` last, so any key-value
+attribute declared *after* a class is currently emitted *before* it. The HTML
+difference is cosmetic, but the JSON key order is observable to AST consumers.
+Both examples below are pinned to source order and require `[no-normalize]`,
+because the test-suite normalizer sorts HTML attributes.
+
+## Combined attributes keep source order
+
+```````````````````````````````` example [no-normalize]
+[Status: Active]{#status .badge .success data-state="active"}
+.
+<p><span id="status" class="badge success" data-state="active">Status: Active</span></p>
+````````````````````````````````
+
+## Combined attributes keep source order in the AST
+
+```````````````````````````````` example [no-normalize]
+[Status: Active]{#status .badge .success data-state="active"}
+.
+{"nodes":[["p",{},["span",{"id":"status","class":"badge success","data-state":"active"},"Status: Active"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
 # Bind Attributes in JSON Output
 
 The `:key='value'` bind value is emitted as a JSON-escaped string, never spliced
@@ -254,6 +361,26 @@ inject sibling keys into the props object.
 --format=json
 ````````````````````````````````
 
+## Boolean attribute becomes a bind prop with the string "true"
+
+```````````````````````````````` example [no-normalize]
+**b**{bool}
+.
+{"nodes":[["p",{},["strong",{":bool":"true"},"b"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## JSON object bind value keeps its braces and quotes
+
+```````````````````````````````` example [no-normalize]
+[t]{:data='{"key": "val"}'}
+.
+{"nodes":[["p",{},["span",{":data":"{\"key\": \"val\"}"},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
 # Zero-Prop `{attrs}` in JSON Output
 
 `{ }`, `{=}`, `{.}` and `{#}` parse to no props at all. The trailing-`{attrs}`
@@ -296,6 +423,414 @@ wrote props of its own.
 ![a](p "ti"){.}
 .
 {"nodes":[["p",{},["img",{"src":"p","alt":"a","title":"ti"}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+# Block Attributes
+
+A trailing `{...}` on the last line of a block-level element attaches the
+attributes to that block: paragraphs, headings, list items (bullet, ordered and
+task list) and blockquote paragraphs.
+
+## Block attributes on a paragraph
+
+```````````````````````````````` example
+A paragraph {attr="value"}
+.
+<p attr="value">A paragraph</p>
+````````````````````````````````
+
+## Block attributes on headings
+
+```````````````````````````````` example
+# Heading 1 {.intro data-section="hero"}
+
+## Heading 2 {attr="value"}
+.
+<h1 class="intro" data-section="hero">Heading 1</h1>
+<h2 attr="value">Heading 2</h2>
+````````````````````````````````
+
+Under `--heading-ids` the generated id is emitted first, then the trailing
+attributes; the JSON example below pins the same id in the AST and in
+`meta.headings`.
+
+```````````````````````````````` example
+# Heading 1 {.intro data-section="hero"}
+
+## Heading 2 {attr="value"}
+.
+<h1 id="heading-1" class="intro" data-section="hero">Heading 1</h1>
+<h2 id="heading-2" attr="value">Heading 2</h2>
+.
+--heading-ids
+````````````````````````````````
+
+## Block attributes on headings do not leak into the slug or meta.headings
+
+```````````````````````````````` example [no-normalize]
+# Heading 1 {.intro data-section="hero"}
+
+## Heading 2 {attr="value"}
+.
+{"nodes":[["h1",{"id":"heading-1","class":"intro","data-section":"hero"},"Heading 1"],["h2",{"id":"heading-2","attr":"value"},"Heading 2"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Heading 1","id":"heading-1"},{"level":2,"text":"Heading 2","id":"heading-2"}]}}
+.
+--format=json
+````````````````````````````````
+
+## An explicit id in the attributes replaces the generated slug
+
+Both must not be emitted: two `id` attributes on one tag is invalid HTML, and a
+duplicate `id` key in the AST is undefined per RFC 8259. `meta.headings` carries
+the explicit value so a table of contents links to the anchor that exists.
+
+```````````````````````````````` example
+# Hello World {#custom-id}
+
+# Auto Slug
+.
+<h1 id="custom-id">Hello World</h1>
+<h1 id="auto-slug">Auto Slug</h1>
+.
+--heading-ids
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+# Hello World {#custom-id}
+.
+{"nodes":[["h1",{"id":"custom-id"},"Hello World"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Hello World","id":"custom-id"}]}}
+.
+--format=json
+````````````````````````````````
+
+The `id="..."` key-value spelling is the same attribute and must suppress the
+generated slug just as the `#id` shorthand does.
+
+```````````````````````````````` example
+# Hello World {id="custom-id"}
+.
+<h1 id="custom-id">Hello World</h1>
+.
+--heading-ids
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+# Hello World {id="custom-id"}
+.
+{"nodes":[["h1",{"id":"custom-id"},"Hello World"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Hello World","id":"custom-id"}]}}
+.
+--format=json
+````````````````````````````````
+
+## Headings with no sluggable text carry no id
+
+An empty slug is published by no renderer, and does not occupy a slot in the
+de-duplicator — otherwise the second empty heading numbers `-1` off an empty
+base and emits an id leading with a dash.
+
+```````````````````````````````` example
+##
+
+#
+
+### ###
+
+# Real
+
+# Real
+.
+<h2></h2>
+<h1></h1>
+<h3></h3>
+<h1 id="real">Real</h1>
+<h1 id="real-1">Real</h1>
+.
+--heading-ids
+````````````````````````````````
+
+```````````````````````````````` example [no-normalize]
+#
+
+# Real
+.
+{"nodes":[["h1",{}],["h1",{"id":"real"},"Real"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"","id":""},{"level":1,"text":"Real","id":"real"}]}}
+.
+--format=json
+````````````````````````````````
+
+## Block attributes on bullet list items
+
+```````````````````````````````` example
+- a list item {attr="value"}
+- another list item {attr2="value2"}
+.
+<ul>
+<li attr="value">a list item</li>
+<li attr2="value2">another list item</li>
+</ul>
+````````````````````````````````
+
+## Block attributes on ordered list items
+
+```````````````````````````````` example
+1. List item {attr="value"}
+2. List item {attr2="value2"}
+.
+<ol>
+<li attr="value">List item</li>
+<li attr2="value2">List item</li>
+</ol>
+````````````````````````````````
+
+## Block attributes on task list items
+
+The trailing attributes merge alongside the task-list props md4x already emits.
+md4x deliberately emits a bare `<ul>` here rather than
+`<ul class="contains-task-list">` (see `test/spec-tasklists.txt`).
+
+```````````````````````````````` example
+- [ ] Task list item {attr="value"}
+- [x] Task list item {attr2="value2"}
+.
+<ul>
+<li class="task-list-item" attr="value"><input type="checkbox" class="task-list-item-checkbox" disabled>Task list item</li>
+<li class="task-list-item" attr2="value2"><input type="checkbox" class="task-list-item-checkbox" disabled checked>Task list item</li>
+</ul>
+````````````````````````````````
+
+## Block attributes merge with task list props in the AST
+
+```````````````````````````````` example [no-normalize]
+- [ ] Task list item {attr="value"}
+- [x] Task list item {attr2="value2"}
+.
+{"nodes":[["ul",{},["li",{"task":true,"checked":false,"attr":"value"},"Task list item"],["li",{"task":true,"checked":true,"attr2":"value2"},"Task list item"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Single-paragraph blockquote attaches attributes to the blockquote
+
+A blockquote holding exactly one paragraph takes the attributes on the
+`<blockquote>` itself, and the `<p>` wrapper is dropped entirely. Compare with
+the multi-paragraph example that follows: the same source shape attaches to a
+different element depending on how many paragraphs the quote holds.
+
+```````````````````````````````` example
+> Blockquote {attr="value"}
+.
+<blockquote attr="value">Blockquote</blockquote>
+````````````````````````````````
+
+## Single-paragraph blockquote attaches attributes to the blockquote in the AST
+
+```````````````````````````````` example [no-normalize]
+> Blockquote {attr="value"}
+.
+{"nodes":[["blockquote",{"attr":"value"},"Blockquote"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Multi-paragraph blockquote attaches attributes to each paragraph
+
+The blockquote itself gets nothing here.
+
+```````````````````````````````` example
+> Blockquote paragraph 1 {attr="value"}
+>
+> Blockquote paragraph 2 {attr2="value2"}
+.
+<blockquote>
+<p attr="value">Blockquote paragraph 1</p>
+<p attr2="value2">Blockquote paragraph 2</p>
+</blockquote>
+````````````````````````````````
+
+## Multi-paragraph blockquote attaches attributes to each paragraph in the AST
+
+```````````````````````````````` example [no-normalize]
+> Blockquote paragraph 1 {attr="value"}
+>
+> Blockquote paragraph 2 {attr2="value2"}
+.
+{"nodes":[["blockquote",{},["p",{"attr":"value"},"Blockquote paragraph 1"],["p",{"attr2":"value2"},"Blockquote paragraph 2"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## No space before the brace keeps the attributes on the span
+
+A `{...}` run that follows the closing bracket immediately attaches to the
+bracketed span itself rather than to the enclosing block.
+
+```````````````````````````````` example
+A paragraph [span]{attr="value"}
+.
+<p>A paragraph <span attr="value">span</span></p>
+````````````````````````````````
+
+# Wrapper Folding
+
+`::ul`, `::ol`, `::table`, `::blockquote` and `::pre` are the documented way to
+put attributes on a construct that has no natural attribute slot. When such a
+wrapper contains a single same-tagged child, the two fold into one element that
+carries the wrapper's props — not a second, outer element of the same tag.
+
+## ::ul folds into a single list
+
+```````````````````````````````` example
+::ul{attr="value"}
+- item 1
+- item 2
+::
+.
+<ul attr="value">
+<li>item 1</li>
+<li>item 2</li>
+</ul>
+````````````````````````````````
+
+## ::ol folds into a single list
+
+```````````````````````````````` example
+::ol{attr="value"}
+1. item 1
+2. item 2
+::
+.
+<ol attr="value">
+<li>item 1</li>
+<li>item 2</li>
+</ol>
+````````````````````````````````
+
+## ::table folds into a single table
+
+```````````````````````````````` example
+::table{attr="value"}
+| col1 | col2 |
+| ---- | ---- |
+| a    | b    |
+::
+.
+<table attr="value">
+<thead>
+<tr>
+<th>col1</th>
+<th>col2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>a</td>
+<td>b</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+## ::blockquote folds into a single blockquote
+
+```````````````````````````````` example
+::blockquote{attr="value"}
+> Paragraph 1
+>
+> Paragraph 2
+::
+.
+<blockquote attr="value">
+<p>Paragraph 1</p>
+<p>Paragraph 2</p>
+</blockquote>
+````````````````````````````````
+
+## Wrapper folding produces one node per construct in the AST
+
+```````````````````````````````` example [no-normalize]
+::ul{attr="value"}
+- item 1
+- item 2
+::
+
+::ol{attr="value"}
+1. item 1
+2. item 2
+::
+
+::table{attr="value"}
+| col1 | col2 |
+| ---- | ---- |
+| a    | b    |
+::
+
+::blockquote{attr="value"}
+> Paragraph 1
+>
+> Paragraph 2
+::
+.
+{"nodes":[["ul",{"attr":"value"},["li",{},"item 1"],["li",{},"item 2"]],["ol",{"attr":"value"},["li",{},"item 1"],["li",{},"item 2"]],["table",{"attr":"value"},["thead",{},["tr",{},["th",{},"col1"],["th",{},"col2"]]],["tbody",{},["tr",{},["td",{},"a"],["td",{},"b"]]]],["blockquote",{"attr":"value"},["p",{},"Paragraph 1"],["p",{},"Paragraph 2"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Fenced code block keeps the standard HTML shape
+
+This is the plain fenced-block shape, with no wrapper involved. The info string
+surfaces in HTML only as `class="language-ts"` on `<code>`; `<pre>` carries no
+`language` attribute. The language itself is pinned on the AST's `pre` node by
+the next example.
+
+```````````````````````````````` example
+```ts
+const variable = "value"
+```
+.
+<pre><code class="language-ts">const variable = &quot;value&quot;
+</code></pre>
+````````````````````````````````
+
+## Fenced code block carries language on the pre node in the AST
+
+```````````````````````````````` example [no-normalize]
+```ts
+const variable = "value"
+```
+.
+{"nodes":[["pre",{"language":"ts"},["code",{"class":"language-ts"},"const variable = \"value\"\n"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## ::pre folds into a single pre
+
+The wrapper's props land on the one `<pre>` — there is no second, outer `<pre>`.
+The language stays out of the HTML tag (see above) and is asserted on the folded
+`pre` node by the next example.
+
+```````````````````````````````` example
+::pre{attr="value"}
+```ts
+const variable = "value"
+```
+::
+.
+<pre attr="value"><code class="language-ts">const variable = &quot;value&quot;
+</code></pre>
+````````````````````````````````
+
+## ::pre folds into a single pre node in the AST
+
+```````````````````````````````` example [no-normalize]
+::pre{attr="value"}
+```ts
+const variable = "value"
+```
+::
+.
+{"nodes":[["pre",{"language":"ts","attr":"value"},["code",{"class":"language-ts"},"const variable = \"value\"\n"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````

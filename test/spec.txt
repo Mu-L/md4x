@@ -1567,6 +1567,8 @@ Bar
 ---
 Baz
 .
+<hr>
+<h2>Foo</h2>
 <h2>Bar</h2>
 <p>Baz</p>
 ````````````````````````````````
@@ -1590,6 +1592,8 @@ in these examples gets interpreted as a thematic break:
 ---
 ---
 .
+<hr>
+<hr>
 ````````````````````````````````
 
 
@@ -8177,8 +8181,8 @@ backslash-escaped:
 
 [[[foo]]]: /url
 .
-<p>[<x-wikilink data-target="foo">foo</x-wikilink>]</p>
-<p>[<x-wikilink data-target="foo">foo</x-wikilink>]: /url</p>
+<p>[[[foo]]]</p>
+<p>[[[foo]]]: /url</p>
 ````````````````````````````````
 
 
@@ -8314,7 +8318,7 @@ Thus, `[foo]` is equivalent to `[foo][]`.
 
 [*foo* bar]: /url "title"
 .
-<p><x-wikilink data-target="*foo* bar">*foo* bar</x-wikilink></p>
+<p>[<a href="/url" title="title"><em>foo</em> bar</a>]</p>
 ````````````````````````````````
 
 
@@ -8638,7 +8642,7 @@ Note that link labels cannot contain unescaped brackets:
 [[foo]]: /url "title"
 .
 <p>![[foo]]</p>
-<p><x-wikilink data-target="foo">foo</x-wikilink>: /url &quot;title&quot;</p>
+<p>[[foo]]: /url &quot;title&quot;</p>
 ````````````````````````````````
 
 

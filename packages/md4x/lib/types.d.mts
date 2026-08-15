@@ -72,6 +72,17 @@ export interface HtmlOptions extends RenderOptions {
   full?: boolean;
 
   /**
+   * Add an `id="..."` anchor to every heading: a GitHub-compatible slug of the
+   * heading text, de-duplicated within the document, and the same id
+   * {@link ComarkHeading} carries — so a table of contents built from
+   * `parseMeta` links to the headings this output emits. An explicit `{#id}`
+   * on the heading wins over the generated one.
+   *
+   * Default: false, so the output stays CommonMark-exact.
+   */
+  headingIds?: boolean;
+
+  /**
    * Highlighter for fenced code blocks, called during the render — see
    * {@link CodeBlockHighlighter}.
    */

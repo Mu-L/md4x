@@ -17,6 +17,26 @@ install — those were part of the dropped C ABI. The wasm/napi artifacts instal
 
 The project can also be consumed as a Zig package dependency via `build.zig.zon`.
 
+## Comptime feature switches
+
+Feature flags that must fold away at comptime — a runtime flag would still link the payload in —
+go through the shared `build_config` options module (`b.addOptions()` in `build.zig`), created
+**once** and imported by every artifact, same one-instance rule as `abi`.
+
+| Switch         | Default | Effect                                                                       |
+| -------------- | ------- | ---------------------------------------------------------------------------- |
+| `-Demoji=true` | `false` | Links `src/emoji.zig` (1913 shortcodes) in, so `:wave:` renders as the emoji |
+
+Emoji is **off in every shipped artifact**: the table costs ~26 KB gzipped on the standalone bundle
+(~24% of it). With the default the recognizer folds away entirely — `src/emoji.zig` is never
+referenced and a shortcode reaches the output verbatim, which is what `spec-markdown.txt`'s
+`## Emojis` section pins. `-Demoji=true` is supported but **not exercised by CI**; flipping it
+changes rendered output, so `scripts/diff-corpus.sh` is expected to differ across the two.
+
+Reach the switch through the JS artifacts with
+`bun scripts/js-artifacts.ts build -Demoji=true` (anything after `build` is forwarded to each
+`zig build` step).
+
 ## Targets
 
 | Target             | Command                               | Output                                |

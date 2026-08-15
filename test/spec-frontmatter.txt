@@ -26,10 +26,13 @@ Hello, world!
 <p>Hello, world!</p>
 ````````````````````````````````
 
-Empty frontmatter is allowed.
+A body with nothing at all between the fences is not frontmatter -- see the
+`# Empty Frontmatter` section below for exactly where that line falls. A body of
+one space is, and yields an empty frontmatter object.
 
 ```````````````````````````````` example
 ---
+ 
 ---
 .
 ````````````````````````````````
@@ -43,12 +46,13 @@ title: Hello
 .
 ````````````````````````````````
 
-Trailing spaces after dashes are allowed.
+Trailing spaces after the dashes are allowed, on both the opening and the
+closing fence. (Each fence below carries three trailing spaces.)
 
 ```````````````````````````````` example
----
+---   
 title: Hello
----
+---   
 .
 ````````````````````````````````
 
@@ -64,24 +68,26 @@ title: Hello
 <h2>title: Hello</h2>
 ````````````````````````````````
 
-Frontmatter is not recognized without the flag. The `---` lines are parsed
-as thematic breaks instead.
+`MD_FLAG_FRONTMATTER` is set unconditionally by the CLI and there is no
+option to clear it, so this suite cannot observe the flag-off behaviour
+(`---` lines parsed as thematic breaks). An example claiming to cover it
+used to sit here; its input was byte-identical to the flag-on example above
+and its expected output was the flag-on output, so it could only ever pass
+for the wrong reason. It was removed rather than reworded.
 
-```````````````````````````````` example
----
-title: Hello
----
-.
-````````````````````````````````
-
-If the frontmatter is not closed, the rest of the document is consumed as
-frontmatter content.
+If the frontmatter is never closed it is not frontmatter: the opening `---` is
+an ordinary thematic break and the rest of the document is ordinary markdown.
+The `# An Unterminated Opening Fence Is Not Frontmatter` section below covers
+the rule in full.
 
 ```````````````````````````````` example
 ---
 title: Hello
 date: 2024-01-01
 .
+<hr>
+<p>title: Hello
+date: 2024-01-01</p>
 ````````````````````````````````
 
 The closing fence must not have any non-space content after the dashes.
@@ -247,6 +253,701 @@ b: [
 ---
 .
 {"nodes":[],"frontmatter":{"a":null},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+# Fence Whitespace
+
+The opening and closing fences tolerate trailing *spaces*, but a trailing tab
+is not equivalent: it disables the opening fence while still being accepted on
+the closing fence. Both halves of that asymmetry are pinned here so neither can
+drift silently.
+
+## Trailing spaces after the dashes keep the block a frontmatter block
+
+```````````````````````````````` example [no-normalize]
+---   
+title: Hello
+---   
+.
+{"nodes":[],"frontmatter":{"title":"Hello"},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A tab after the opening dashes disables frontmatter
+
+The opening fence scanner accepts only spaces after the dashes, so `---<TAB>`
+is an ordinary thematic break and the YAML below it is read as markdown.
+
+```````````````````````````````` example [no-normalize]
+---→
+title: Hello
+---
+.
+{"nodes":[["hr",{}],["h2",{"id":"title-hello"},"title: Hello"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"title: Hello","id":"title-hello"}]}}
+.
+--format=json
+````````````````````````````````
+
+## A tab after the closing dashes disables frontmatter too
+
+The closing fence scanner accepts only spaces as well, so `---<TAB>` closes
+nothing -- and with no closing fence anywhere the opening `---` is not a
+frontmatter opener either. Both fences therefore treat a tab the same way, and
+the space case above is the only whitespace that keeps the block.
+
+```````````````````````````````` example [no-normalize]
+---
+title: Hello
+---→
+.
+{"nodes":[["hr",{}],["h2",{"id":"title-hello"},"title: Hello"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"title: Hello","id":"title-hello"}]}}
+.
+--format=json
+````````````````````````````````
+
+# Empty Frontmatter
+
+Where an *empty* body stops being frontmatter is a byte, not a line: a block with
+no characters at all between its two fences is two thematic breaks, and one
+character -- even a single space -- makes it a frontmatter block again, with
+`frontmatter` an empty object and nothing contributed to `nodes`. That is where
+Comark draws the line (`comark@0.6.2`, probed case by case), and the first half
+of it is CommonMark example 98 as well.
+
+The blank-line pair below looks arbitrary and is not: `---` / blank / `---` has
+one body line and that line is empty, so there is nothing at all between the
+fences, while `---` / blank / blank / `---` has two, and the newline dividing
+them is itself a character.
+
+## Nothing between the fences is two thematic breaks
+
+```````````````````````````````` example [no-normalize]
+---
+---
+.
+{"nodes":[["hr",{}],["hr",{}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## The same, followed by content
+
+```````````````````````````````` example [no-normalize]
+---
+---
+
+# Hi
+.
+{"nodes":[["hr",{}],["hr",{}],["h1",{"id":"hi"},"Hi"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Hi","id":"hi"}]}}
+.
+--format=json
+````````````````````````````````
+
+## A body of one blank line is also nothing
+
+```````````````````````````````` example [no-normalize]
+---
+
+---
+
+x
+.
+{"nodes":[["hr",{}],["hr",{}],["p",{},"x"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A body of two blank lines is frontmatter
+
+```````````````````````````````` example [no-normalize]
+---
+
+
+---
+
+x
+.
+{"nodes":[["p",{},"x"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A comment-only body is frontmatter
+
+```````````````````````````````` example [no-normalize]
+---
+# only a comment
+---
+
+x
+.
+{"nodes":[["p",{},"x"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Inside a component, an empty props block is consumed either way
+
+The two positions part company here, and both follow Comark: a component's props
+block has no document content to protect, so an empty `---` block between the
+opener and the body is consumed rather than rendered. `spec-components.txt` pins
+the rest of that position.
+
+```````````````````````````````` example
+::card
+---
+---
+Body
+::
+.
+<card>
+<p>Body</p>
+</card>
+````````````````````````````````
+
+# Parse Result
+
+## Frontmatter and nodes are reported side by side
+
+The worked example from the Comark frontmatter page: a well-formed block must
+populate `frontmatter` *and* leave the body in `nodes`. Every other populated
+`frontmatter` object in this file comes from a malformed-YAML repair case with
+an empty `nodes`, so this is the one example pinning the ordinary shape.
+
+```````````````````````````````` example [no-normalize]
+---
+title: My Article
+author: Jane Doe
+---
+
+# Hello World
+.
+{"nodes":[["h1",{"id":"hello-world"},"Hello World"]],"frontmatter":{"title":"My Article","author":"Jane Doe"},"meta":{"headings":[{"level":1,"text":"Hello World","id":"hello-world"}]}}
+.
+--format=json
+````````````````````````````````
+
+## YAML scalar types at the JSON boundary
+
+Integers stay numbers; a YAML timestamp has no JSON counterpart and becomes a
+string. `depth` and `searchDepth` are ordinary keys with no effect on
+`meta.headings` -- all four heading levels below are reported regardless.
+
+```````````````````````````````` example [no-normalize]
+---
+date: 2024-01-15
+depth: 3
+searchDepth: 2
+tags:
+  - markdown
+  - documentation
+custom_field: custom value
+---
+
+# Document Content
+.
+{"nodes":[["h1",{"id":"document-content"},"Document Content"]],"frontmatter":{"date":"2024-01-15","depth":3,"searchDepth":2,"tags":["markdown","documentation"],"custom_field":"custom value"},"meta":{"headings":[{"level":1,"text":"Document Content","id":"document-content"}]}}
+.
+--format=json
+````````````````````````````````
+
+## The frontmatter body is YAML, never markdown
+
+The `#` and `-` and `**` below stay inside YAML scalars: no heading is created
+and `meta.headings` stays empty.
+
+```````````````````````````````` example [no-normalize]
+---
+title: "# Not a heading"
+body: |
+  ## also not
+  - list
+  **bold**
+---
+
+real
+.
+{"nodes":[["p",{},"real"]],"frontmatter":{"title":"# Not a heading","body":"## also not\n- list\n**bold**\n"},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Duplicate YAML keys are emitted twice
+
+The JSON writer streams libyaml's events straight through and does not keep a
+seen-key set, so a duplicate YAML key produces a duplicate JSON key. The output
+is still balanced and `JSON.parse`-able, and last-wins agrees with YAML's own
+resolution -- but a strict JSON consumer may reject it. See the note in the
+JSON-repair section below for why the writer cannot look back.
+
+```````````````````````````````` example [no-normalize]
+---
+a: 1
+a: 2
+---
+x
+.
+{"nodes":[["p",{},"x"]],"frontmatter":{"a":1,"a":2},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+# Data Binding
+
+## Frontmatter dot-paths in bind props pass through verbatim
+
+The parser does not resolve `:prop="frontmatter.path"`. It keeps the `:` prefix
+on the key, carries the path through as a plain string, and exposes the
+frontmatter object beside it; resolution is the renderer's job.
+
+```````````````````````````````` example [no-normalize]
+---
+theAnswer: 42
+user:
+  name: Ada
+---
+
+::question{:answer="frontmatter.theAnswer"}
+::
+
+Hello, :badge{:label="frontmatter.user.name"}
+.
+{"nodes":[["question",{":answer":"frontmatter.theAnswer"}],["p",{},"Hello, ",["badge",{":label":"frontmatter.user.name"}]]],"frontmatter":{"theAnswer":42,"user":{"name":"Ada"}},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+# Frontmatter and the Blocks That Follow It
+
+## Frontmatter immediately followed by a block component
+
+No blank line is needed after the closing fence. The `::alert` line must not be
+swallowed into the YAML, and must not be mistaken for a component props fence.
+
+```````````````````````````````` example [no-normalize]
+---
+a: 1
+---
+::alert{type="info"}
+Hi
+::
+.
+{"nodes":[["alert",{"type":"info"},["p",{},"Hi"]]],"frontmatter":{"a":1},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A setext heading directly after the closing fence
+
+The closing fence is consumed by the frontmatter, so `Subtitle` / `---` is an
+ordinary setext h2 rather than a second fence.
+
+```````````````````````````````` example [no-normalize]
+---
+title: Hello
+---
+Subtitle
+---
+.
+{"nodes":[["h2",{"id":"subtitle"},"Subtitle"]],"frontmatter":{"title":"Hello"},"meta":{"headings":[{"level":2,"text":"Subtitle","id":"subtitle"}]}}
+.
+--format=json
+````````````````````````````````
+
+## A second `---` block after the closing fence is plain markdown
+
+There is exactly one frontmatter block per document; the parser never re-enters
+the frontmatter state.
+
+```````````````````````````````` example [no-normalize]
+---
+a: 1
+---
+---
+b: 2
+---
+
+x
+.
+{"nodes":[["hr",{}],["h2",{"id":"b-2"},"b: 2"],["p",{},"x"]],"frontmatter":{"a":1},"meta":{"headings":[{"level":2,"text":"b: 2","id":"b-2"}]}}
+.
+--format=json
+````````````````````````````````
+
+# Line Endings and Byte-Order Marks
+
+Frontmatter opts out of the parser's tab-preservation path, so its line
+normalization is bespoke; these examples pin that `\r` never survives into a
+YAML scalar and that a BOM does not push the opening fence off line 1. The
+inputs below contain literal CR bytes and a literal U+FEFF -- do not "clean up"
+this section's whitespace.
+
+## CRLF line endings
+
+```````````````````````````````` example [no-normalize]
+---
+title: Hello
+count: 42
+---
+
+# Hi
+.
+{"nodes":[["h1",{"id":"hi"},"Hi"]],"frontmatter":{"title":"Hello","count":42},"meta":{"headings":[{"level":1,"text":"Hi","id":"hi"}]}}
+.
+--format=json
+````````````````````````````````
+
+## Lone CR line endings
+
+```````````````````````````````` example [no-normalize]
+---
+title: Hello
+---
+# Hi
+.
+{"nodes":[["h1",{"id":"hi"},"Hi"]],"frontmatter":{"title":"Hello"},"meta":{"headings":[{"level":1,"text":"Hi","id":"hi"}]}}
+.
+--format=json
+````````````````````````````````
+
+## A UTF-8 BOM before the opening fence
+
+A BOM must not count as leading content: were it to disable frontmatter, the
+unterminated-fence rule below would then eat the rest of the file.
+
+```````````````````````````````` example [no-normalize]
+﻿---
+title: Hello
+---
+
+# Hi
+.
+{"nodes":[["h1",{"id":"hi"},"Hi"]],"frontmatter":{"title":"Hello"},"meta":{"headings":[{"level":1,"text":"Hi","id":"hi"}]}}
+.
+--format=json
+````````````````````````````````
+
+# Frontmatter in the Other Renderers
+
+## Document frontmatter never reaches ANSI output
+
+```````````````````````````````` example [no-normalize]
+---
+title: My Article
+author: Jane Doe
+---
+
+body text
+.
+body text
+.
+--format=ansi
+````````````````````````````````
+
+## Full-HTML `<head>` escapes frontmatter values
+
+`title` and `description` are the only place a frontmatter value is written
+into markup, so neither may break out of its tag or attribute.
+
+```````````````````````````````` example [no-normalize]
+---
+title: "a\"><script>x</script>"
+description: "d\"><b>"
+---
+
+# C
+.
+<!DOCTYPE html>
+<html>
+<head>
+<title>a&quot;&gt;&lt;script&gt;x&lt;/script&gt;</title>
+<meta name="generator" content="md4x">
+<meta charset="UTF-8">
+<meta name="description" content="d&quot;&gt;&lt;b&gt;">
+</head>
+<body>
+<h1>C</h1>
+</body>
+</html>
+.
+--full-html
+````````````````````````````````
+
+## A non-scalar `title` degrades to an empty `<title>` -- mapping
+
+No YAML fragment may leak into `<head>`. `--format=json` still reports the
+mapping faithfully.
+
+```````````````````````````````` example [no-normalize]
+---
+title:
+  a: 1
+---
+
+# C
+.
+<!DOCTYPE html>
+<html>
+<head>
+<title></title>
+<meta name="generator" content="md4x">
+<meta charset="UTF-8">
+</head>
+<body>
+<h1>C</h1>
+</body>
+</html>
+.
+--full-html
+````````````````````````````````
+
+## A non-scalar `title` degrades to an empty `<title>` -- sequence
+
+```````````````````````````````` example [no-normalize]
+---
+title:
+  - x
+  - y
+---
+
+# C
+.
+<!DOCTYPE html>
+<html>
+<head>
+<title></title>
+<meta name="generator" content="md4x">
+<meta charset="UTF-8">
+</head>
+<body>
+<h1>C</h1>
+</body>
+</html>
+.
+--full-html
+````````````````````````````````
+
+## The same mapping `title` is still reported in full by the JSON renderer
+
+```````````````````````````````` example [no-normalize]
+---
+title:
+  a: 1
+---
+
+# C
+.
+{"nodes":[["h1",{"id":"c"},"C"]],"frontmatter":{"title":{"a":1}},"meta":{"headings":[{"level":1,"text":"C","id":"c"}]}}
+.
+--format=json
+````````````````````````````````
+
+# An Opening Fence Only Opens Frontmatter When YAML Follows It
+
+Frontmatter is *enclosed* by `---` delimiters (Comark `frontmatter.md`) and
+carries a YAML mapping, so an opening fence fails to open a frontmatter block on
+two counts: when no closing fence follows it anywhere, and when the body between
+the fences reads as markdown rather than as YAML. Either way the `---` is an
+ordinary thematic break and everything after it is ordinary markdown, exactly as
+the `***` and `___` spellings behave. Whether a document survives therefore no
+longer depends on which of the three synonymous thematic break spellings its
+author happened to type.
+
+The classifier settles both at the opening fence, looking ahead once for a
+closing fence and once at the first line of the body. The body test skips blank
+lines and `#` comments and then requires a mapping key -- `key:` followed by a
+space or the line end. An *empty* body (nothing but blanks and comments before
+the closing fence) still opens frontmatter: it has no content to lose, and
+Comark resolves it to an empty object rather than to markdown. See the `# Empty
+Frontmatter` section above, and `spec-comark.txt`.
+
+The two controls at the end of this section (`***` and `___`) are kept: they are
+what makes the equivalence visible in one place.
+
+## A body that is a bare paragraph is not frontmatter
+
+"Hello world" used to be discarded here: the second `---` is a closing fence, so
+the block was read as frontmatter and only the text below it survived. A
+paragraph is not a YAML mapping, so the block is now a thematic break and the
+document is preserved in full.
+
+```````````````````````````````` example [no-normalize]
+---
+
+Hello world
+
+---
+
+Bye
+.
+{"nodes":[["hr",{}],["p",{},"Hello world"],["hr",{}],["p",{},"Bye"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## The same input in HTML
+
+```````````````````````````````` example
+---
+
+Hello world
+
+---
+
+Bye
+.
+<hr>
+<p>Hello world</p>
+<hr>
+<p>Bye</p>
+````````````````````````````````
+
+## CommonMark example 96: setext headings between thematic breaks
+
+The shape the rule exists for. Before it, the first two lines were eaten as a
+YAML scalar and both the `<hr>` and the `<h2>Foo</h2>` vanished.
+
+```````````````````````````````` example
+---
+Foo
+---
+Bar
+---
+Baz
+.
+<hr>
+<h2>Foo</h2>
+<h2>Bar</h2>
+<p>Baz</p>
+````````````````````````````````
+
+## A top-level sequence is not a mapping either
+
+```````````````````````````````` example [no-normalize]
+---
+- a
+- b
+---
+
+Content
+.
+{"nodes":[["hr",{}],["ul",{},["li",{},"a"],["li",{},"b"]],["hr",{}],["p",{},"Content"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## `key:value` with no space after the colon is a scalar, not a mapping
+
+YAML requires the space; without it the line is the plain scalar `title:Hello`,
+so the block is markdown -- an `<hr>`, then `title:Hello` under a setext `---`.
+
+```````````````````````````````` example [no-normalize]
+---
+title:Hello
+---
+
+Content
+.
+{"nodes":[["hr",{}],["h2",{"id":"titlehello"},"title:Hello"],["p",{},"Content"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"title:Hello","id":"titlehello"}]}}
+.
+--format=json
+````````````````````````````````
+
+## A `#` comment above the first key does not disqualify the block
+
+Comments are skipped when looking for the mapping key, so the ordinary habit of
+annotating frontmatter keeps working.
+
+```````````````````````````````` example [no-normalize]
+---
+# the document title
+title: Hello
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"title":"Hello"},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## A quoted key whose text contains `: ` is still a key
+
+The body test scans the quoted scalar before looking for the colon, so a key
+that embeds the mapping punctuation does not read as a paragraph.
+
+```````````````````````````````` example [no-normalize]
+---
+"a: b": 1
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"a: b":1},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## With no second `---`, nothing is frontmatter and nothing is lost
+
+The document is a thematic break followed by two paragraphs. This is the shape
+the rule exists for -- a plain document whose author happened to start it with a
+horizontal rule -- and it now renders in full.
+
+```````````````````````````````` example [no-normalize]
+---
+Some intro paragraph.
+
+More.
+.
+{"nodes":[["hr",{}],["p",{},"Some intro paragraph."],["p",{},"More."]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## The same input in HTML
+
+```````````````````````````````` example
+---
+Some intro paragraph.
+
+More.
+.
+<hr>
+<p>Some intro paragraph.</p>
+<p>More.</p>
+````````````````````````````````
+
+## Control: the `---` spelling now behaves like the other two
+
+`***` and `___` open no frontmatter, and neither does an unclosed `---`, so the
+same document written with any of the three is preserved in full.
+
+```````````````````````````````` example [no-normalize]
+***
+
+Hello world
+
+More.
+.
+{"nodes":[["hr",{}],["p",{},"Hello world"],["p",{},"More."]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Control: the same document with `___`
+
+```````````````````````````````` example [no-normalize]
+___
+
+Hello world
+
+More.
+.
+{"nodes":[["hr",{}],["p",{},"Hello world"],["p",{},"More."]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````

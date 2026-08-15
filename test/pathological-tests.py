@@ -59,7 +59,7 @@ pathological = {
             re.compile("\\*\\*x <a href=\"d\">a<em>b\\*\\*c</em></a>")),
     "nested brackets":
             (("[" * 50000) + "a" + ("]" * 50000),
-            re.compile(r"\[{49998}<x-wikilink data-target=\"a\">a</x-wikilink>\]{49998}")),
+            re.compile(r"\[{50000}a\]{50000}")),
     "nested block quotes":
             ((("> " * 50000) + "a"),
             re.compile("(<blockquote>\r?\n){50000}")),
@@ -74,7 +74,7 @@ pathological = {
             re.compile(r"(\[0\] ){19999}")),
     "deeply nested lists":
             ("".join(map(lambda x: ("  " * x + "* a\n"), range(0,1000))),
-            re.compile("<ul>\r?\n(<li>a<ul>\r?\n){999}<li>a</li>\r?\n</ul>\r?\n(</li>\r?\n</ul>\r?\n){999}")),
+            re.compile("<ul>\r?\n(<li>a\r?\n<ul>\r?\n){999}<li>a</li>\r?\n</ul>\r?\n(</li>\r?\n</ul>\r?\n){999}")),
     # --format=json cases. The AST renderer is the only one that materializes a
     # tree, so it is the only one with a nesting limit (JSON_MAX_DEPTH in
     # src/renderers/md4x-ast.zig -- its serializer recurses once per level).
@@ -113,10 +113,10 @@ pathological = {
             re.compile(r"(\[ \(\]\(){50000}")),
     "broken thematic break":
             (("* " * 50000 + "a"),
-            re.compile("<ul>\r?\n(<li><ul>\r?\n){49999}<li>a</li>\r?\n</ul>\r?\n(</li>\r?\n</ul>\r?\n){49999}")),
+            re.compile("<ul>\r?\n(<li>\r?\n<ul>\r?\n){49999}<li>a</li>\r?\n</ul>\r?\n(</li>\r?\n</ul>\r?\n){49999}")),
     "nested invalid link references":
             (("[" * 50000 + "]" * 50000 + "\n\n[a]: /b"),
-            re.compile(r"\[{49997}<x-wikilink.*?</x-wikilink>\]{49997}")),
+            re.compile(r"\[{50000}\]{50000}")),
     "many broken permissive autolinks":
             (("www._" * 50000 + "x"),
             re.compile("<p>(www._){50000}x</p>")),

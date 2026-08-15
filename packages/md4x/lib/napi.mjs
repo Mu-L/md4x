@@ -39,8 +39,18 @@ export function init(opts) {
 
 const HEAL_FLAG = 0x0100;
 
+/* Skip a leading UTF-8 BOM instead of parsing it as document text. Always on,
+   with no option to turn it off: a BOM is an encoding artifact, and leaving it
+   in derails the first block — `﻿---` stops looking like a frontmatter
+   fence, so the whole frontmatter renders as a setext heading. The CLI has
+   always set this; the bindings not setting it was the only flag difference
+   between them. The HTML renderer numbers the bit differently from the rest. */
+const HTML_BOM_FLAG = 0x0004;
+const BOM_FLAG = 0x0002;
+
 export function renderToHtml(input, opts) {
-  let flags = opts?.full ? 0x0008 : 0;
+  let flags = HTML_BOM_FLAG | (opts?.full ? 0x0008 : 0);
+  if (opts?.headingIds) flags |= 0x0020;
   if (opts?.heal) flags |= HEAL_FLAG;
   // The addon calls `opts.highlighter` synchronously, once per code block, from
   // inside the render — see the hook in src/md4x-napi.zig. A non-function third
@@ -49,7 +59,7 @@ export function renderToHtml(input, opts) {
 }
 
 export function renderToAST(input, opts) {
-  const flags = opts?.heal ? HEAL_FLAG : 0;
+  const flags = BOM_FLAG | (opts?.heal ? HEAL_FLAG : 0);
   return getBinding().renderToAST(str(input), flags);
 }
 
@@ -60,24 +70,24 @@ export function parseAST(input, opts) {
 }
 
 export function renderToAnsi(input, opts) {
-  let flags = opts?.heal ? HEAL_FLAG : 0;
+  let flags = BOM_FLAG | (opts?.heal ? HEAL_FLAG : 0);
   if (opts?.showUrls) flags |= 0x0010;
   if (opts?.showFrontmatter) flags |= 0x0020;
   return getBinding().renderToAnsi(str(input), flags, opts?.highlighter);
 }
 
 export function renderToMeta(input, opts) {
-  const flags = opts?.heal ? HEAL_FLAG : 0;
+  const flags = BOM_FLAG | (opts?.heal ? HEAL_FLAG : 0);
   return getBinding().renderToMeta(str(input), flags);
 }
 
 export function renderToText(input, opts) {
-  const flags = opts?.heal ? HEAL_FLAG : 0;
+  const flags = BOM_FLAG | (opts?.heal ? HEAL_FLAG : 0);
   return getBinding().renderToText(str(input), flags);
 }
 
 export function renderToMarkdown(input, opts) {
-  const flags = opts?.heal ? HEAL_FLAG : 0;
+  const flags = BOM_FLAG | (opts?.heal ? HEAL_FLAG : 0);
   return getBinding().renderToMarkdown(str(input), flags);
 }
 

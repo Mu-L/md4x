@@ -84,8 +84,8 @@ pub const BlockDetail = union(BlockType) {
 pub const SpanDetail = union(SpanType) {
     em: SpanAttrsDetail,     strong: SpanAttrsDetail, a: SpanADetail,   img: SpanImgDetail,
     code: SpanAttrsDetail,   del: SpanAttrsDetail,    latexmath: void,
-    latexmath_display: void, wikilink: SpanWikilinkDetail,
-    component: SpanComponentDetail,                    span: SpanSpanDetail,
+    latexmath_display: void, component: SpanComponentDetail,
+    span: SpanSpanDetail,
     mark: SpanAttrsDetail,   footnote_ref: SpanFootnoteRefDetail,
 };
 ```
@@ -195,7 +195,6 @@ the document, in order of first reference — see
 | `.del`               | `<del>`          | `SpanAttrsDetail`       |
 | `.latexmath`         | _(inline math)_  | `void`                  |
 | `.latexmath_display` | _(display math)_ | `void`                  |
-| `.wikilink`          | _(wiki link)_    | `SpanWikilinkDetail`    |
 | `.component`         | _(dynamic tag)_  | `SpanComponentDetail`   |
 | `.span`              | `<span>`         | `SpanSpanDetail`        |
 | `.mark`              | `<mark>`         | `SpanAttrsDetail`       |
@@ -297,10 +296,6 @@ pub const SpanSpanDetail = struct {
     raw_attrs: []const MD_CHAR, // Raw attrs from {...}. Not NUL-terminated
 };
 
-pub const SpanWikilinkDetail = struct {
-    target: Attribute,
-};
-
 pub const SpanComponentDetail = struct {
     tag_name: Attribute,        // Component name (e.g. "badge", "icon-star")
     raw_props: []const MD_CHAR, // Raw props from {...}. Not NUL-terminated
@@ -390,7 +385,6 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 | `MD_FLAG_PERMISSIVEWWWAUTOLINKS`   | `0x0400`   | Enable `www.` autolinks                                                           |
 | `MD_FLAG_TASKLISTS`                | `0x0800`   | Enable task list extension                                                        |
 | `MD_FLAG_LATEXMATHSPANS`           | `0x1000`   | Enable `$` / `$$` LaTeX math                                                      |
-| `MD_FLAG_WIKILINKS`                | `0x2000`   | Enable `[[wiki links]]`                                                           |
 | `MD_FLAG_HARD_SOFT_BREAKS`         | `0x8000`   | Force all soft breaks to act as hard breaks                                       |
 | `MD_FLAG_FRONTMATTER`              | `0x10000`  | Enable frontmatter extension                                                      |
 | `MD_FLAG_COMPONENTS`               | `0x20000`  | Enable components (inline `:name[content]{props}` and block `::name{props}...::`) |
@@ -405,4 +399,4 @@ while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) 
 - `MD_FLAG_NOHTML` = no HTML blocks + no HTML spans
 - `MD_DIALECT_COMMONMARK` = `0` (strict CommonMark)
 - `MD_DIALECT_GITHUB` = permissive autolinks + tables + strikethrough + task lists + alerts + footnotes
-- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + wikilinks + frontmatter + components + attributes + alerts + highlight + footnotes)
+- `MD_DIALECT_ALL` = all additive extensions (autolinks + tables + strikethrough + tasklists + latex math + frontmatter + components + attributes + alerts + highlight + footnotes)

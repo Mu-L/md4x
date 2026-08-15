@@ -689,6 +689,26 @@ pub fn md_is_html_block_end_condition(ctx: *MD_CTX, beg: OFF, p_end: *OFF) c_int
 
 // --- block component / slot recognizers --------------------------------------
 
+// Balanced `{...}` run whose opening brace sits at `off`, bounded by the end of the
+// line. Depth-counting rather than "stop at the first '}'", so a quoted prop value
+// may itself hold braces (`obj='{"key": "value"}'`); this mirrors the inline
+// component scanner in inlines.zig. On success reports the run's interior through
+// `p_beg`/`p_end` and returns the offset just past the closing brace; returns null
+// when the run stays unbalanced to the end of the line.
+fn md_scan_brace_run(ctx: *MD_CTX, off: OFF, p_beg: *OFF, p_end: *OFF) ?OFF {
+    var brace_depth: c_int = 1;
+    var j: OFF = off + 1;
+    while (j < ctx.size and !ctx.isNewline(j) and brace_depth > 0) {
+        if (ctx.ch(j) == '{') brace_depth += 1 else if (ctx.ch(j) == '}') brace_depth -= 1;
+        if (brace_depth > 0) j += 1;
+    }
+    if (brace_depth != 0)
+        return null;
+    p_beg.* = off + 1;
+    p_end.* = j;
+    return j + 1;
+}
+
 // ::name, ::name{props}, or ::name Title text {props}. Returns colon count (>=2)
 // or 0 on failure.
 pub fn md_is_block_component_opener(ctx: *MD_CTX, off_in: OFF, p_name_beg: *OFF, p_name_end: *OFF, p_props_beg: *OFF, p_props_end: *OFF, p_title_beg: *OFF, p_title_end: *OFF, p_end: *OFF) c_uint {
@@ -728,15 +748,8 @@ pub fn md_is_block_component_opener(ctx: *MD_CTX, off_in: OFF, p_name_beg: *OFF,
 
     // Check for {props} immediately after name.
     if (off < ctx.size and ctx.ch(off) == '{') {
-        const brace_start: OFF = off + 1;
-        var j: OFF = brace_start;
-        while (j < ctx.size and !ctx.isNewline(j) and ctx.ch(j) != '}')
-            j += 1;
-        if (j < ctx.size and ctx.ch(j) == '}') {
-            p_props_beg.* = brace_start;
-            p_props_end.* = j;
-            off = j + 1;
-        }
+        if (md_scan_brace_run(ctx, off, p_props_beg, p_props_end)) |run_end|
+            off = run_end;
     } else if (off < ctx.size and !ctx.isNewline(off)) {
         // Title text: everything until '{' or end of line.
         const title_start: OFF = off;
@@ -756,15 +769,8 @@ pub fn md_is_block_component_opener(ctx: *MD_CTX, off_in: OFF, p_name_beg: *OFF,
 
         // Check for {props} after title.
         if (off < ctx.size and ctx.ch(off) == '{') {
-            const brace_start: OFF = off + 1;
-            var j: OFF = brace_start;
-            while (j < ctx.size and !ctx.isNewline(j) and ctx.ch(j) != '}')
-                j += 1;
-            if (j < ctx.size and ctx.ch(j) == '}') {
-                p_props_beg.* = brace_start;
-                p_props_end.* = j;
-                off = j + 1;
-            }
+            if (md_scan_brace_run(ctx, off, p_props_beg, p_props_end)) |run_end|
+                off = run_end;
         }
     }
 
@@ -801,6 +807,205 @@ pub fn md_is_block_component_closer(ctx: *MD_CTX, off_in: OFF, p_end: *OFF) c_ui
 
     p_end.* = off;
     return colon_count;
+}
+
+// Is there a closing `---` fence somewhere after the opening one? `off_in` sits
+// at the opener's newline (or at the end of input). The scan mirrors the closer
+// test in md_analyze_line's frontmatter-continuation arm: at most a three-space
+// indent, three or more dashes, then nothing but spaces to the end of the line.
+fn md_frontmatter_has_closing_fence(ctx: *MD_CTX, off_in: OFF) bool {
+    var off: OFF = off_in;
+    while (off < ctx.size) {
+        // Step over the line break we are parked on.
+        if (ctx.ch(off) == '\r') off += 1;
+        if (off < ctx.size and ctx.ch(off) == '\n') off += 1;
+
+        // Leading whitespace. A tab counts as a full tab stop, which is all the
+        // precision the `< code_indent_offset` test below needs.
+        var indent: c_uint = 0;
+        while (off < ctx.size and ctx.isBlank(off)) : (off += 1)
+            indent += if (ctx.ch(off) == '\t') 4 else 1;
+
+        if (indent < ctx.code_indent_offset and off < ctx.size and ctx.ch(off) == '-') {
+            var tmp: OFF = off;
+            while (tmp < ctx.size and ctx.ch(tmp) == '-')
+                tmp += 1;
+            if (tmp - off >= 3) {
+                while (tmp < ctx.size and ctx.ch(tmp) == ' ')
+                    tmp += 1;
+                if (tmp >= ctx.size or ctx.isNewline(tmp))
+                    return true;
+            }
+        }
+
+        // On to this line's break.
+        while (off < ctx.size and !ctx.isNewline(off))
+            off += 1;
+    }
+    return false;
+}
+
+// Does this line, spanning `beg`..`end` (the line break excluded), read as a
+// YAML mapping key? A key is either a quoted scalar or a plain one, followed by
+// a colon and then a space or the line end. `key:value` with no space is *not*
+// a mapping in YAML — it is the plain scalar `key:value` — and a leading `- `
+// makes the line a sequence entry, so both are rejected.
+fn md_yaml_line_is_mapping_key(ctx: *MD_CTX, beg: OFF, end: OFF) bool {
+    var off: OFF = beg;
+    while (off < end and ISBLANK_(ctx.ch(off)))
+        off += 1;
+    if (off >= end)
+        return false;
+
+    if (ctx.isAnyOf2(off, '"', '\'')) {
+        const quote: CHAR = ctx.ch(off);
+        off += 1;
+        while (off < end) : (off += 1) {
+            if (quote == '"' and ctx.ch(off) == '\\') {
+                off += 1; // Escaped byte; only `"` matters, and it is skipped.
+                continue;
+            }
+            if (ctx.ch(off) == quote) {
+                // `''` inside a single-quoted scalar is an escaped quote.
+                if (quote == '\'' and off + 1 < end and ctx.ch(off + 1) == '\'') {
+                    off += 1;
+                    continue;
+                }
+                break;
+            }
+        }
+        if (off >= end)
+            return false; // Unterminated quote: not a key.
+        off += 1;
+        while (off < end and ISBLANK_(ctx.ch(off)))
+            off += 1;
+    } else {
+        // A sequence entry (`- x`, or a bare `-`) is not a mapping.
+        if (ctx.ch(off) == '-' and (off + 1 >= end or ISBLANK_(ctx.ch(off + 1))))
+            return false;
+        const key_beg: OFF = off;
+        while (off < end and ctx.ch(off) != ':') {
+            // ` #` starts a YAML comment, so no colon can follow on this line.
+            if (ctx.ch(off) == '#' and off > key_beg and ISBLANK_(ctx.ch(off - 1)))
+                return false;
+            off += 1;
+        }
+        if (off == key_beg)
+            return false; // Empty key.
+    }
+
+    return off < end and ctx.ch(off) == ':' and (off + 1 >= end or ISBLANK_(ctx.ch(off + 1)));
+}
+
+// Does the body opened by this `---` read as YAML rather than as markdown?
+// Frontmatter and block component props both carry a YAML *mapping* — a
+// document's metadata, a component's props object — so a body whose very first
+// line of substance is anything else (a bare scalar, a sequence entry, a
+// paragraph) was never metadata, and consuming it would silently delete
+// document content. Such a block is not frontmatter at all: the `---` stays an
+// ordinary thematic break and the lines below it stay markdown, which is also
+// what CommonMark expects of `---\nFoo\n---\nBar\n---\nBaz`.
+//
+// A whitespace-only or comment-only body is *not* rejected: it carries nothing
+// to lose, and Comark resolves both to an empty object rather than to markdown.
+//
+// A body with no bytes in it at all is where the two positions part company,
+// and both follow Comark. In a document, `---\n---` and `---\n\n---` are two
+// thematic breaks (CommonMark example 98 agrees), while `---\n \n---` and
+// `---\n\n\n---` are frontmatter — one byte between the fences is the whole
+// difference. In a component, an empty props block is consumed either way.
+// `allow_empty_body` selects the position.
+//
+// Deciding this needs the lines below the opener, so the classifier looks ahead
+// once, here, before committing. `off_in` sits at the opener's newline (or at
+// the end of input). Blank lines and whole-line `#` comments are skipped; the
+// first line carrying anything else settles it.
+fn md_frontmatter_body_is_yaml(ctx: *MD_CTX, off_in: OFF, allow_empty_body: bool) bool {
+    var off: OFF = off_in;
+    var n_lines: c_uint = 0;
+    var first_line_len: OFF = 0;
+
+    while (off < ctx.size) {
+        // Step over the line break we are parked on.
+        if (ctx.ch(off) == '\r') off += 1;
+        if (off < ctx.size and ctx.ch(off) == '\n') off += 1;
+
+        const beg: OFF = off;
+        var end: OFF = off;
+        while (end < ctx.size and !ctx.isNewline(end))
+            end += 1;
+        off = end;
+
+        var content: OFF = beg;
+        var indent: c_uint = 0;
+        while (content < end and ISBLANK_(ctx.ch(content))) : (content += 1)
+            indent += if (ctx.ch(content) == '\t') 4 else 1;
+
+        // The closing fence, reached before any line of substance.
+        if (indent < ctx.code_indent_offset and content < end and ctx.ch(content) == '-') {
+            var tmp: OFF = content;
+            while (tmp < end and ctx.ch(tmp) == '-')
+                tmp += 1;
+            if (tmp - content >= 3) {
+                while (tmp < end and ctx.ch(tmp) == ' ')
+                    tmp += 1;
+                // Byte-empty is one line of nothing or no line at all; from two
+                // lines on, the newline separating them is itself a byte.
+                if (tmp >= end)
+                    return allow_empty_body or n_lines >= 2 or first_line_len > 0;
+            }
+        }
+
+        n_lines += 1;
+        if (n_lines == 1)
+            first_line_len = end - beg;
+
+        if (content >= end)
+            continue; // Blank line.
+        if (ctx.ch(content) == '#')
+            continue; // YAML comment.
+
+        return md_yaml_line_is_mapping_key(ctx, content, end);
+    }
+    return true; // Nothing but blanks and comments to the end of input.
+}
+
+// ```yaml [props] — the codeblock spelling of block component props, co-equal
+// with the `---` frontmatter spelling. Only ever offered in the position the
+// `---` opener is offered in (the component's first non-blank content line), and
+// reported as a `.frontmatter` line so the body travels the very same YAML path.
+// The ordinary fence recognizer runs first so the fence-length bookkeeping and
+// the no-backtick-in-info rule stay shared with fenced code; the info string then
+// has to be exactly `yaml [props]`, blanks aside.
+pub fn md_is_component_props_fence(ctx: *MD_CTX, beg: OFF, p_end: *OFF) bool {
+    if (beg >= ctx.size or !ctx.isAnyOf2(beg, '`', '~'))
+        return false;
+
+    var end: OFF = beg;
+    if (!md_is_opening_code_fence(ctx, beg, &end))
+        return false;
+
+    // The info string, with the fence run and the blanks around it trimmed off.
+    var info_beg: OFF = beg + ctx.code_fence_length;
+    while (info_beg < end and ISBLANK_(ctx.ch(info_beg)))
+        info_beg += 1;
+    var info_end: OFF = end;
+    while (info_end > info_beg and ISBLANK_(ctx.ch(info_end - 1)))
+        info_end -= 1;
+
+    // `yaml` (case-insensitive, as elsewhere for info-string languages) ...
+    if (info_end - info_beg < 4 or !md_ascii_case_eq(ctx.str(info_beg), "yaml", 4))
+        return false;
+    var off: OFF = info_beg + 4;
+    while (off < info_end and ISBLANK_(ctx.ch(off)))
+        off += 1;
+
+    // ... then the `[props]` filename, and nothing else.
+    if (info_end - off != 7 or !md_ascii_eq(ctx.str(off), "[props]", 7))
+        return false;
+
+    p_end.* = end;
+    return true;
 }
 
 // #slot-name (within a block component). Returns 1 on success, 0 on failure.
@@ -1104,6 +1309,29 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         if (pivot_line.type == .frontmatter) {
             line.beg = off;
 
+            // Codeblock-style component props close on an ordinary code fence.
+            // pivot_line is the opener line (the pivot only moves when a new
+            // block starts), so its first byte is the fence character.
+            if (pivot_line.data == 3) {
+                if (line.indent < ctx.code_indent_offset and
+                    md_is_closing_code_fence(ctx, ctx.ch(pivot_line.beg), off, &off))
+                {
+                    line.type = .blank;
+                    var i: c_int = ctx.nContainers() - 1;
+                    while (i >= 0) : (i -= 1) {
+                        if (ctx.containers.items[@intCast(i)].ch == ':') {
+                            ctx.containers.items[@intCast(i)].comp_fm_state = 2;
+                            break;
+                        }
+                    }
+                    break :classify;
+                }
+                line.type = .frontmatter;
+                line.data = pivot_line.data;
+                n_parents = ctx.nContainers();
+                break :classify;
+            }
+
             // Check for closing --- fence.
             if (line.indent < ctx.code_indent_offset and
                 off < ctx.size and ctx.ch(off) == '-')
@@ -1400,7 +1628,17 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                 while (tmp < ctx.size and ctx.ch(tmp) == ' ')
                     tmp += 1;
                 if (tmp >= ctx.size or ctx.isNewline(tmp)) {
-                    if (beg == 0) {
+                    // Frontmatter is *enclosed* by `---` and carries YAML, so
+                    // an opening fence with no closing one, or one whose body
+                    // reads as markdown rather than as a mapping, is not
+                    // frontmatter at all — the block stays ordinary markdown,
+                    // i.e. a thematic break plus the text after it, exactly as
+                    // `***` and `___` already behave. Deciding that needs the
+                    // rest of the document, so the classifier looks ahead once,
+                    // here, before committing.
+                    if (beg == 0 and md_frontmatter_has_closing_fence(ctx, tmp) and
+                        md_frontmatter_body_is_yaml(ctx, tmp, false))
+                    {
                         line.type = .frontmatter;
                         line.enforce_new_block = true;
                         line.data = 1;
@@ -1437,7 +1675,14 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                     if (tmp - off >= 3) {
                         while (tmp < ctx.size and ctx.ch(tmp) == ' ')
                             tmp += 1;
-                        if (tmp >= ctx.size or ctx.isNewline(tmp)) {
+                        // Block props are YAML too (they become the component's
+                        // props object), so the same body test that gates the
+                        // document fence gates this one: without it a `---`
+                        // meant as a thematic break swallows the lines below
+                        // it, up to and including the `::` closer.
+                        if ((tmp >= ctx.size or ctx.isNewline(tmp)) and
+                            md_frontmatter_body_is_yaml(ctx, tmp, true))
+                        {
                             ctx.containers.items[@intCast(comp_i)].comp_fm_state = 1;
                             line.type = .frontmatter;
                             line.data = 2; // 2 = component frontmatter
@@ -1446,9 +1691,24 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
                         }
                     }
                 }
+                // The codeblock spelling, ```yaml [props] ... ```, accepted in
+                // exactly the same position and closed by an ordinary code fence.
+                if (!found_opener and line.indent < ctx.code_indent_offset and
+                    off < ctx.size and ctx.isAnyOf2(off, '`', '~'))
+                {
+                    var tmp: OFF = off;
+                    if (md_is_component_props_fence(ctx, off, &tmp)) {
+                        ctx.containers.items[@intCast(comp_i)].comp_fm_state = 1;
+                        line.type = .frontmatter;
+                        line.data = 3; // 3 = component frontmatter, codeblock style
+                        line.enforce_new_block = true;
+                        off = tmp;
+                        found_opener = true;
+                    }
+                }
                 if (found_opener)
                     break :classify;
-                // First non-blank line is not ---; disable component frontmatter.
+                // First non-blank line is neither spelling; disable component frontmatter.
                 ctx.containers.items[@intCast(comp_i)].comp_fm_state = 2;
             }
         }

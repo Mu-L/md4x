@@ -46,11 +46,6 @@ body {
   color: #6639a6;
 }
 
-.prose x-wikilink {
-  color: #0969da;
-  border-bottom: 1px dashed #0969da;
-}
-
 .prose del {
   color: #656d76;
 }
@@ -75,10 +70,12 @@ body {
   background: #f6f8fa;
 }
 
-.prose blockquote.alert::before {
-  content: "Alert";
-  display: block;
-  margin-bottom: 0.5em;
+/* The renderer emits the label row itself, so this styles a real element
+   instead of synthesising one with ::before -- which is also why a custom
+   `[!DEPLOY]` now reads "Deploy" rather than the generic "Alert" the
+   pseudo-element could only fall back to. */
+.prose blockquote.alert > .markdown-alert-title {
+  margin: 0 0 0.5em;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -90,8 +87,7 @@ body {
   border-left-color: #1f6feb;
   background: #eff6ff;
 }
-.prose blockquote.alert.alert-note::before {
-  content: "Note";
+.prose blockquote.alert.alert-note > .markdown-alert-title {
   color: #1f6feb;
 }
 
@@ -99,8 +95,7 @@ body {
   border-left-color: #1a7f37;
   background: #eef9f0;
 }
-.prose blockquote.alert.alert-tip::before {
-  content: "Tip";
+.prose blockquote.alert.alert-tip > .markdown-alert-title {
   color: #1a7f37;
 }
 
@@ -108,8 +103,7 @@ body {
   border-left-color: #8250df;
   background: #f5f0ff;
 }
-.prose blockquote.alert.alert-important::before {
-  content: "Important";
+.prose blockquote.alert.alert-important > .markdown-alert-title {
   color: #8250df;
 }
 
@@ -117,8 +111,7 @@ body {
   border-left-color: #9a6700;
   background: #fff8c5;
 }
-.prose blockquote.alert.alert-warning::before {
-  content: "Warning";
+.prose blockquote.alert.alert-warning > .markdown-alert-title {
   color: #9a6700;
 }
 
@@ -126,8 +119,7 @@ body {
   border-left-color: #cf222e;
   background: #ffebe9;
 }
-.prose blockquote.alert.alert-caution::before {
-  content: "Caution";
+.prose blockquote.alert.alert-caution > .markdown-alert-title {
   color: #cf222e;
 }
 

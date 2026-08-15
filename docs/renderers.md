@@ -62,12 +62,24 @@ When `MD_HTML_FLAG_FULL_HTML` is set, `md_html_ex()` generates a complete HTML d
 | `MD_HTML_FLAG_VERBATIM_ENTITIES` | `0x0002` | Do not translate HTML entities                             |
 | `MD_HTML_FLAG_SKIP_UTF8_BOM`     | `0x0004` | Skip UTF-8 BOM at input start                              |
 | `MD_HTML_FLAG_FULL_HTML`         | `0x0008` | Generate full HTML document (requires `md_html_ex`)        |
+| `MD_HTML_FLAG_HEADING_IDS`       | `0x0020` | Emit a generated `id="..."` anchor on every heading        |
 | `MD_HTML_FLAG_HEAL`              | `0x0100` | Run `md_heal()` on the input first, then render the result |
 
 `0x0010` is retired: it used to be `MD_HTML_FLAG_CODE_META`, which appended a
 JSON array of per-code-block byte offsets after the body so a caller could
 splice highlighted blocks into the finished output. Highlighting is a renderer
 hook now (see below), so nothing computes those offsets any more.
+
+`MD_HTML_FLAG_HEADING_IDS` is opt-in because an `id` on every heading is an
+addition to CommonMark, and the plain `md_html()` output is what `test/spec.txt`
+is checked against. With the flag, `# Hello World` renders as
+`<h1 id="hello-world">Hello World</h1>` — a GitHub-compatible slug of the
+heading's text, de-duplicated within the document, and the same id the AST and
+meta renderers publish (all three drive `src/renderers/md4x-slug.zig` from the
+SAX text stream). An explicit `{#id}` block attribute on the heading wins over
+the generated slug, so a tag never carries two `id`s. The CLI's `--heading-ids`
+and the JS `headingIds` option set it; without it the renderer neither diverts a
+heading's markup nor allocates the slug arena.
 
 `MD_HTML_FLAG_HEAL` is a pre-pass, not a rendering mode: `md_html_ex()` runs
 `md_heal()` over the input, then re-enters itself with the healed buffer and the
@@ -76,13 +88,12 @@ flag cleared. It is what the CLI's `--heal` option sets for HTML output.
 ### Rendering Details
 
 - Frontmatter blocks are suppressed (not rendered in HTML output)
-- Wiki links render as `<x-wikilink>` tags
 - LaTeX math renders as `<x-equation>` tags
 - Task lists render with `<input type="checkbox">` elements
 - Table cells get `align` attribute when alignment is specified
 - URL attributes are percent-encoded; HTML content is entity-escaped
 - Attribute **names** synthesized from a component key — a `{props}` key or a component-frontmatter YAML key — are emitted through `render_html_attr_name`, not the value escaper. An attribute name ends at whitespace, `/`, `=` or `>`, none of which entity-escaping covers, so a key like `x onload=alert(1)//` would otherwise tokenize into several attributes. Bytes `<= 0x20`, DEL, `/` and `=` are percent-encoded (`a b` → `a%20b`); `& < > "` keep their entity spelling; bytes `>= 0x80` pass through, so non-ASCII keys are unaffected. An **empty** key is dropped — HTML has no spelling for a zero-length attribute name. The AST renderer keeps every such key verbatim (it is a JSON string there), so the two renderers agree on which keys are acceptable; only the spelling differs
-- Alerts render as `<blockquote class="alert alert-{type}">` (type lowercased in class)
+- Alerts render as `<blockquote class="alert alert-{type} markdown-alert markdown-alert-{type}">` followed by a `<p class="markdown-alert-title">{Type}</p>` label row. The element stays a `<blockquote>` where GitHub uses a `<div>` (an alert _is_ a block quote), but both class sets ride along so GitHub's class-based CSS matches md4x output; the title row is GitHub's minus its inline octicon, which is left to a stylesheet. Both the class and the label are derived from the **case-folded** type — `[!NOTE]`, `[!note]` and `[!Note]` are one node, so they get one class and one label (`Note`) — and the same rule gives a custom `[!DEPLOY]` the label `Deploy`. Nothing in the type is escaped in either position because the parser's charset for it is `[a-zA-Z0-9_-]`; widening that charset would make this an injection site. See [`.agents/github-parity.md`](../.agents/github-parity.md)
 - Footnote references render as `<sup><a href="#fn-N" id="fnref-N-K">N</a></sup>`; the deferred definitions render as `<section class="footnotes"><ol><li id="fn-N">…</li></ol></section>`, each `<li>` ending in one `&#8617;` back-reference anchor per reference
 
 ## Syntax-highlight hook (`src/renderers/md4x-highlight.zig`)
@@ -254,7 +265,7 @@ the offset trailer described under the HTML flags.
 - Task lists: `[x]`/`[ ]` with green for checked items
 - Images: `[image: alt]` in dim
 - Footnote references: dim `[N]`; the definitions section is introduced by the same box-drawing rule as a table head and each definition is prefixed with a dim `[N] `. Only the numeric id is emitted, so no document bytes reach this path
-- Alerts: colored thick left bar (`▌`) with type-specific colors (note/info=blue, tip/success=green, important=magenta, warning=yellow, caution/danger=red), bold type label on first line
+- Alerts: colored thick left bar (`▌`) with type-specific colors (note/info=blue, tip/success=green, important=magenta, warning=yellow, caution/danger=red), bold type label on first line. The label keeps the **author's** casing (`[!NOTE]` → `NOTE`, `[!note]` → `note`), deliberately unlike the HTML renderer's case-folded `Note`: the HTML label exists to match GitHub's five spellings under GitHub's stylesheet, and the terminal has no stylesheet and no parity target — a bare uppercase word is the conventional terminal admonition label. The plain-text renderer does the same
 - Components: cyan for generic; alert-like components (`::note`, `::tip`, `::important`, `::warning`, `::caution`) and `::alert{type="..."}` render with the same colored bar style as alerts
 - Frontmatter: suppressed by default (enable with `MD_ANSI_FLAG_SHOW_FRONTMATTER` for dim text output)
 - Raw HTML: stripped (not rendered)
@@ -487,8 +498,8 @@ pub fn md_markdown(
 
 Backs the CLI's `--format=markdown`. Because it renders from the SAX stream and not
 from the source bytes, the output is normalized rather than round-tripped: setext
-headings become ATX, indented code becomes fenced, autolinks and wiki links become
-explicit `[text](url)` links, and anything with no Markdown spelling (raw HTML,
+headings become ATX, indented code becomes fenced, autolinks become explicit
+`[text](url)` links, and anything with no Markdown spelling (raw HTML,
 component props) is dropped or emitted as a tag.
 
 ### Renderer Flags (`MD_MARKDOWN_FLAG_*`)
@@ -512,7 +523,6 @@ component props) is dropped or emitted as a tag.
 - Inline: `*em*`, `**strong**`, `` `code` ``, `~~del~~`, `==mark==`
 - Links: `[text](href "title")` — the title is emitted only when present; images: `![alt](src "title")`
 - Autolinks are expanded to the explicit form (`<https://a.b>` → `[https://a.b](https://a.b)`)
-- Wiki links become regular links: `[[target]]` → `[target](target)`
 - Footnote references round-trip as `[^label]`, and the definitions are re-emitted as `[^label]: …` — but at the **end of the document**, not their original position. That is a textual move, not a semantic one: a definition resolves the same wherever it sits. `[` is already escaped unconditionally in text, so a literal `[^1]` in prose comes back as `\[^1]` and does not become a reference
 - LaTeX math: `$…$` and `$$…$$`
 - Tables: pipe tables (`| cell |`), with a delimiter row emitted after the header row using the recorded per-column alignment (`:---`, `:---:`, `---:`, or `---` for default); alignment is tracked for at most 128 columns

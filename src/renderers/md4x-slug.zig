@@ -124,21 +124,60 @@ fn encodeUtf8(codepoint: u32, out: *[4]u8) []const u8 {
 
 // True for a codepoint `github-slugger` strips outright.
 //
-// Its removal set is a generated character class spelling out, in effect:
+// Its removal set is a generated character class covering, in effect:
 // C0/C1 controls and DEL, every ASCII punctuation character except `-` and `_`,
-// U+00A0, and the Unicode punctuation/symbol characters. `md_is_unicode_punct`
-// is exactly the last of those (CommonMark's P+S definition, which the parser
-// already carries for emphasis flanking), so the only pieces that need spelling
-// out here are the control ranges — U+0080..U+00A0 among them, since U+00A0 is
-// classified as whitespace rather than punctuation.
+// the Unicode punctuation/symbol characters, and the invisible classes — spaces
+// (Z*) and format characters (Cf). `md_is_unicode_punct` is CommonMark's P+S
+// definition, which the parser already carries for emphasis flanking; the
+// invisible classes are handled separately below.
+//
+// The two invisible classes matter more than they look. Format characters put
+// U+200D ZERO WIDTH JOINER into ids for any multi-part emoji (`:family_...:`,
+// `:man_technologist:` — roughly a third of `src/emoji.zig` contains one), plus
+// U+FEFF BOM and the U+202x bidi overrides. Unicode spaces put a literal
+// U+3000 IDEOGRAPHIC SPACE and friends there. Both yield ids that cannot be
+// typed into a URL fragment, so neither may survive into an anchor.
 //
 // U+0020 never reaches this function: the caller turns it into `-` first.
 fn isStripped(codepoint: u32) bool {
     if (codepoint < 0x20 or codepoint == 0x7f) return true;
-    if (codepoint >= 0x80 and codepoint <= 0xa0) return true;
+    if (codepoint >= 0x80 and codepoint <= 0x9f) return true;
     // Kept by `github-slugger` even though both are Unicode punctuation.
     if (codepoint == '-' or codepoint == '_') return false;
+    // Z* — U+00A0 included, which is whitespace rather than punctuation.
+    if (util.md_is_unicode_whitespace(codepoint)) return true;
+    if (isFormatChar(codepoint)) return true;
     return util.md_is_unicode_punct(codepoint);
+}
+
+// The Unicode `Cf` (format) general category: zero-width and directionality
+// controls that carry no visible text and must never reach an id.
+fn isFormatChar(codepoint: u32) bool {
+    return switch (codepoint) {
+        0x00ad, // SOFT HYPHEN
+        0x0600...0x0605, // ARABIC NUMBER SIGN..ARABIC NUMBER MARK ABOVE
+        0x061c, // ARABIC LETTER MARK
+        0x06dd, // ARABIC END OF AYAH
+        0x070f, // SYRIAC ABBREVIATION MARK
+        0x0890...0x0891, // ARABIC POUND/PIASTRE MARK ABOVE
+        0x08e2, // ARABIC DISPUTED END OF AYAH
+        0x180e, // MONGOLIAN VOWEL SEPARATOR
+        0x200b...0x200f, // ZWSP, ZWNJ, ZWJ, LRM, RLM
+        0x202a...0x202e, // LRE, RLE, PDF, LRO, RLO
+        0x2060...0x2064, // WORD JOINER..INVISIBLE PLUS
+        0x2066...0x206f, // LRI..NOMINAL DIGIT SHAPES
+        0xfeff, // ZERO WIDTH NO-BREAK SPACE (BOM)
+        0xfff9...0xfffb, // INTERLINEAR ANNOTATION ANCHOR..TERMINATOR
+        0x110bd, // KAITHI NUMBER SIGN
+        0x110cd, // KAITHI NUMBER SIGN ABOVE
+        0x13430...0x1343f, // EGYPTIAN HIEROGLYPH FORMAT CONTROLS
+        0x1bca0...0x1bca3, // SHORTHAND FORMAT CONTROLS
+        0x1d173...0x1d17a, // MUSICAL SYMBOL BEGIN BEAM..END PHRASE
+        0xe0001, // LANGUAGE TAG
+        0xe0020...0xe007f, // TAG CHARACTERS
+        => true,
+        else => false,
+    };
 }
 
 /// Slugify heading text the way `github-slugger` does: case-fold, strip the
@@ -195,6 +234,10 @@ pub const Slugger = struct {
     /// Slugify `text` and make the result unique within this document.
     pub fn slug(self: *Slugger, alloc: std.mem.Allocator, text: []const u8) Error![]const u8 {
         const base = try slugify(alloc, text);
+        // A heading with no sluggable text (`#`, `## `, `### ###`) has no id to
+        // publish. Returning it unregistered keeps every such heading id-less,
+        // rather than numbering the second one `-1` off an empty base.
+        if (base.len == 0) return base;
         var result: []const u8 = base;
         while (self.occurrences.contains(result)) {
             // The counter tracked is always the *base* slug's, so a run of N

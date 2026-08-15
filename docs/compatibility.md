@@ -1,0 +1,234 @@
+# Compatibility Matrix
+
+md4x has **one dialect**. This document records how that dialect lines up against the
+three references it is measured against — CommonMark 0.31.2, GitHub, and Comark — at the
+**default preset**, meaning the flags a JS caller gets from `renderToHtml(input)` with no
+options.
+
+Everything here is measured, not asserted. See [Reproducing these numbers](#reproducing-these-numbers).
+
+## The default preset
+
+**Parser flags are not configurable from JS.** Every binding entry point passes
+`MD_DIALECT_ALL` as a literal — `src/md4x-wasm.zig:194,214,237` and
+`src/md4x-napi.zig:118,301,305`. The CLI defaults to the same value
+(`src/cli/md4x-cli.zig:85`), so the `.txt` suites exercise the JS parser preset.
+
+`MD_DIALECT_ALL` = `0x3F1F0C` (`src/abi.zig:459`):
+
+| On                                                                                                                                                                            | Off                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `PERMISSIVE{URL,EMAIL,WWW}AUTOLINKS`, `TABLES`, `STRIKETHROUGH`, `TASKLISTS`, `LATEXMATHSPANS`, `FRONTMATTER`, `COMPONENTS`, `ATTRIBUTES`, `ALERTS`, `HIGHLIGHT`, `FOOTNOTES` | `COLLAPSEWHITESPACE`, `PERMISSIVEATXHEADERS`, `NOINDENTEDCODEBLOCKS`, `NOHTMLBLOCKS`, `NOHTMLSPANS`, `HARD_SOFT_BREAKS` |
+
+This is `MD_DIALECT_GITHUB` plus exactly the five md4x-only extensions (latex,
+frontmatter, components, attributes, highlight). **Raw HTML passes through unsanitized.**
+
+**Renderer flags default to `SKIP_UTF8_BOM` only** (`packages/md4x/lib/wasm/common.mjs`,
+mirrored in `napi.mjs`). Notably absent by default: `HEADING_IDS` (`0x20`), `FULL_HTML`
+(`0x08`), `HEAL` (`0x100`).
+
+> `SKIP_UTF8_BOM` is always on and not overridable — a BOM is an encoding artifact, and
+> leaving it in derails the first block (`﻿---` stops reading as a frontmatter fence).
+> The bit is `0x0004` for HTML and `0x0002` for every other renderer. The CLI additionally
+> sets `DEBUG`, which is inert for output; that is now the only flag difference between the
+> suite runner and the JS library.
+
+## Matrix
+
+✅ matches · ➕ md4x extension — the reference has no such syntax · ⚠️ diverges on purpose ·
+❌ gap or unsupported · — not applicable
+
+| Feature                                | CommonMark |                 GitHub                  |            Comark             |
+| -------------------------------------- | :--------: | :-------------------------------------: | :---------------------------: |
+| Core blocks & inlines                  |     ✅     |                   ✅                    |              ✅               |
+| Void tag spelling (`<hr>` vs `<hr />`) |     ⚠️     |                   ✅                    |              ✅               |
+| Nested strong (`****foo****`)          |     ✅     |                   ⚠️                    |              ✅               |
+| Code fence info (`class="language-x"`) |     ✅     |                   ⚠️                    |              ✅               |
+| Raw HTML                               |     ✅     |             ⚠️ unsanitized              |              ✅               |
+| Entity escaping in attributes          |     ✅     |                   ⚠️                    |              ✅               |
+| Tables                                 |     —      |      ⚠️ can't interrupt paragraph       |              ✅               |
+| Task lists                             |     —      |     ❌ missing classes / a11y attrs     |            ⚠️ same            |
+| Strikethrough                          |     —      |                   ✅                    |              ✅               |
+| Permissive autolinks                   |     ➕     |           ⚠️ scheme allowlist           |              ✅               |
+| Alerts                                 |     —      | ⚠️ `<blockquote>` not `<div>`; superset |              ✅               |
+| Footnotes                              |     —      |       ❌ scaffolding + anchor ids       |              ✅               |
+| Frontmatter                            |     ➕     |                   ➕                    |              ✅               |
+| Components (`:c`, `::c`)               |     ➕     |                   ➕                    |              ✅               |
+| Attributes (`{#id .cls}`)              |     ➕     |                   ➕                    |      ⚠️ spaced `[span]`       |
+| Highlight (`==x==`)                    |     ➕     |                   ➕                    |              ✅               |
+| LaTeX math (`$x$`)                     |     ➕     |                   ➕                    |      ➕ non-Comark node       |
+| Heading ids                            | ⚠️ opt-in  |            ❌ off by default            | ❌ off by default (HTML only) |
+| Emoji shortcodes                       |     —      |          ❌ build-time opt-in           |     ❌ build-time opt-in      |
+| Comments hidden from output            |     —      |                    —                    |  ❌ HTML renderer emits them  |
+
+➕ marks syntax md4x adds; it is additive by nature, so a reference that lacks it is not a
+failure on either side. No row carries **➕ ⚠️** any more — that mark was for an extension
+whose delimiter collides with syntax the reference already uses, changing the rendering of
+documents that never opted in. Both are gone: wiki links were removed outright, so `[[x]]`
+is literal text again, and frontmatter now declines any `---` block that does not contain
+YAML (see [Frontmatter](#frontmatter)).
+
+## CommonMark 0.31.2
+
+> `test/spec.txt` in this repo has been **re-recorded to md4x's dialect** — it is not the
+> upstream file (148 insertions / 224 deletions since the 0.31.2 import at `485619f`).
+> That is why the suite reports 652/652. The numbers below are against pristine upstream.
+
+| Run                            |    Pass |  Fail |
+| ------------------------------ | ------: | ----: |
+| Default preset, normalized     | **649** | **3** |
+| Default preset, byte-exact     |     591 |    61 |
+| All extensions off, normalized | **652** | **0** |
+
+The 58 extra byte-exact failures are **entirely void-tag spelling** — `<hr>` ×27,
+`<img>` ×22, `<br>` ×9. Zero whitespace or entity divergence: the core parser is exact.
+
+All 3 semantic divergences are extension-driven and intentional:
+
+| Examples      | Cause                  | Effect                                                                    |
+| ------------- | ---------------------- | ------------------------------------------------------------------------- |
+| 608, 611, 612 | `PERMISSIVE*AUTOLINKS` | Bare URLs and emails linkified (GitHub agrees; CommonMark is the outlier) |
+
+Removing wiki links returned examples 548, 559 and 590 (`[[…]]` as literal text or a
+reference link) to exact; the frontmatter body test returned 96 and 98.
+
+### Frontmatter
+
+Frontmatter costs **zero** spec examples, which it did not before. An opening `---` only
+opens a block when a closing fence follows it _and_ what lies between reads as YAML:
+blank lines and `#` comments are skipped, and the first line of substance has to be a
+`key:` mapping line. A body that reads as markdown is a thematic break plus ordinary
+content, which is example 96 (`---\nFoo\n---\nBar\n---\nBaz`) exactly — and no document
+loses content to a `---` its author meant as a rule.
+
+A body with **no characters at all** between the fences does not open a block either, so
+example 98 (`---\n---`) is two thematic breaks. One character is enough to make it
+frontmatter again (`---\n \n---`), and so is a comment. That threshold is not invented
+here: it is where Comark draws the line, verified against `comark@0.6.2` case by case,
+and `test/spec-frontmatter.txt` (`# Empty Frontmatter`) pins each side of it.
+
+Component block props keep consuming an empty `---` block rather than rendering it —
+also Comark's behaviour, and there is no document content at that position to protect.
+
+Every other extension costs **zero** spec examples too. Collision probes confirm the guarding:
+`Costs $5 to $10`, `a == b`, `{#id}`, `x :: y`, `a[i][j]` all stay literal.
+
+## GitHub
+
+Measured live against `api.github.com/markdown` in both `markdown` and `gfm` modes; a case
+counts as parity if it matches either. Baseline: `test/gh-parity.baseline.json`,
+rationale in [.agents/github-parity.md](../.agents/github-parity.md).
+
+**186 divergences over 791 cases**, down from 192. The baseline was re-recorded after two
+changes: the frontmatter body test took spec.txt 96 and 98 to parity, and removing wiki
+links took 548 and 559 (590 dropped to a plain `entity-escaping` divergence, and the two
+wiki cases in `spec-footnotes.txt` are gone). `md4x-extension` fell from 10 to 3 between
+them.
+
+| Suite                         |  Parity |
+| ----------------------------- | ------: |
+| spec.txt                      | 545/652 |
+| spec-gfm.txt                  |   14/17 |
+| spec-tables.txt               |   11/14 |
+| spec-tasklists.txt            |     1/9 |
+| spec-footnotes.txt            |    9/36 |
+| spec-alerts.txt               |   11/43 |
+| spec-strikethrough.txt        |     5/5 |
+| spec-permissive-autolinks.txt |    9/15 |
+
+| Cause              |   n | Status                                             |
+| ------------------ | --: | -------------------------------------------------- |
+| `markup-shape`     |  63 | open — but only 47 actionable, see below           |
+| `sanitizer`        |  62 | not-goal — GitHub strips raw HTML, md4x does not   |
+| `unclassified`     |  23 | triaged, all documented                            |
+| `entity-escaping`  |  21 | not-goal                                           |
+| `md4x-extension`   |   3 | not-goal                                           |
+| `scheme-allowlist` |   7 | not-goal — GitHub linkifies only http(s)/mailto    |
+| `autolink-rules`   |   5 | not-goal — which characters may border an autolink |
+| `unicode-punct`    |   2 | not-goal — GitHub's tables predate 0.31            |
+
+100 of 186 are declared not-goals. **No divergence is an outright "md4x emits wrong HTML"
+bug** — each reduces to a not-goal, a decision already taken, a GitHub defect, or an open
+gap. Cases where md4x is the correct one include CommonMark-exact nested strong (8),
+`&#87654321;` (GitHub emits U+FFFD), footnote-in-link, and `[^nf]:` after a paragraph.
+
+Open, undecided gaps:
+
+- **Task lists** (8 cases) — md4x is a strict _subset_: no `<ul class="contains-task-list">`,
+  no `aria-label="Completed task"`, no `disabled`/`checked`. Renderer-only fix; real
+  screen-reader gap.
+- **Footnote scaffolding** (19 cases) — `class="footnotes"` vs `data-footnotes`, no `<p>`
+  wrap, `&#8617;` vs `↩` + `data-footnote-backref` + `aria-label`.
+- **Footnote anchor ids** (3–4 cases) — numbered `fn-1`/`fnref-1-1` instead of
+  label-derived `fn-a`. Breaks deep links into GitHub-rendered documents.
+- **Tables cannot interrupt a paragraph** (1 case) — highest real-document risk here: a
+  missing blank line turns an entire table into paragraph text.
+
+The other 16 `markup-shape` cases are not gaps: 8 are CommonMark-exact nested strong, 6
+are the `class="language-x"` fence spelling, and 2 are hosting artifacts (GitHub's camo
+image proxy, and its URL filter dropping `[link](foo\)\:)`).
+
+## Comark
+
+Spec: [.agents/comark/](../.agents/comark/) · AST: [comark-ast.md](comark-ast.md) ·
+conformance: `test/spec-comark.txt`.
+
+All Comark suites are green at the default preset — `spec-comark.txt` 122, `spec-components.txt`
+109, `spec-attributes.txt` 75, `spec-frontmatter.txt` 56, `spec-highlight.txt` 49,
+`spec-markdown.txt` 82, all 0 failures — and, since the BOM fix, green through the JS
+bindings too (`test/spec-frontmatter.txt:621` used to pass only on the CLI).
+
+On by default: components, attributes, frontmatter, `==mark==`, alerts, tables, task lists,
+strikethrough, autolinks, footnotes. Off: HTML heading ids, emoji, `heal`.
+
+Gaps between the Comark spec and md4x:
+
+| Item                              | Spec says                                                | md4x does                                         | Class                                                   |
+| --------------------------------- | -------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------- |
+| `$`-prefixed component names      | "must start with a letter or `$`" (`spec-comark.txt:34`) | `:$slot` stays literal                            | **spec vs impl**, untested                              |
+| `[span] {attr}` with a space      | `<span>` element (`attributes.md:329`)                   | `[span]` stays literal                            | documented divergence, **unpinned**                     |
+| Comments in output                | "not rendered" (`markdown.md:422`)                       | HTML renderer emits them verbatim; AST is correct | **spec vs impl**                                        |
+| Heading ids                       | every heading gets one                                   | HTML omits, AST always includes                   | off by default — `renderToHtml` and `parseAST` disagree |
+| Emoji `:wave:`                    | 👋                                                       | literal                                           | build-time `-Demoji=true` (~26 KB gz)                   |
+| `<ul class="contains-task-list">` | present                                                  | absent                                            | documented not-goal                                     |
+| Non-Comark node types             | —                                                        | `math`, `mark`, `footnote-ref`                    | superset by design, **not disableable from JS**         |
+| `meta` shape                      | `{toc, summary}`                                         | `{headings}` (+`title`)                           | deliberate, declared                                    |
+| Lone inline component             | inline                                                   | lifted to block                                   | deliberate — matches `markdown-it-mdc`                  |
+
+## Known bugs
+
+None currently tracked.
+
+_(Wiki links used to be listed here as bug 1 — `[[…]]` had no flanking guard, so
+`arr[[i]] index` linkified inside code-ish prose and `[[[foo]]]` rendered as
+`[<x-wikilink>foo</x-wikilink>]`. Fixed by removing the extension: neither CommonMark nor
+GitHub-flavored Markdown has wiki links, and `[[x]]` is literal text again.)_
+
+_(Frontmatter used to be listed here as bug 2 — `---\nFoo\n---\nBar` silently deleted an
+`<hr>` and an `<h2>`. Fixed: an opening fence now has to be followed by YAML, not by
+markdown, in both the document and the block-props position. See
+[Frontmatter](#frontmatter) for the one case left, and `spec-frontmatter.txt`, `# An
+Opening Fence Only Opens Frontmatter When YAML Follows It`.)_
+
+## Reproducing these numbers
+
+```sh
+zig build                                    # CLI at zig-out/bin/md4x
+bun run build:js                             # wasm + napi + standalone
+bun scripts/run-tests.ts                     # every suite
+python3 test/run-testsuite.py -s test/spec.txt        # one suite, normalized
+python3 test/run-testsuite.py -s test/spec.txt --no-normalize
+bun scripts/gh-parity.ts                     # GitHub parity (needs a token)
+```
+
+For the true CommonMark score, diff against upstream 0.31.2 rather than the committed
+`test/spec.txt`:
+
+```sh
+git show 485619f:test/spec.txt > /tmp/spec-upstream.txt   # == upstream 0.31.2
+python3 test/run-testsuite.py -s /tmp/spec-upstream.txt
+```
+
+> The committed `test/spec.txt` is dialect-adjusted, so it can never report a CommonMark
+> divergence again — a future regression in, say, autolink flanking would be invisible to
+> it. Treat 652/652 as a no-regression signal, not a conformance claim.

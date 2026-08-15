@@ -1,0 +1,1612 @@
+<!--
+  Comark reference-implementation import.
+
+  Source repo   : https://github.com/comarkdown/comark
+  Commit        : 40dd9705e7c302062468fdac38e81d71c8a22c75
+  Licence       : MIT (Copyright (c) 2026 Comark team and contributors)
+  Retrieved     : 2026-08-14
+  Imported from : packages/comark/SPEC/**.md  (Input/AST/HTML fixtures)
+                  packages/comark/test/*.test.ts  (vitest suites)
+
+  The INPUTS below are Comark's — edge cases their maintainers found worth
+  testing. The EXPECTED OUTPUTS are md4x's contract, verified case by case
+  against Comark's own assertions; they are not a verbatim copy of them.
+  Every example here is one where md4x and Comark agree (modulo md4x's
+  documented, deliberate differences in `meta.headings` and in the AST
+  renderer's unwrap rules). Cases where the two disagree were deliberately
+  left out rather than pinned to md4x's answer; they are tracked in the
+  import report, not here.
+
+  Each example carries a `<!-- comark ... -->` line naming the upstream file
+  it came from.
+-->
+
+# Comark reference suite
+
+Cases mined from the Comark reference implementation's own test corpus. Unlike
+CommonMark and GFM, Comark ships no portable `.txt` spec, so these were
+extracted from its `SPEC/` fixtures and its vitest suites and re-pinned against
+md4x.
+
+## Inline component name validation
+
+Regressions from Comark's `component-name.test.ts`: a component name must
+start with a letter or `$`. A colon followed by digits stays plain text --
+before the fix `:8100` produced an `['8100', {}]` element and crashed
+renderers that fed it to `createElement`.
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+The server is running on :8100
+.
+{"nodes":[["p",{},"The server is running on :8100"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+Meet me at :30 past the hour
+.
+{"nodes":[["p",{},"Meet me at :30 past the hour"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+:8100
+.
+{"nodes":[["p",{},":8100"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+:8100
+hello
+.
+{"nodes":[["p",{},":8100\nhello"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+::8100
+.
+{"nodes":[["p",{},"::8100"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+an :inline-component here
+.
+{"nodes":[["p",{},"an ",["inline-component",{}]," here"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+a :badge[New] tag
+.
+{"nodes":[["p",{},"a ",["badge",{},"New"]," tag"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/component-name.test.ts -->
+```````````````````````````````` example [no-normalize]
+::alert
+Hello
+::
+.
+{"nodes":[["alert",{},["p",{},"Hello"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Inline component bracket content
+
+From `inline-component-content.test.ts` and `syntax/brackets.test.ts`. The
+bracket content of `:name[...]` must consume nested `[...]` pairs -- images,
+links and nested components all contain `]` -- instead of terminating at the
+first `]` and spilling the remainder into the paragraph.
+
+<!-- comark test/inline-component-content.test.ts -->
+```````````````````````````````` example [no-normalize]
+See :badge[![icon](i.png)] here
+.
+{"nodes":[["p",{},"See ",["badge",{},["img",{"src":"i.png","alt":"icon"}]]," here"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/inline-component-content.test.ts -->
+```````````````````````````````` example [no-normalize]
+See :badge[[docs](https://x.dev)] here
+.
+{"nodes":[["p",{},"See ",["badge",{},["a",{"href":"https://x.dev"},"docs"]]," here"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/inline-component-content.test.ts -->
+```````````````````````````````` example [no-normalize]
+See :badge[\[docs\](x)] here
+.
+{"nodes":[["p",{},"See ",["badge",{},"[docs](x)"]," here"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/brackets.test.ts -->
+```````````````````````````````` example [no-normalize]
+x :badge[a [b] c] y
+.
+{"nodes":[["p",{},"x ",["badge",{},"a [b] c"]," y"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/brackets.test.ts -->
+```````````````````````````````` example [no-normalize]
+x :badge[[a] and [b]] y
+.
+{"nodes":[["p",{},"x ",["badge",{},"[a] and [b]"]," y"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/brackets.test.ts -->
+```````````````````````````````` example [no-normalize]
+x :badge[] y
+.
+{"nodes":[["p",{},"x ",["badge",{}]," y"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/brackets.test.ts -->
+```````````````````````````````` example [no-normalize]
+x :badge[a [b] y
+.
+{"nodes":[["p",{},"x :badge[a [b] y"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/brackets.test.ts -->
+```````````````````````````````` example [no-normalize]
+x :badge[a \\ b] y
+.
+{"nodes":[["p",{},"x ",["badge",{},"a \\ b"]," y"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/inline-component-with-content.md -->
+```````````````````````````````` example [no-normalize]
+:inline[Syntax]
+.
+{"nodes":[["inline",{},"Syntax"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/inline-component-with-content-atrributes.md -->
+```````````````````````````````` example [no-normalize]
+:inline[Syntax]{with=prop}
+.
+{"nodes":[["inline",{"with":"prop"},"Syntax"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Inline component properties
+
+`attribute-inline-component.md` pins the four `{...}` forms on an inline
+component; `inline-component-props-boolean.md` pins the boolean/`:`-binding
+coercion.
+
+<!-- comark SPEC/COMARK/attribute-inline-component.md -->
+```````````````````````````````` example [no-normalize]
+Here :in{bool} :in{#id1} :in{.class1} :in{attr="value"}
+.
+{"nodes":[["p",{},"Here ",["in",{":bool":"true"}]," ",["in",{"id":"id1"}]," ",["in",{"class":"class1"}]," ",["in",{"attr":"value"}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/inline-component-props-boolean.md -->
+```````````````````````````````` example [no-normalize]
+:component{reverse :square="false" :disabled="true"}
+.
+{"nodes":[["component",{":reverse":"true",":square":"false",":disabled":"true"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Boolean property coercion
+
+`misc.test.ts`: a bare attribute is promoted to a `:name="true"` binding,
+while explicit `true`/`false` strings and non-boolean values are left as
+plain attributes.
+
+<!-- comark test/misc.test.ts -->
+```````````````````````````````` example [no-normalize]
+::x{flag other="true" off="false" count="5"}
+::
+.
+{"nodes":[["x",{":flag":"true","other":"true","off":"false","count":"5"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/misc.test.ts -->
+```````````````````````````````` example [no-normalize]
+::x{on=true off=false}
+::
+.
+{"nodes":[["x",{"on":"true","off":"false"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/misc.test.ts -->
+```````````````````````````````` example [no-normalize]
+::x{:flag="false" label="falsey" zero="0"}
+::
+.
+{"nodes":[["x",{":flag":"false","label":"falsey","zero":"0"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/misc.test.ts -->
+```````````````````````````````` example [no-normalize]
+:badge{disabled="false" active}
+.
+{"nodes":[["badge",{"disabled":"false",":active":"true"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Property syntax forms
+
+Translated from `syntax/props.test.ts`, which drives Comark's `parseProps`
+directly. Quoted values keep their spaces; a `:`-prefixed key keeps the
+prefix; a single-quoted value may hold a JSON literal verbatim.
+
+<!-- comark test/syntax/props.test.ts -->
+```````````````````````````````` example [no-normalize]
+:c{}
+.
+{"nodes":[["c",{}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/props.test.ts -->
+```````````````````````````````` example [no-normalize]
+:c{.foo #my-id no-border}
+.
+{"nodes":[["c",{"class":"foo","id":"my-id",":no-border":"true"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/props.test.ts -->
+```````````````````````````````` example [no-normalize]
+:c{foo=bar baz}
+.
+{"nodes":[["c",{"foo":"bar",":baz":"true"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/props.test.ts -->
+```````````````````````````````` example [no-normalize]
+:c{:items='["Nuxt", "Vue", "React"]'}
+.
+{"nodes":[["c",{":items":"[\"Nuxt\", \"Vue\", \"React\"]"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/props.test.ts -->
+```````````````````````````````` example [no-normalize]
+:c{:options='{"responsive": true, "scales": {"y": {"beginAtZero": true}}}'}
+.
+{"nodes":[["c",{":options":"{\"responsive\": true, \"scales\": {\"y\": {\"beginAtZero\": true}}}"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/syntax/props.test.ts -->
+```````````````````````````````` example [no-normalize]
+:c{.a.b}
+.
+{"nodes":[["c",{"class":"a b"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Block components
+
+<!-- comark SPEC/COMARK/component.md -->
+```````````````````````````````` example
+::component
+First Paragraph
+
+Second Paragraph
+::
+.
+<component>
+<p>First Paragraph</p>
+<p>Second Paragraph</p>
+</component>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-empty.md -->
+```````````````````````````````` example
+::component
+::
+.
+<component>
+</component>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-multiple-colons.md -->
+```````````````````````````````` example
+:::component
+:::
+.
+<component>
+</component>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-with-heading.md -->
+```````````````````````````````` example
+::steps
+### Step 1
+
+![Image](https://example.com/image.jpg)
+
+### Step 2
+
+Text content
+::
+.
+<steps>
+<h3>Step 1</h3>
+<p><img src="https://example.com/image.jpg" alt="Image"></p>
+<h3>Step 2</h3>
+<p>Text content</p>
+</steps>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-short+block.md -->
+```````````````````````````````` example
+:no-sugar-syntax
+
+::component
+#first
+First Paragraph
+
+#second
+Second Paragraph
+::
+.
+<p><no-sugar-syntax></no-sugar-syntax></p>
+<component>
+<template name="first">
+<p>First Paragraph</p>
+</template>
+<template name="second">
+<p>Second Paragraph</p>
+</template>
+</component>
+````````````````````````````````
+
+## Component YAML property block
+
+<!-- comark SPEC/COMARK/component-yaml-props.md -->
+```````````````````````````````` example [no-normalize]
+::component
+---
+attr: value
+object-attr:
+  key1: value1
+  key2: value2
+array:
+  - item 1
+  - item 2
+---
+First Paragraph
+
+Second Paragraph
+::
+.
+{"nodes":[["component",{"attr":"value","object-attr":{"key1":"value1","key2":"value2"},"array":["item 1","item 2"]},["p",{},"First Paragraph"],["p",{},"Second Paragraph"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-yaml-props-thematic-break.md -->
+```````````````````````````````` example
+::card
+Above
+
+---
+
+Middle text
+
+---
+
+Below
+::
+.
+<card>
+<p>Above</p>
+<hr>
+<p>Middle text</p>
+<hr>
+<p>Below</p>
+</card>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-yaml-props-thematic-break-named-slot.md -->
+```````````````````````````````` example
+::card
+#description
+Line one
+
+---
+
+Middle line
+
+---
+
+Line three
+::
+.
+<card>
+<template name="description">
+<p>Line one</p>
+<hr>
+<p>Middle line</p>
+<hr>
+<p>Line three</p>
+</template>
+</card>
+````````````````````````````````
+
+## Empty and comment-only property blocks
+
+Regressions for comarkdown/comark#319: an empty, whitespace-only or
+comment-only `---` block between the component opener and its body must not
+throw and must not swallow the slot content.
+
+<!-- comark test/empty-props.test.ts -->
+```````````````````````````````` example [no-normalize]
+::page-section
+---
+---
+#title
+Hello
+::
+.
+{"nodes":[["page-section",{},["template",{"name":"title"},"Hello"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/empty-props.test.ts -->
+```````````````````````````````` example [no-normalize]
+::hero
+---
+   
+---
+content
+::
+.
+{"nodes":[["hero",{},["p",{},"content"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/empty-props.test.ts -->
+```````````````````````````````` example [no-normalize]
+::hero
+---
+# todo
+---
+content
+::
+.
+{"nodes":[["hero",{},["p",{},"content"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/empty-props.test.ts -->
+```````````````````````````````` example [no-normalize]
+::hero
+---
+title: x
+---
+#title
+Hi
+::
+.
+{"nodes":[["hero",{"title":"x"},["template",{"name":"title"},"Hi"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/empty-props.test.ts -->
+```````````````````````````````` example [no-normalize]
+::hero
+---
+count: 3
+label: hello
+---
+content
+::
+.
+{"nodes":[["hero",{"count":3,"label":"hello"},["p",{},"content"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/empty-props.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+# comment only
+---
+
+# Heading
+.
+{"nodes":[["h1",{"id":"heading"},"Heading"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Heading","id":"heading"}]}}
+.
+--format=json
+````````````````````````````````
+
+## Named slots
+
+<!-- comark SPEC/COMARK/component-slots.md -->
+```````````````````````````````` example
+::component
+#first
+First Paragraph
+
+#second
+Second Paragraph
+::
+.
+<component>
+<template name="first">
+<p>First Paragraph</p>
+</template>
+<template name="second">
+<p>Second Paragraph</p>
+</template>
+</component>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-slot-default-named.md -->
+```````````````````````````````` example
+::component
+#default
+Default slot content
+::
+.
+<component>
+<template name="default">
+<p>Default slot content</p>
+</template>
+</component>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/component-slots-with-default-named.md -->
+```````````````````````````````` example
+::component
+#first
+First Paragraph
+
+#default
+Second Paragraph
+::
+.
+<component>
+<template name="first">
+<p>First Paragraph</p>
+</template>
+<template name="default">
+<p>Second Paragraph</p>
+</template>
+</component>
+````````````````````````````````
+
+## Nested components separated by blank-line runs
+
+Regressions for comarkdown/comark#322: a run of two or more blank lines
+between siblings inside a nested component used to drop every later sibling
+(YAML-props and shorthand forms) or emit a spurious empty paragraph (slot
+form). A blank run of any length is one separator, as in CommonMark, and the
+enclosing component still closes at its own marker.
+
+<!-- comark test/nested-component-blank-lines.test.ts -->
+```````````````````````````````` example [no-normalize]
+::outer
+  ::mid
+  ---
+  columns: 3
+  ---
+    ::a
+    ---
+    display: "flex"
+    ---
+    ::
+
+
+    ::b
+    ---
+    display: "flex"
+    ---
+    ::
+  ::
+::
+.
+{"nodes":[["outer",{},["mid",{"columns":3},["a",{"display":"flex"}],["b",{"display":"flex"}]]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/nested-component-blank-lines.test.ts -->
+```````````````````````````````` example [no-normalize]
+::outer
+  ::mid
+  ---
+  columns: 3
+  ---
+    ::a
+    ::
+
+
+  ::
+after
+::
+.
+{"nodes":[["outer",{},["mid",{"columns":3},["a",{}]],["p",{},"after"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/nested-component-blank-lines.test.ts -->
+```````````````````````````````` example [no-normalize]
+::outer
+  :leaf1[hi]
+
+
+  ::leaf2
+  ::
+
+
+  ::leaf3
+  ::
+::
+.
+{"nodes":[["outer",{},["leaf1",{},"hi"],["leaf2",{}],["leaf3",{}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/nested-component-blank-lines.test.ts -->
+```````````````````````````````` example [no-normalize]
+::outer
+  :leaf1[hi]
+
+
+after
+::
+.
+{"nodes":[["outer",{},["leaf1",{},"hi"],["p",{},"after"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Inline attributes on inline constructs
+
+<!-- comark SPEC/COMARK/attribute-code.md -->
+```````````````````````````````` example
+Here `code`{bool} `code`{#id1} `code`{.class1} `code`{attr="value"}
+.
+<p>Here <code bool>code</code> <code id="id1">code</code> <code class="class1">code</code> <code attr="value">code</code></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attribute-image.md -->
+```````````````````````````````` example
+Here ![alt](https://example.com/image.jpg){bool} ![alt](https://example.com/image.jpg){#id1} ![alt](https://example.com/image.jpg){.class1} ![alt](https://example.com/image.jpg){attr="value"}
+.
+<p>Here <img src="https://example.com/image.jpg" alt="alt" bool> <img src="https://example.com/image.jpg" alt="alt" id="id1"> <img src="https://example.com/image.jpg" alt="alt" class="class1"> <img src="https://example.com/image.jpg" alt="alt" attr="value"></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attribute-italic.md -->
+```````````````````````````````` example
+Here *em*{bool} *em*{#id1} *em*{.class1} *em*{attr="value"}
+.
+<p>Here <em bool>em</em> <em id="id1">em</em> <em class="class1">em</em> <em attr="value">em</em></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attribute-link.md -->
+```````````````````````````````` example
+Here [link](https://example.com){bool} [link](https://example.com){#id1} [link](https://example.com){.class1} [link](https://example.com){attr="value"}
+.
+<p>Here <a href="https://example.com" bool>link</a> <a href="https://example.com" id="id1">link</a> <a href="https://example.com" class="class1">link</a> <a href="https://example.com" attr="value">link</a></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attribute-strong.md -->
+```````````````````````````````` example
+Here **strong**{bool} **strong**{#id1} **strong**{.class1} **strong**{attr="value"}
+.
+<p>Here <strong bool>strong</strong> <strong id="id1">strong</strong> <strong class="class1">strong</strong> <strong attr="value">strong</strong></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attribute-span.md -->
+```````````````````````````````` example
+Here [link]{bool} [link]{#id1} [link]{.class1} [link]{attr="value"}
+.
+<p>Here <span bool>link</span> <span id="id1">link</span> <span class="class1">link</span> <span attr="value">link</span></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attribute-span-multiple-classes.md -->
+```````````````````````````````` example
+Welcome to [site]{.bg-gradient-to-r.from-primary-600.to-purple-600.bg-clip-text.text-transparent}
+.
+<p>Welcome to <span class="bg-gradient-to-r from-primary-600 to-purple-600 bg-clip-text text-transparent">site</span></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/span.md -->
+```````````````````````````````` example
+[**Bold** and *italic* text]{.highlight}
+.
+<p><span class="highlight"><strong>Bold</strong> and <em>italic</em> text</span></p>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/link-with-span.md -->
+```````````````````````````````` example
+[[1]{} Document](#)
+
+[[link-name]{.cls} more](https://example.com)
+.
+<p><a href="#"><span>1</span> Document</a></p>
+<p><a href="https://example.com"><span class="cls">link-name</span> more</a></p>
+````````````````````````````````
+
+## Component wrappers around native blocks
+
+A `::tag` whose name is a plain HTML block element wraps the block that
+follows it, and its `{...}` props land on the wrapper.
+
+<!-- comark SPEC/COMARK/attributes/wrapped-blockquote.md -->
+```````````````````````````````` example
+::blockquote{attr="value"}
+> Blockquote paragraph 1 {attr="value"}
+>
+> Blockquote paragraph 2 {attr2="value2"}
+::
+.
+<blockquote attr="value">
+<p attr="value">Blockquote paragraph 1</p>
+<p attr2="value2">Blockquote paragraph 2</p>
+</blockquote>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/attributes/wrapped-table.md -->
+```````````````````````````````` example
+::table{attr="value"}
+|col1|col2|
+|------|------|
+|cell1|cell2|
+::
+.
+<table attr="value">
+<thead>
+<tr>
+<th>col1</th>
+<th>col2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cell1</td>
+<td>cell2</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/ordered-list-start-wrapper-normalizes.md -->
+```````````````````````````````` example
+::ol{start="3"}
+1. apple
+2. banana
+::
+.
+<ol start="3">
+<li>apple</li>
+<li>banana</li>
+</ol>
+````````````````````````````````
+
+## Data binding syntax
+
+`:prop` bindings and `{{ ... }}` interpolation are carried through the tree
+verbatim; resolving them is the renderer host's job, not the parser's.
+
+<!-- comark SPEC/COMARK/data-binding-inline.md -->
+```````````````````````````````` example [no-normalize]
+---
+user:
+  name: Ada
+---
+
+Hello :badge{:label="frontmatter.user.name"}!
+.
+{"nodes":[["p",{},"Hello ",["badge",{":label":"frontmatter.user.name"}],"!"]],"frontmatter":{"user":{"name":"Ada"}},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/data-binding-props.md -->
+```````````````````````````````` example [no-normalize]
+::card{title="Hello" variant="primary"}
+:::badge{:label="props.title" :color="props.variant"}
+:::
+::
+.
+{"nodes":[["card",{"title":"Hello","variant":"primary"},["badge",{":label":"props.title",":color":"props.variant"}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/data-binding-unresolved.md -->
+```````````````````````````````` example [no-normalize]
+::card{:to="$doc.snippet.link"}
+::
+.
+{"nodes":[["card",{":to":"$doc.snippet.link"}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Frontmatter
+
+<!-- comark SPEC/COMARK/frontmatter-basic.md -->
+```````````````````````````````` example [no-normalize]
+---
+title: My Title
+description: My Description
+---
+# Content
+.
+{"nodes":[["h1",{"id":"content"},"Content"]],"frontmatter":{"title":"My Title","description":"My Description"},"meta":{"headings":[{"level":1,"text":"Content","id":"content"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/frontmatter-multiple-fields.md -->
+```````````````````````````````` example [no-normalize]
+---
+title: Test Post
+author: John Doe
+date: 2024-01-01
+tags:
+  - test
+  - markdown
+---
+Content here
+.
+{"nodes":[["p",{},"Content here"]],"frontmatter":{"title":"Test Post","author":"John Doe","date":"2024-01-01","tags":["test","markdown"]},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/COMARK/frontmatter-unclosed-is-thematic-break.md -->
+```````````````````````````````` example [no-normalize]
+---
+# Heading
+.
+{"nodes":[["hr",{}],["h1",{"id":"heading"},"Heading"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Heading","id":"heading"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/yaml.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+title: Nested
+meta:
+  description: A description
+  keywords:
+    - one
+    - two
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"title":"Nested","meta":{"description":"A description","keywords":["one","two"]}},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/frontmatter.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+title: "Hello: World"
+description: "It's a test"
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"title":"Hello: World","description":"It's a test"},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/frontmatter.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+count: 42
+price: 19.99
+negative: -5
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"count":42,"price":19.99,"negative":-5},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/frontmatter.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+published: true
+draft: false
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"published":true,"draft":false},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/frontmatter.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+title: Test
+description: null
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{"title":"Test","description":null},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/frontmatter.test.ts -->
+```````````````````````````````` example [no-normalize]
+Some text
+---
+title: Not Frontmatter
+---
+.
+{"nodes":[["h2",{"id":"some-text"},"Some text"],["h2",{"id":"title-not-frontmatter"},"title: Not Frontmatter"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"Some text","id":"some-text"},{"level":2,"text":"title: Not Frontmatter","id":"title-not-frontmatter"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/frontmatter.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+title: Unclosed
+.
+{"nodes":[["hr",{}],["p",{},"title: Unclosed"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Frontmatter documents that resolve to nothing
+
+`yaml.test.ts` pins the documents Comark's `parseYaml` resolves to
+`undefined`: whitespace-only and comment-only blocks. md4x likewise leaves
+`frontmatter` empty for them.
+
+<!-- comark test/yaml.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+   
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/yaml.test.ts -->
+```````````````````````````````` example [no-normalize]
+---
+# only a comment
+---
+
+Content
+.
+{"nodes":[["p",{},"Content"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Comments
+
+Comark's `SPEC/COMARK/emoji.md` fixture is deliberately absent: md4x's emoji
+shortcode table is a `-Demoji=true` build-time opt-in and no shipped artifact
+carries it, so the default build leaves `:rocket:` as text where Comark
+substitutes the character. Per this file's rule, a case the two disagree on is
+left out rather than pinned to md4x's answer. See the `## Emojis` section of
+`spec-markdown.txt` for the default behaviour.
+
+<!-- comark SPEC/COMARK/comment.md -->
+```````````````````````````````` example [no-normalize]
+<!-- Single line comment -->
+
+<!--
+
+Multi line Comment
+
+-->
+.
+{"nodes":[[null,{}," Single line comment "],[null,{},"\n\nMulti line Comment\n\n"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Heading ids
+
+From `heading-ids.test.ts`. The slug is built from the heading's *text*, so
+no tag name leaks in from bold, code or link children, and a repeated
+heading gets a numeric suffix.
+
+<!-- comark test/heading-ids.test.ts -->
+```````````````````````````````` example [no-normalize]
+## Options
+
+## Options
+.
+{"nodes":[["h2",{"id":"options"},"Options"],["h2",{"id":"options-1"},"Options"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"Options","id":"options"},{"level":2,"text":"Options","id":"options-1"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/heading-ids.test.ts -->
+```````````````````````````````` example [no-normalize]
+## 1. Never let an LLM **speak** for you
+.
+{"nodes":[["h2",{"id":"1-never-let-an-llm-speak-for-you"},"1. Never let an LLM ",["strong",{},"speak"]," for you"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"1. Never let an LLM speak for you","id":"1-never-let-an-llm-speak-for-you"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/heading-ids.test.ts -->
+```````````````````````````````` example [no-normalize]
+## The `parse` function
+.
+{"nodes":[["h2",{"id":"the-parse-function"},"The ",["code",{},"parse"]," function"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"The parse function","id":"the-parse-function"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/heading-ids.test.ts -->
+```````````````````````````````` example [no-normalize]
+## See [Nuxt](https://nuxt.com) docs
+.
+{"nodes":[["h2",{"id":"see-nuxt-docs"},"See ",["a",{"href":"https://nuxt.com"},"Nuxt"]," docs"]],"frontmatter":{},"meta":{"headings":[{"level":2,"text":"See Nuxt docs","id":"see-nuxt-docs"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/headings-id-duplicate.md -->
+```````````````````````````````` example [no-normalize]
+# Hello
+
+## Hello World
+
+## Hello World
+.
+{"nodes":[["h1",{"id":"hello"},"Hello"],["h2",{"id":"hello-world"},"Hello World"],["h2",{"id":"hello-world-1"},"Hello World"]],"frontmatter":{},"meta":{"headings":[{"level":1,"text":"Hello","id":"hello"},{"level":2,"text":"Hello World","id":"hello-world"},{"level":2,"text":"Hello World","id":"hello-world-1"}]}}
+.
+--format=json
+````````````````````````````````
+
+## Tables
+
+<!-- comark SPEC/GFM/table.md -->
+```````````````````````````````` example
+| Header 1 | Header 2 |
+|----------|----------|
+| Cell 1   | Cell 2   |
+| Cell 3   | Cell 4   |
+.
+<table>
+<thead>
+<tr>
+<th>Header 1</th>
+<th>Header 2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cell 1</td>
+<td>Cell 2</td>
+</tr>
+<tr>
+<td>Cell 3</td>
+<td>Cell 4</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+<!-- comark SPEC/GFM/table-inline-markdown.md -->
+```````````````````````````````` example
+| Formatting | Example |
+|------------|---------|
+| **Bold** | `code` |
+| *Italic* | [link](url) |
+.
+<table>
+<thead>
+<tr>
+<th>Formatting</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Bold</strong></td>
+<td><code>code</code></td>
+</tr>
+<tr>
+<td><em>Italic</em></td>
+<td><a href="url">link</a></td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+<!-- comark SPEC/GFM/table-vary-length.md -->
+```````````````````````````````` example
+| Command | Description |
+| --- | --- |
+| git status | List all new or modified files |
+| git diff | Show file differences that haven't been staged |
+.
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>git status</td>
+<td>List all new or modified files</td>
+</tr>
+<tr>
+<td>git diff</td>
+<td>Show file differences that haven't been staged</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+<!-- comark SPEC/GFM/table-vary-length-formatting.md -->
+```````````````````````````````` example
+| Command | Description |
+| --- | --- |
+| `git status` | List all *new or modified* files |
+| `git diff` | Show file differences that **haven't been** staged |
+.
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>git status</code></td>
+<td>List all <em>new or modified</em> files</td>
+</tr>
+<tr>
+<td><code>git diff</code></td>
+<td>Show file differences that <strong>haven't been</strong> staged</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/unordered-list-table.md -->
+```````````````````````````````` example
+- Item with table:
+
+  | Name  | Value |
+  |-------|-------|
+  | foo   | bar   |
+.
+<ul>
+<li><p>Item with table:</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>foo</td>
+<td>bar</td>
+</tr>
+</tbody>
+</table>
+</li>
+</ul>
+````````````````````````````````
+
+## CommonMark shapes in the Comark AST
+
+Plain CommonMark, but pinned here in the tuple-AST form Comark's fixtures
+assert, which `spec.txt` (an HTML corpus) does not cover.
+
+<!-- comark SPEC/common-mark/autolink.md -->
+```````````````````````````````` example [no-normalize]
+Visit it on <https://nuxt.com>
+.
+{"nodes":[["p",{},"Visit it on ",["a",{"href":"https://nuxt.com"},"https://nuxt.com"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/links.md -->
+```````````````````````````````` example [no-normalize]
+[Document](#)
+
+[[1] Document](#)
+
+[[link-name] more](https://example.com)
+.
+{"nodes":[["p",{},["a",{"href":"#"},"Document"]],["p",{},["a",{"href":"#"},"[1] Document"]],["p",{},["a",{"href":"https://example.com"},"[link-name] more"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/link-text-with-closing-bracket.md -->
+```````````````````````````````` example [no-normalize]
+[foo\] bar](/url)
+.
+{"nodes":[["p",{},["a",{"href":"/url"},"foo] bar"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-link-image.md -->
+```````````````````````````````` example [no-normalize]
+[![An old rock in the desert](/assets/images/shiprock.jpg "Shiprock, New Mexico by Beau Rogers")](/link)
+.
+{"nodes":[["p",{},["a",{"href":"/link"},["img",{"src":"/assets/images/shiprock.jpg","alt":"An old rock in the desert","title":"Shiprock, New Mexico by Beau Rogers"}]]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-link-code-content.md -->
+```````````````````````````````` example [no-normalize]
+[`Nuxt`](https://nuxt.com)
+.
+{"nodes":[["p",{},["a",{"href":"https://nuxt.com"},["code",{},"Nuxt"]]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-link-hash.md -->
+```````````````````````````````` example [no-normalize]
+[Nuxt](#nuxt)
+.
+{"nodes":[["p",{},["a",{"href":"#nuxt"},"Nuxt"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-link-backslash-escaped.md -->
+```````````````````````````````` example [no-normalize]
+\[Animation Bug\]\(/bugs#section\)
+.
+{"nodes":[["p",{},"[Animation Bug](/bugs#section)"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/image-title.md -->
+```````````````````````````````` example [no-normalize]
+![alt](https://example.com/image.jpg "title")
+.
+{"nodes":[["p",{},["img",{"src":"https://example.com/image.jpg","alt":"alt","title":"title"}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-image.md -->
+```````````````````````````````` example [no-normalize]
+![The San Juan Mountains are beautiful](/assets/images/san-juan-mountains.jpg "San Juan Mountains")
+.
+{"nodes":[["p",{},["img",{"src":"/assets/images/san-juan-mountains.jpg","alt":"The San Juan Mountains are beautiful","title":"San Juan Mountains"}]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-code-double-tick.md -->
+```````````````````````````````` example [no-normalize]
+``Use `code` in your Markdown file.``
+.
+{"nodes":[["p",{},["code",{},"Use `code` in your Markdown file."]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/line-break.md -->
+```````````````````````````````` example [no-normalize]
+Hello  
+World
+.
+{"nodes":[["p",{},"Hello",["br",{}],"World"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/blockquote-heading.md -->
+```````````````````````````````` example [no-normalize]
+> #### The quarterly results look great!
+.
+{"nodes":[["blockquote",{},["h4",{"id":"the-quarterly-results-look-great"},"The quarterly results look great!"]]],"frontmatter":{},"meta":{"headings":[{"level":4,"text":"The quarterly results look great!","id":"the-quarterly-results-look-great"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/blockquote-heading-paragraph.md -->
+```````````````````````````````` example [no-normalize]
+> #### The quarterly results look great!
+> 
+> Paragraph
+.
+{"nodes":[["blockquote",{},["h4",{"id":"the-quarterly-results-look-great"},"The quarterly results look great!"],["p",{},"Paragraph"]]],"frontmatter":{},"meta":{"headings":[{"level":4,"text":"The quarterly results look great!","id":"the-quarterly-results-look-great"}]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/wrapped-blockquote-paragraph.md -->
+```````````````````````````````` example [no-normalize]
+> This is a simple blockquote
+.
+{"nodes":[["blockquote",{},["p",{},"This is a simple blockquote"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/ordered-list-numbering.md -->
+```````````````````````````````` example [no-normalize]
+1. First item
+1. Second item
+1. Third item
+1. Fourth item
+.
+{"nodes":[["ol",{},["li",{},"First item"],["li",{},"Second item"],["li",{},"Third item"],["li",{},"Fourth item"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/ordered-list-numbering2.md -->
+```````````````````````````````` example [no-normalize]
+1. First item
+8. Second item
+3. Third item
+5. Fourth item
+.
+{"nodes":[["ol",{},["li",{},"First item"],["li",{},"Second item"],["li",{},"Third item"],["li",{},"Fourth item"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/unordered-list-multi-paragraph.md -->
+```````````````````````````````` example [no-normalize]
+- para1
+
+  para2
+.
+{"nodes":[["ul",{},["li",{},["p",{},"para1"],["p",{},"para2"]]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/unordered-list-numbers.md -->
+```````````````````````````````` example [no-normalize]
+- 1968\. A great year!
+- I think 1969 was second best.
+.
+{"nodes":[["ul",{},["li",{},"1968. A great year!"],["li",{},"I think 1969 was second best."]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/horizontal-rule-bare.md -->
+```````````````````````````````` example [no-normalize]
+---
+.
+{"nodes":[["hr",{}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/horizontal-rule-more-.md -->
+```````````````````````````````` example [no-normalize]
+Paragraph
+
+------------------
+.
+{"nodes":[["p",{},"Paragraph"],["hr",{}]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Backslash escapes
+
+`paragraph-escaped-*.md`: each escape must survive into the text node as a
+literal character rather than starting a construct.
+
+<!-- comark SPEC/common-mark/paragraph-escaped-angle-bracket.md -->
+```````````````````````````````` example [no-normalize]
+render a \<div> tag
+.
+{"nodes":[["p",{},"render a <div> tag"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-backslash.md -->
+```````````````````````````````` example [no-normalize]
+a \\ backslash
+.
+{"nodes":[["p",{},"a \\ backslash"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-backtick.md -->
+```````````````````````````````` example [no-normalize]
+use \`ls\` here
+.
+{"nodes":[["p",{},"use `ls` here"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-blockquote.md -->
+```````````````````````````````` example [no-normalize]
+\> not a quote
+.
+{"nodes":[["p",{},"> not a quote"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-bracket.md -->
+```````````````````````````````` example [no-normalize]
+Escaped \[text\] in a sentence.
+.
+{"nodes":[["p",{},"Escaped [text] in a sentence."]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-bullet.md -->
+```````````````````````````````` example [no-normalize]
+\- not a list
+.
+{"nodes":[["p",{},"- not a list"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-emphasis.md -->
+```````````````````````````````` example [no-normalize]
+a \*b\* and \_c\_ d
+.
+{"nodes":[["p",{},"a *b* and _c_ d"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-entity.md -->
+```````````````````````````````` example [no-normalize]
+the \&amp; entity
+.
+{"nodes":[["p",{},"the &amp; entity"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-heading.md -->
+```````````````````````````````` example [no-normalize]
+\# not a heading
+.
+{"nodes":[["p",{},"# not a heading"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/common-mark/paragraph-escaped-ordered.md -->
+```````````````````````````````` example [no-normalize]
+1\. not a list
+.
+{"nodes":[["p",{},"1. not a list"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark SPEC/GFM/paragraph-escaped-strikethrough.md -->
+```````````````````````````````` example [no-normalize]
+a \~\~b\~\~ c
+.
+{"nodes":[["p",{},"a ~~b~~ c"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+## Empty documents
+
+`empty-content.test.ts`: a whitespace-only or newline-only document parses
+to an empty node list, not to an error or a stray paragraph.
+
+<!-- comark test/empty-content.test.ts -->
+```````````````````````````````` example [no-normalize]
+   
+
+	  
+.
+{"nodes":[],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+<!-- comark test/empty-content.test.ts -->
+```````````````````````````````` example [no-normalize]
+
+
+
+.
+{"nodes":[],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+

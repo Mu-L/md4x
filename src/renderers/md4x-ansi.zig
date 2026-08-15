@@ -982,7 +982,6 @@ fn enter_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .mark => render_ansi(r, ANSI_REVERSE),
         .latexmath => render_ansi(r, ANSI_COLOR_YELLOW),
         .latexmath_display => render_ansi(r, ANSI_COLOR_YELLOW),
-        .wikilink => render_ansi(r, ANSI_LINK),
         .component => render_ansi(r, ANSI_COLOR_CYAN),
         .span => {}, // Transparent: no special styling
         // Self-contained span: the whole marker is emitted here. Only the
@@ -1032,7 +1031,6 @@ fn leave_span_callback(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.Cal
         .mark => render_ansi(r, ANSI_REVERSE_OFF),
         .latexmath => render_ansi(r, ANSI_COLOR_DEFAULT),
         .latexmath_display => render_ansi(r, ANSI_COLOR_DEFAULT),
-        .wikilink => render_ansi(r, ANSI_RESET),
         .component => render_ansi(r, ANSI_COLOR_DEFAULT),
         .span => {}, // Transparent: no special styling
         .footnote_ref => {}, // enter_span already emitted the marker.

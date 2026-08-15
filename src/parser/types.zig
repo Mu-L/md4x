@@ -77,6 +77,24 @@ pub const MD_BLOCK_CONTAINER_CLOSER: c_uint = 0x02;
 pub const MD_BLOCK_CONTAINER: c_uint = (MD_BLOCK_CONTAINER_OPENER | MD_BLOCK_CONTAINER_CLOSER);
 pub const MD_BLOCK_LOOSE_LIST: c_uint = 0x04;
 pub const MD_BLOCK_SETEXT_HEADER: c_uint = 0x08;
+// Block-attribute bookkeeping, all three written by md_resolve_block_attrs()
+// (process.zig) between block analysis and emission. The run itself is never
+// copied: `HAS_ATTRS` says the block's last line was shortened to just before a
+// trailing `{...}`, and the bytes are re-scanned from that shortened end.
+pub const MD_BLOCK_HAS_ATTRS: c_uint = 0x10;
+// The run belongs to the enclosing container (a tight list item, or a blockquote
+// holding only this paragraph), not to this block.
+pub const MD_BLOCK_ATTRS_HOISTED: c_uint = 0x20;
+// Emit this paragraph's contents without the <p> bookends — the one-paragraph
+// blockquote form, where the quote itself takes the attributes.
+pub const MD_BLOCK_UNWRAP_P: c_uint = 0x40;
+// Set on BOTH the opener and the closer of a `::ul` / `::ol` / `::table` /
+// `::blockquote` / `::pre` that wraps a single same-tagged child: the two fold
+// into ONE element (`.agents/comark/attributes.md:306-360`), so neither the
+// enter nor the leave is emitted and the wrapper's `{props}` travel to the
+// child's detail as its `raw_attrs`. Decided in md_resolve_block_attrs, which
+// is the only pass that sees the finished block tree before any callback fires.
+pub const MD_BLOCK_FOLDED_WRAPPER: c_uint = 0x80;
 
 // `struct MD_BLOCK_tag` (md4x.c ~5361). C uses bitfields:
 //   MD_BLOCKTYPE type :8; unsigned flags :8; unsigned data :16; MD_SIZE n_lines;
@@ -226,7 +244,7 @@ pub const MarkFlags = struct {
     pub const autolink_missing_mailto: u8 = 0x40;
     pub const valid_permissive_autolink: u8 = 0x20; // For permissive autolinks.
     pub const has_nested_brackets: u8 = 0x20; // For '[' to rule out invalid labels early.
-    // `[` opener of a `[^label]` footnote reference (never a link/image/wikilink
+    // `[` opener of a `[^label]` footnote reference (never a link/image
     // opener). Aliases the same bit as `emph_mod3_0` / `autolink_missing_mailto`
     // — neither of which is ever written on a '[' mark: mod-3 bits belong to
     // '*'/'_' and the mailto bit to '<'/'>'/'@'/':'/'.'. The bit a '[' mark DOES

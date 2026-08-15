@@ -65,13 +65,13 @@ Reading it:
 | ------------------------------------------ | ---------------------------------------------------------------------- |
 | `md4x_alloc(size) -> ptr`                  | Allocate memory in WASM linear memory                                  |
 | `md4x_free(ptr)`                           | Free previously allocated memory                                       |
-| `md4x_to_html(ptr, size) -> int`           | Render to HTML (0=ok, -1=error)                                        |
+| `md4x_to_html(ptr, size, flags) -> int`    | Render to HTML (0=ok, -1=error)                                        |
 | `md4x_to_html_hl(ptr, size, flags) -> int` | Render to HTML, calling the `env.md4x_highlight` import per code block |
-| `md4x_to_ast(ptr, size) -> int`            | Render to JSON AST                                                     |
-| `md4x_to_ansi(ptr, size) -> int`           | Render to ANSI                                                         |
+| `md4x_to_ast(ptr, size, flags) -> int`     | Render to JSON AST                                                     |
+| `md4x_to_ansi(ptr, size, flags) -> int`    | Render to ANSI                                                         |
 | `md4x_to_ansi_hl(ptr, size, flags) -> int` | Render to ANSI, calling the `env.md4x_highlight` import per code block |
-| `md4x_to_meta(ptr, size) -> int`           | Render to meta JSON                                                    |
-| `md4x_to_text(ptr, size) -> int`           | Render to plain text                                                   |
+| `md4x_to_meta(ptr, size, flags) -> int`    | Render to meta JSON                                                    |
+| `md4x_to_text(ptr, size, flags) -> int`    | Render to plain text                                                   |
 | `md4x_heal(ptr, size) -> int`              | Heal incomplete streaming markdown                                     |
 | `md4x_result_ptr() -> ptr`                 | Get output buffer pointer (after render)                               |
 | `md4x_result_size() -> size`               | Get output buffer size (after render)                                  |
@@ -253,6 +253,17 @@ All extensions (`MD_DIALECT_ALL`) are enabled by default. No parser/renderer fla
 `parseAST` already reports the document's headings in `tree.meta.headings`, so building a table of contents from a tree does **not** need a second pass through `parseMeta`; use `parseMeta` when the AST itself is not wanted.
 
 `parseYAML` converts a standalone YAML document (not Markdown frontmatter) to a JS value, reaching the libyaml the frontmatter path already links in. Any root node is accepted — mapping, sequence or bare scalar — and an empty document yields `null`. `yamlToJson` is the same thing without the `JSON.parse`.
+
+### Heading anchors
+
+`renderToHtml` emits bare `<hN>` by default, matching CommonMark. Pass `headingIds` for anchors:
+
+```js
+renderToHtml("# Hello World"); // <h1>Hello World</h1>
+renderToHtml("# Hello World", { headingIds: true }); // <h1 id="hello-world">Hello World</h1>
+```
+
+The id is the same GitHub-compatible slug `parseAST` and `parseMeta` publish on every heading, de-duplicated the same way, so a table of contents built from `meta.headings` links to anchors this output actually contains. An explicit `{#custom-id}` block attribute on the heading wins over the generated slug, and a heading with no sluggable text gets no `id` at all. The AST and meta outputs carry the id unconditionally — they are Comark's own format, not CommonMark.
 
 ### Code block highlighting
 

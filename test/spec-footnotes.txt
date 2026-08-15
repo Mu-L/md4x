@@ -12,7 +12,7 @@ never referenced is consumed and never emitted. The HTML renderer wraps the
 section in `<section class="footnotes"><ol>`.
 
 Ported from md4c `a8b0d3e` (#315), `54bfec0` (multi-line bodies) and `326fe25`
-(wiki-link destinations), plus the label-hashtable generalization `915676f` /
+(refs swallowed by a link destination), plus the label-hashtable generalization `915676f` /
 `19dd06f` those needed. MD4X always parses with `MD_DIALECT_ALL`, so the
 examples below also show how footnotes compose with the other extensions;
 md4c's "flag required" section cannot be expressed here, and its spoiler and
@@ -466,33 +466,17 @@ body<a href="#fnref-1-1" class="footnote-backref">&#8617;</a>
 </section>
 ````````````````````````````````
 
-Wiki links are unaffected — a footnote opener spans `[^`, never the `[[` a wiki
-link needs:
+A reference swallowed by a link destination dies with it -- the `[^` opener is
+disabled along with everything else the `(...)` ate, and its `]` closer (which
+may sit outside the swallowed range) is killed with it rather than left to pair
+with something else (md4c `326fe25`, which asserted here):
 
 ```````````````````````````````` example
-x[^1] [[foo|bar]]
+[x]([^a) b]
 
-[^1]: Note.
+[^a]: N.
 .
-<p>x<sup><a href="#fn-1" id="fnref-1-1">1</a></sup> <x-wikilink data-target="foo">bar</x-wikilink></p>
-<section class="footnotes">
-<ol>
-<li id="fn-1">
-Note.<a href="#fnref-1-1" class="footnote-backref">&#8617;</a>
-</li>
-</ol>
-</section>
-````````````````````````````````
-
-A reference inside a wiki-link destination is swallowed by the destination and
-its `]` closer dies with it (md4c `326fe25`, which asserted here):
-
-```````````````````````````````` example
-[[[^|]]]
-[^|]:
-.
-<p><x-wikilink data-target="[^">]</x-wikilink>
-[^|]:</p>
+<p><a href="%5B%5Ea">x</a> b]</p>
 ````````````````````````````````
 
 Inside an alert:
@@ -503,7 +487,8 @@ Inside an alert:
 
 [^1]: n
 .
-<blockquote class="alert alert-note">
+<blockquote class="alert alert-note markdown-alert markdown-alert-note">
+<p class="markdown-alert-title">Note</p>
 <p>see<sup><a href="#fn-1" id="fnref-1-1">1</a></sup></p>
 </blockquote>
 <section class="footnotes">

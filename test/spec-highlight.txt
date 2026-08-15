@@ -375,15 +375,6 @@ LaTeX math is verbatim, so a delimiter inside it stays literal:
 <p><mark><x-equation>x</x-equation></mark> and <x-equation>==y==</x-equation></p>
 ````````````````````````````````
 
-A wiki link target is verbatim too:
-
-```````````````````````````````` example
-[[==a==]]
-.
-<p><x-wikilink data-target="==a==">==a==</x-wikilink></p>
-````````````````````````````````
-
-
 ## Attributes
 
 Unlike md4c, MD4X gives the span an attributes detail, so a trailing `{...}`
@@ -401,12 +392,14 @@ attaches to it exactly as it does to `**bold**` or `~~del~~`:
 <p><mark id="id" data-k="v" class="a">x</mark></p>
 ````````````````````````````````
 
-The braces must follow the closer immediately:
+The braces must follow the closer immediately. With a space between, they do not attach to the
+`<mark>` — they are a trailing block-attribute run and lift to the enclosing paragraph instead
+(see `spec-attributes.txt`, "Block Attributes"):
 
 ```````````````````````````````` example
 x ==y== {.z}
 .
-<p>x <mark>y</mark> {.z}</p>
+<p class="z">x <mark>y</mark></p>
 ````````````````````````````````
 
 Braces inside the span are ordinary text:
