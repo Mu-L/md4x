@@ -403,10 +403,7 @@ fn entity_codepoints(text: [*]const u8, size: c.MD_SIZE) ?[2]c_uint {
         return .{ codepoint, 0 };
     }
 
-    if (entity.entity_lookup(@ptrCast(text), size)) |ent|
-        return .{ ent.codepoints[0], ent.codepoints[1] };
-
-    return null;
+    return entity.entity_lookup(text[0..size]);
 }
 
 fn render_entity(r: *MD_MARKDOWN, text: [*]const u8, size: c.MD_SIZE, fn_append: AppendFn) void {

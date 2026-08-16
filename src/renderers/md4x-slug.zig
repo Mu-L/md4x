@@ -112,12 +112,12 @@ pub fn resolveEntity(text: []const u8, out: *[entity_max_len]u8) ?[]const u8 {
         return out[0..enc.len];
     }
 
-    if (entity.entity_lookup(@ptrCast(text.ptr), @intCast(text.len))) |ent| {
-        const first = encodeUtf8(ent.codepoints[0], &utf8);
+    if (entity.entity_lookup(text)) |cps| {
+        const first = encodeUtf8(cps[0], &utf8);
         @memcpy(out[0..first.len], first);
         var n = first.len;
-        if (ent.codepoints[1] != 0) {
-            const second = encodeUtf8(ent.codepoints[1], &utf8);
+        if (cps[1] != 0) {
+            const second = encodeUtf8(cps[1], &utf8);
             @memcpy(out[n..][0..second.len], second);
             n += second.len;
         }

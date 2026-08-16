@@ -53,7 +53,21 @@ points and reference-label cases against new case foldings. Extend them when bum
 
 ### `src/entity.zig`
 
-`scripts/build-entity-map.ts` fetches <https://html.spec.whatwg.org/entities.json> and emits the C
-`ENTITY_MAP[]`. `scripts/_gen-entity-zig.py` converted that to `src/entity.zig` — but its input,
-`src/entity.c`, was deleted with the C ABI, so it can no longer be re-run and is kept only as the
-record of how the file was produced.
+Two stages, both re-runnable — the second reads the first's stdout, not the deleted `src/entity.c`:
+
+```sh
+bun scripts/build-entity-map.ts > /tmp/entity-map.c   # <- html.spec.whatwg.org/entities.json
+python3 scripts/_gen-entity-zig.py /tmp/entity-map.c  # run from the repo root
+```
+
+The emitted table is one blob of `[hdr][name][UTF-8 value]` records plus a u16 index of every 16th
+record's offset, **not** an array of `{ name: [*:0]const u8, codepoints: [2]c_uint }`. The struct
+form cost 46 KB of the wasm data section and 105 KB of the NAPI addon, the latter because each
+`name` pointer needs an `R_X86_64_RELATIVE` relocation — 54 KB of `.rela.dyn` for 2125 records. Keep
+it pointer-free. Like `unicode_tables.zig` the file is deliberately not `zig fmt`-conformant (fmt
+collapses the blob onto one line); `bun fmt` is prettier-only and leaves both alone.
+
+`hdr` packs the name length into 5 bits and the value length into 3, so a name longer than 31 bytes
+or a value longer than 8 is a format change — the generator refuses rather than truncating. The
+generated tests walk every record and assert the blob is sorted and the checkpoints land on record
+boundaries; nothing else pins that, since the `.txt` suites reach a dozen of the 2125 names.

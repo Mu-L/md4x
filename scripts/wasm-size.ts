@@ -464,6 +464,33 @@ const u32le = (values: number[]) =>
 
 const ascii = (s: string) => new TextEncoder().encode(s);
 
+/**
+ * The bytes every `"…"` literal in `src` stands for, concatenated. Zig source
+ * is UTF-8, so a literal's own byte length is not its runtime length: a `\xNN`
+ * escape is four source bytes and one data byte, and a character written as
+ * itself is one source character and up to four data bytes.
+ */
+function zigLiteralBytes(src: string): Uint8Array {
+  const out: number[] = [];
+  for (const [, body] of src.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    // By code point, not by UTF-16 unit: the table's astral characters (𝔄, …)
+    // are surrogate pairs that encode as one 4-byte sequence, not two.
+    const chars = [...body];
+    for (let i = 0; i < chars.length; i++) {
+      if (chars[i] !== "\\") {
+        out.push(...new TextEncoder().encode(chars[i]));
+      } else if (chars[i + 1] === "x") {
+        out.push(parseInt(chars[i + 2] + chars[i + 3], 16));
+        i += 3;
+      } else {
+        out.push(0); // any other escape stands for exactly one byte
+        i += 1;
+      }
+    }
+  }
+  return new Uint8Array(out);
+}
+
 /** Raw byte search. Not a string search: the data section is not text. */
 function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
   outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
@@ -489,15 +516,26 @@ const TABLES: {
     label: "HTML entity table",
     source: "src/entity.zig",
     measure(src) {
-      const names = [...src.matchAll(/\.name = "(.*?)"/g)].map((m) => m[1]);
-      if (names.length === 0) return undefined;
-      // extern struct ENTITY { name: [*:0]const u8, codepoints: [2]c_uint }
-      const strings = names.reduce((n, s) => n + s.length + 1, 0);
+      // A record blob plus a u16 checkpoint index — no pointers, so unlike the
+      // other tables here this one costs the same in the NAPI addon, where a
+      // relocation per record would otherwise dwarf the data it points at.
+      const src_blob = src.slice(
+        src.indexOf("const blob ="),
+        src.indexOf("const index ="),
+      );
+      const blob = zigLiteralBytes(src_blob);
+      const index = src.match(/const index = \[_\]u16\{([^}]*)\}/)?.[1] ?? "";
+      const records = Number(src.match(/pub const count = (\d+)/)?.[1] ?? 0);
+      if (blob.length === 0 || records === 0) return undefined;
+      // The longest stored name, as the byte run least likely to occur by chance.
+      const names =
+        String.fromCharCode(...blob).match(/[A-Za-z][A-Za-z0-9]+/g) ?? [];
       return {
-        records: names.length,
-        bytes: names.length * (4 + 8) + strings,
-        // The longest name, as the one least likely to occur by chance.
-        signature: ascii(names.reduce((a, b) => (b.length > a.length ? b : a))),
+        records,
+        bytes: blob.length + 2 * (index.match(/\d+,/g)?.length ?? 0),
+        signature: ascii(
+          names.reduce((a, b) => (b.length > a.length ? b : a), ""),
+        ),
       };
     },
   },

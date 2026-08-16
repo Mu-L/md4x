@@ -31,13 +31,13 @@
 // MD_CTX struct; char-class helpers (CH/STR/ISxxx, md_strchr); UTF-8 decode
 // (md_decode_utf8/_before, md_decode_unicode); the unicode classifiers
 // (whitespace/punct/fold) wired through unicode_tables.zig; growable buffers +
-// MD_CHECK/MD_TEMP_BUFFER; entity hook (entity_lookup via entity.h); MD_ATTRIBUTE
-// building + text-collecting buffer.
+// MD_CHECK/MD_TEMP_BUFFER; MD_ATTRIBUTE building + text-collecting buffer.
+// (md4c's entity hook has no counterpart here: the parser only ever checks the
+// `&…;` shape, so the table in entity.zig belongs to the renderers alone.)
 
 const std = @import("std");
 const builtin = @import("builtin");
 const utbl = @import("unicode_tables.zig");
-const entity = @import("entity.zig");
 const types = @import("parser/types.zig");
 const util = @import("parser/util.zig");
 const refdefs = @import("parser/refdefs.zig");
@@ -304,7 +304,6 @@ comptime {
     _ = &md_build_attribute;
     _ = &md_free_attribute;
     _ = &SZ_MAX;
-    _ = &entity_lookup_wrap;
     // Pass B: ref-defs + link recognizers (consumed by Pass C/D/E).
     _ = &md_lookup_line;
     _ = &md_fnv1a;
@@ -329,12 +328,6 @@ comptime {
     _ = &md_collect_marks;
     _ = &md_resolve_links;
     _ = &md_analyze_link_contents;
-}
-
-// Entity hook — thin wrapper over entity.zig's entity_lookup. The
-// inline engine (Pass C) calls this to resolve named entities to codepoints.
-inline fn entity_lookup_wrap(name: [*c]const u8, name_size: usize) ?*const entity.ENTITY {
-    return entity.entity_lookup(name, name_size);
 }
 
 // Test-only re-exports of internal foundation functions, used by the
@@ -2354,6 +2347,9 @@ const expected_trace =
 // module is only reached if something here imports it. The slug/heading rules
 // (GitHub slug parity, collision numbering, entity resolution) are pure
 // functions with no HTML output to diff, so the .txt suites cannot express them.
+// The entity table is here for the same reason: the parser never reads it, and
+// the suites exercise a dozen of its 2125 records.
 test {
     _ = @import("renderers/md4x-slug.zig");
+    _ = @import("entity.zig");
 }

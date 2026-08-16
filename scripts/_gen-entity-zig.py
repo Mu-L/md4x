@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Throwaway generator: parse src/entity.c ENTITY_MAP[] and emit src/entity.zig.
+"""Generate src/entity.zig from the C ENTITY_MAP[] that build-entity-map.ts emits.
 
-Produces a Zig module with:
-  - extern struct ENTITY { name: [*:0]const u8, codepoints: [2]c_uint }
-  - fn entity_lookup(name, name_size) ?*const ENTITY
-mirroring the C bsearch over a sorted table with strncmp(key, ent, name_size).
+    bun scripts/build-entity-map.ts > /tmp/entity-map.c   # <- html.spec.whatwg.org
+    python3 scripts/_gen-entity-zig.py /tmp/entity-map.c  # run from the repo root
 
-NOTE: its input, src/entity.c, was deleted with the C ABI, so this script can no
-longer be re-run. It is kept as the record of how src/entity.zig was produced.
-When src/entity.zig must change, change BOTH in lockstep so they stay
-consistent (that is how the Phase 4b de-extern of entity_lookup was applied).
+The emitted module is a blob of variable-length records plus a sampled offset
+index -- see the header comment it writes for the layout and for why the table
+is not an array of structs.
 """
 import re
 import sys
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "src/entity.c"
+SRC = sys.argv[1] if len(sys.argv) > 1 else "/tmp/entity-map.c"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "src/entity.zig"
+
+# Records between two index checkpoints. 16 keeps the index at ~266 bytes while
+# bounding a lookup at 7 binary-search steps plus a 16-record walk.
+STRIDE = 16
+
+# `hdr` packs both lengths into one byte: 5 bits of name length, 3 bits of
+# value length. Widening either field is a format change -- see write_zig().
+MAX_NAME_LEN = 31
+MAX_VALUE_LEN = 8
 
 entry_re = re.compile(r'^\s*\{\s*"((?:[^"\\]|\\.)*)"\s*,\s*\{\s*(\d+)\s*,\s*(\d+)\s*\}\s*\}\s*,?\s*$')
 
@@ -32,87 +38,284 @@ with open(SRC, "r", encoding="utf-8") as f:
                 continue
             m = entry_re.match(line)
             if not m:
-                # skip blank / stray lines but error on unexpected content
                 if line.strip() == "":
                     continue
                 raise SystemExit(f"Unparsed line in ENTITY_MAP: {line!r}")
-            name, cp0, cp1 = m.group(1), int(m.group(2)), int(m.group(3))
-            entries.append((name, cp0, cp1))
+            entries.append((m.group(1), int(m.group(2)), int(m.group(3))))
 
 if not entries:
     raise SystemExit("No entries parsed!")
 
-# Zig string-literal escaping for names. Names are ASCII identifiers like &AElig;
-def zig_str(s):
+# The stored name carries neither the '&' nor the ';' -- both are constant, and
+# the lookup strips them from the key before searching.
+records = []
+for name, cp0, cp1 in entries:
+    if not (name.startswith("&") and name.endswith(";")):
+        raise SystemExit(f"Entity {name!r} is not of the form &name;")
+    stem = name[1:-1]
+    if not (stem[:1].isalpha() and stem.isalnum() and stem.isascii()):
+        raise SystemExit(f"Entity {name!r} is not an ASCII alphanumeric name")
+    value = chr(cp0).encode("utf-8") + (chr(cp1).encode("utf-8") if cp1 else b"")
+    if not 1 <= len(stem) <= MAX_NAME_LEN:
+        raise SystemExit(
+            f"Entity {name!r}: name is {len(stem)} bytes, the record header packs "
+            f"at most {MAX_NAME_LEN}. Widen `hdr` (and the shifts in entity.zig)."
+        )
+    if not 1 <= len(value) <= MAX_VALUE_LEN:
+        raise SystemExit(
+            f"Entity {name!r}: value is {len(value)} bytes, the record header packs "
+            f"at most {MAX_VALUE_LEN}. Widen `hdr` (and the shifts in entity.zig)."
+        )
+    records.append((stem, value))
+
+# Sorted by the stored name, which is what the lookup binary-searches. Note this
+# is NOT the order of the `&name;` spellings: ';' sorts below the digits, so
+# `&sup1;` precedes `&sup;` there and follows it here.
+records.sort(key=lambda r: r[0].encode())
+if len({r[0] for r in records}) != len(records):
+    raise SystemExit("Duplicate entity name")
+
+blob = bytearray()
+offsets = []
+for stem, value in records:
+    offsets.append(len(blob))
+    blob.append(((len(value) - 1) << 5) | len(stem))
+    blob += stem.encode()
+    blob += value
+if len(blob) > 0xFFFF:
+    raise SystemExit(f"Blob is {len(blob)} bytes; the u16 index cannot address it")
+
+checkpoints = [offsets[i] for i in range(0, len(records), STRIDE)]
+
+
+def zig_bytes(bs, *, escape_all=False):
+    """Zig string-literal body for `bs`.
+
+    Printable ASCII and well-formed UTF-8 are emitted as themselves so the table
+    stays readable (`&AElig;` shows up as `AEligÆ`); everything else -- the
+    header bytes, the handful of entities naming a control character -- becomes
+    a `\\xNN` escape. Zig source must be valid UTF-8, so a raw byte >= 0x80 is
+    only ever emitted as part of a decodable sequence.
+    """
     out = []
-    for ch in s:
-        if ch == '"':
-            out.append('\\"')
-        elif ch == '\\':
-            out.append('\\\\')
+    text = "" if escape_all else bs.decode("utf-8")
+    if escape_all:
+        return "".join(f"\\x{b:02x}" for b in bs)
+    for ch in text:
+        if ch in '"\\':
+            out.append("\\" + ch)
+        elif ch < " " or ch == "\x7f":
+            out.append(f"\\x{ord(ch):02x}")
         else:
             out.append(ch)
-    return '"' + ''.join(out) + '"'
+    return "".join(out)
+
+
+def record_literal(stem, value):
+    hdr = bytes([((len(value) - 1) << 5) | len(stem)])
+    return zig_bytes(hdr, escape_all=True) + zig_bytes(stem.encode()) + zig_bytes(value)
+
 
 lines = []
-lines.append("// AUTO-GENERATED by scripts/_gen-entity-zig.py from src/entity.c — do not edit by hand.")
-lines.append("//")
-lines.append("// HTML entity lookup table (mirrors the C ENTITY_MAP[]). Imported directly by")
-lines.append("// the parser and the renderers; see src/lib.zig.")
-lines.append("")
-lines.append("const std = @import(\"std\");")
-lines.append("")
-lines.append("/// Entity record: the name including '&' and ';', and 1-2 codepoints.")
-lines.append("pub const ENTITY = extern struct {")
-lines.append("    name: [*:0]const u8,")
-lines.append("    codepoints: [2]c_uint,")
-lines.append("};")
-lines.append("")
-lines.append(f"const ENTITY_MAP = [{len(entries)}]ENTITY{{")
-for name, cp0, cp1 in entries:
-    lines.append(f"    .{{ .name = {zig_str(name)}, .codepoints = .{{ {cp0}, {cp1} }} }},")
-lines.append("};")
-lines.append("")
-lines.append("/// Mirrors entity_cmp: strncmp(key->name, ent->name, key->name_size).")
-lines.append("/// Returns the C strncmp result semantics (sign only matters for bsearch).")
-lines.append("fn entityCmp(key: []const u8, ent: *const ENTITY) c_int {")
-lines.append("    const a = key;")
-lines.append("    const b = ent.name;")
-lines.append("    var i: usize = 0;")
-lines.append("    while (i < a.len) : (i += 1) {")
-lines.append("        const ca: u8 = a[i];")
-lines.append("        const cb: u8 = b[i];")
-lines.append("        if (ca != cb) {")
-lines.append("            // strncmp compares as unsigned char.")
-lines.append("            return @as(c_int, ca) - @as(c_int, cb);")
-lines.append("        }")
-lines.append("        if (cb == 0) return 0; // both equal and reached NUL")
-lines.append("    }")
-lines.append("    return 0;")
-lines.append("}")
-lines.append("")
-lines.append("/// Look up a named HTML entity; returns null if unknown.")
-lines.append("/// Replicates the C bsearch over the sorted ENTITY_MAP using entity_cmp.")
-lines.append("pub fn entity_lookup(name: [*]const u8, name_size: usize) ?*const ENTITY {")
-lines.append("    const key = name[0..name_size];")
-lines.append("    var lo: usize = 0;")
-lines.append("    var hi: usize = ENTITY_MAP.len;")
-lines.append("    while (lo < hi) {")
-lines.append("        const mid = lo + (hi - lo) / 2;")
-lines.append("        const c = entityCmp(key, &ENTITY_MAP[mid]);")
-lines.append("        if (c == 0) {")
-lines.append("            return &ENTITY_MAP[mid];")
-lines.append("        } else if (c < 0) {")
-lines.append("            hi = mid;")
-lines.append("        } else {")
-lines.append("            lo = mid + 1;")
-lines.append("        }")
-lines.append("    }")
-lines.append("    return null;")
-lines.append("}")
-lines.append("")
+w = lines.append
+w("// AUTO-GENERATED by scripts/_gen-entity-zig.py — do not edit by hand.")
+w("//")
+w("// The HTML named-entity table (the `;`-terminated names of")
+w("// <https://html.spec.whatwg.org/entities.json>), used by every renderer that")
+w("// resolves an `.entity` text event. The parser itself never looks a name up:")
+w("// `md_is_entity_str` only checks the `&…;` shape.")
+w("//")
+w("// The table is a blob of variable-length records, not an array of")
+w("// `{ name: [*:0]const u8, codepoints: [2]c_uint }`. That struct form cost 46 KB")
+w("// of the wasm data section and 105 KB of the NAPI addon — the latter because")
+w("// every `name` pointer needs an R_X86_64_RELATIVE relocation, so the 2125")
+w("// records dragged 54 KB of `.rela.dyn` behind them. A blob has no pointers to")
+w("// relocate and repeats neither the '&' nor the ';' nor a NUL terminator.")
+w("//")
+w("//   record: [hdr][name][value]")
+w("//           hdr   = ((value_len - 1) << 5) | name_len")
+w("//           name  = the name without its '&' and ';', ASCII alphanumeric")
+w("//           value = the 1-2 codepoints it stands for, UTF-8 encoded")
+w("//   index: the blob offset of every `stride`-th record, so a lookup binary-")
+w("//          searches the checkpoints and then walks one short window.")
+w("//")
+w("// Like src/unicode_tables.zig this file is deliberately not `zig fmt`-")
+w("// conformant: fmt collapses the whole blob onto one unreadable line.")
+w("")
+w("const std = @import(\"std\");")
+w("")
+w("/// Number of entities in the table.")
+w(f"pub const count = {len(records)};")
+w("")
+w("/// Records between two `index` checkpoints.")
+w(f"const stride = {STRIDE};")
+w("")
+w("/// Longest stored name; a longer key cannot be in the table.")
+w(f"const max_name_len = {max(len(r[0]) for r in records)};")
+w("")
+w("const blob =")
+for i in range(0, len(records), STRIDE):
+    chunk = "".join(record_literal(*r) for r in records[i : i + STRIDE])
+    sep = "    " if i == 0 else "    ++ "
+    w(f'{sep}"{chunk}"')
+lines[-1] += ";"
+w("")
+w("const index = [_]u16{")
+for i in range(0, len(checkpoints), 12):
+    w("    " + " ".join(f"{o}," for o in checkpoints[i : i + 12]))
+w("};")
+w("")
+w("/// The name stored by the record at `off`.")
+w("fn nameAt(off: usize) []const u8 {")
+w("    return blob[off + 1 ..][0 .. blob[off] & 0x1f];")
+w("}")
+w("")
+w("/// The 1-2 codepoints a record's UTF-8 `value` stands for. The second is 0")
+w("/// when the entity names a single codepoint, which 2032 of the 2125 do.")
+w("fn decodeValue(value: []const u8) [2]u32 {")
+w("    var cps: [2]u32 = .{ 0, 0 };")
+w("    var i: usize = 0;")
+w("    var n: usize = 0;")
+w("    while (i < value.len and n < 2) : (n += 1) {")
+w("        const b = value[i];")
+w("        if (b < 0x80) {")
+w("            cps[n] = b;")
+w("            i += 1;")
+w("        } else if (b < 0xe0) {")
+w("            cps[n] = (@as(u32, b & 0x1f) << 6) | cont(value[i + 1]);")
+w("            i += 2;")
+w("        } else if (b < 0xf0) {")
+w("            cps[n] = (@as(u32, b & 0x0f) << 12) |")
+w("                (cont(value[i + 1]) << 6) | cont(value[i + 2]);")
+w("            i += 3;")
+w("        } else {")
+w("            cps[n] = (@as(u32, b & 0x07) << 18) |")
+w("                (cont(value[i + 1]) << 12) | (cont(value[i + 2]) << 6) |")
+w("                cont(value[i + 3]);")
+w("            i += 4;")
+w("        }")
+w("    }")
+w("    return cps;")
+w("}")
+w("")
+w("/// The six payload bits of a UTF-8 continuation byte.")
+w("fn cont(b: u8) u32 {")
+w("    return b & 0x3f;")
+w("}")
+w("")
+w("/// Look up a named HTML entity. `name` is the whole reference including its")
+w("/// '&' and ';', the way the parser reports an `.entity` substring; the 1-2")
+w("/// codepoints it stands for come back with a 0 second element for the")
+w("/// single-codepoint majority. `null` means the name is not in the table, and")
+w("/// every caller then emits the reference verbatim.")
+w("pub fn entity_lookup(name: []const u8) ?[2]u32 {")
+w("    // Shortest possible reference is `&ab;`: every stored name is at least")
+w("    // two characters, as `md_is_named_entity_contents` also requires.")
+w("    if (name.len < 4 or name[0] != '&' or name[name.len - 1] != ';') return null;")
+w("    const key = name[1 .. name.len - 1];")
+w("    if (key.len > max_name_len) return null;")
+w("")
+w("    // Narrow to the one window that can hold `key`: the last checkpoint whose")
+w("    // name does not sort after it.")
+w("    var lo: usize = 0;")
+w("    var hi: usize = index.len;")
+w("    while (lo < hi) {")
+w("        const mid = lo + (hi - lo) / 2;")
+w("        if (std.mem.order(u8, nameAt(index[mid]), key) == .gt) {")
+w("            hi = mid;")
+w("        } else {")
+w("            lo = mid + 1;")
+w("        }")
+w("    }")
+w("    if (lo == 0) return null;")
+w("")
+w("    var off: usize = index[lo - 1];")
+w("    const end: usize = if (lo < index.len) index[lo] else blob.len;")
+w("    while (off < end) {")
+w("        const name_len: usize = blob[off] & 0x1f;")
+w("        const value_len: usize = (blob[off] >> 5) + 1;")
+w("        switch (std.mem.order(u8, blob[off + 1 ..][0..name_len], key)) {")
+w("            .eq => return decodeValue(blob[off + 1 + name_len ..][0..value_len]),")
+w("            // The window is sorted, so no record after this one can match.")
+w("            .gt => return null,")
+w("            .lt => off += 1 + name_len + value_len,")
+w("        }")
+w("    }")
+w("    return null;")
+w("}")
+
+
+# Spot-checks, picked by property rather than hardcoded so a regeneration keeps
+# them true: the plainest entity, a 4-byte value, a two-codepoint value whose
+# first codepoint is ASCII, and a value that is a control character.
+def first(pred):
+    return next((r for r in records if pred(r)), None)
+
+
+spot = [
+    first(lambda r: r[0] == "amp"),
+    first(lambda r: len(r[1].decode()) == 1 and ord(r[1].decode()) > 0xFFFF),
+    first(lambda r: len(r[1].decode()) == 2 and ord(r[1].decode()[0]) < 0x80),
+    first(lambda r: ord(r[1].decode()[0]) < 0x20),
+]
+
+w("")
+w("const testing = std.testing;")
+w("")
+w("// The .txt suites reach only a handful of these names, so nothing else pins")
+w("// the invariants the lookup rests on: that the blob is sorted and gap-free,")
+w("// and that every checkpoint lands on a record boundary. A generator bug in")
+w("// any of the three would silently lose entities in the middle of the table.")
+w('test "every record is well-formed, sorted and findable" {')
+w("    var buf: [max_name_len + 2]u8 = undefined;")
+w('    var prev: []const u8 = "";')
+w("    var off: usize = 0;")
+w("    var n: usize = 0;")
+w("    while (off < blob.len) : (n += 1) {")
+w("        const name_len: usize = blob[off] & 0x1f;")
+w("        const value_len: usize = (blob[off] >> 5) + 1;")
+w("        const name = blob[off + 1 ..][0..name_len];")
+w("        try testing.expect(std.mem.order(u8, prev, name) == .lt);")
+w("        if (n % stride == 0) try testing.expectEqual(off, index[n / stride]);")
+w('        const ref = try std.fmt.bufPrint(&buf, "&{s};", .{name});')
+w("        try testing.expectEqual(")
+w("            decodeValue(blob[off + 1 + name_len ..][0..value_len]),")
+w("            entity_lookup(ref).?,")
+w("        );")
+w("        prev = name;")
+w("        off += 1 + name_len + value_len;")
+w("    }")
+w("    try testing.expectEqual(count, n);")
+w("    try testing.expectEqual(index.len, (count + stride - 1) / stride);")
+w("}")
+w("")
+w('test "a name that is not in the table resolves to null" {')
+w("    // Neither a prefix nor an extension of a stored name may match, and the")
+w("    // comparison is case-sensitive: `&Amp;` is not `&amp;`.")
+w("    for ([_][]const u8{")
+w('        "", "&", "&;", "&a;", "amp;", "&amp", "&am;", "&Amp;", "&ampx;", "&zzz;",')
+w('        "&" ++ "a" ** 48 ++ ";",')
+w("    }) |name| {")
+w("        try testing.expect(entity_lookup(name) == null);")
+w("    }")
+w("}")
+w("")
+w('test "a stored name resolves to the codepoints it stands for" {')
+for rec in spot:
+    if rec is None:
+        continue
+    cps = [ord(ch) for ch in rec[1].decode()]
+    cps += [0] * (2 - len(cps))
+    w(
+        f"    try testing.expectEqual([2]u32{{ 0x{cps[0]:x}, 0x{cps[1]:x} }}, "
+        f'entity_lookup("&{rec[0]};").?);'
+    )
+w("}")
 
 with open(OUT, "w", encoding="utf-8") as f:
-    f.write("\n".join(lines))
+    f.write("\n".join(lines) + "\n")
 
-print(f"Parsed {len(entries)} entries -> {OUT}")
+print(
+    f"{OUT}: {len(records)} entities, blob {len(blob)} B + index {len(checkpoints) * 2} B",
+    file=sys.stderr,
+)

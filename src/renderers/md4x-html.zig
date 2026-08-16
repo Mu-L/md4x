@@ -475,9 +475,7 @@ fn render_entity(r: *MD_HTML, text: [*]const u8, size: c.MD_SIZE, fn_append: App
         return;
     } else {
         // Named entity.
-        const ent = entity.entity_lookup(@ptrCast(text), size);
-        if (ent != null) {
-            const cps = ent.?.codepoints;
+        if (entity.entity_lookup(text[0..size])) |cps| {
             render_utf8_codepoint(r, cps[0], fn_append);
             if (cps[1] != 0)
                 render_utf8_codepoint(r, cps[1], fn_append);

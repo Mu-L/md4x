@@ -163,8 +163,9 @@ reads as `absent` rather than being billed.
 
 Sizes are reported raw _and_ gzipped because the standalone bundle inlines the module gzip+Z85
 (`scripts/build-standalone.ts`): a flat generated table and a page of branchy code cost very
-differently once compressed — the entity table is 45 KB raw and compresses ~4:1, the code section
-barely 2.7:1.
+differently once compressed — the entity table is 22 KB raw and compresses ~2:1 (it was 45 KB and
+~4:1 as an array of `{pointer, codepoints}` structs, whose relocated pointers gzip far better than
+they justify), the code section barely 2.7:1.
 
 ## Benchmarking the WASM build
 
