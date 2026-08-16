@@ -79,10 +79,23 @@ fn hexVal(ch: u8) u32 {
     return 0;
 }
 
-/// Resolve an HTML entity (`&amp;`, `&#38;`, `&#x26;`) to UTF-8 and append it.
-/// An unrecognized entity is passed through verbatim, which is what the parser
-/// itself does with one.
-fn appendEntity(buf: *TextBuf, alloc: std.mem.Allocator, text: []const u8) Error!void {
+/// Longest UTF-8 form an entity can resolve to: a named entity may name two
+/// codepoints (`&NotEqualTilde;` → U+2242 U+0338), each up to 4 bytes.
+pub const entity_max_len = 8;
+
+/// Resolve an HTML entity (`&amp;`, `&#38;`, `&#x26;`) to its UTF-8 form,
+/// written into `out` and returned as a subslice of it. `null` means the entity
+/// is not recognized; the parser passes an unknown one through verbatim and so
+/// must every caller.
+///
+/// This mirrors the HTML renderer's `render_entity()` exactly — same numeric
+/// parse, same U+FFFD fold for a codepoint that is not a Unicode scalar — so a
+/// consumer of any renderer's output reads the same characters. It is public
+/// because the AST renderer resolves entities too: a `.entity` text event whose
+/// bytes reached the tree as source (`"A &amp; B"`) left the node disagreeing
+/// with the `id` slugged from that same text, and forced every consumer that is
+/// not md4x's own HTML renderer to reimplement this function.
+pub fn resolveEntity(text: []const u8, out: *[entity_max_len]u8) ?[]const u8 {
     var utf8: [4]u8 = undefined;
 
     if (text.len > 3 and text[1] == '#') {
@@ -94,17 +107,31 @@ fn appendEntity(buf: *TextBuf, alloc: std.mem.Allocator, text: []const u8) Error
             for (text[2 .. text.len - 1]) |ch|
                 codepoint = 10 *% codepoint +% (ch - '0');
         }
-        return buf.appendSlice(alloc, encodeUtf8(codepoint, &utf8));
+        const enc = encodeUtf8(codepoint, &utf8);
+        @memcpy(out[0..enc.len], enc);
+        return out[0..enc.len];
     }
 
     if (entity.entity_lookup(@ptrCast(text.ptr), @intCast(text.len))) |ent| {
-        try buf.appendSlice(alloc, encodeUtf8(ent.codepoints[0], &utf8));
-        if (ent.codepoints[1] != 0)
-            try buf.appendSlice(alloc, encodeUtf8(ent.codepoints[1], &utf8));
-        return;
+        const first = encodeUtf8(ent.codepoints[0], &utf8);
+        @memcpy(out[0..first.len], first);
+        var n = first.len;
+        if (ent.codepoints[1] != 0) {
+            const second = encodeUtf8(ent.codepoints[1], &utf8);
+            @memcpy(out[n..][0..second.len], second);
+            n += second.len;
+        }
+        return out[0..n];
     }
 
-    try buf.appendSlice(alloc, text);
+    return null;
+}
+
+/// Resolve an HTML entity to UTF-8 and append it, or append it verbatim when it
+/// is not recognized.
+fn appendEntity(buf: *TextBuf, alloc: std.mem.Allocator, text: []const u8) Error!void {
+    var out: [entity_max_len]u8 = undefined;
+    try buf.appendSlice(alloc, resolveEntity(text, &out) orelse text);
 }
 
 /// Encode a codepoint as UTF-8 into `out`, returning the written subslice.
@@ -365,4 +392,30 @@ test "appendText resolves entities and drops raw HTML" {
     try appendText(&buf, testing.allocator, .entity, "&#x1F600;");
 
     try testing.expectEqualStrings("A & B \u{1F600}", buf.items);
+}
+
+test "resolveEntity covers every spelling the AST renderer feeds it" {
+    var out: [entity_max_len]u8 = undefined;
+
+    try testing.expectEqualStrings("&", resolveEntity("&amp;", &out).?);
+    try testing.expectEqualStrings("&", resolveEntity("&#38;", &out).?);
+    try testing.expectEqualStrings("&", resolveEntity("&#x26;", &out).?);
+    try testing.expectEqualStrings("&", resolveEntity("&#X26;", &out).?);
+    try testing.expectEqualStrings("—", resolveEntity("&mdash;", &out).?);
+
+    // A named entity may resolve to TWO codepoints; the buffer is sized for it.
+    try testing.expectEqualStrings("\u{2242}\u{0338}", resolveEntity("&NotEqualTilde;", &out).?);
+
+    // Not a Unicode scalar value -> U+FFFD, matching the HTML renderer.
+    try testing.expectEqualStrings(replacement, resolveEntity("&#0;", &out).?);
+    try testing.expectEqualStrings(replacement, resolveEntity("&#xD800;", &out).?);
+    try testing.expectEqualStrings(replacement, resolveEntity("&#x110000;", &out).?);
+
+    // Named lookup is case-SENSITIVE: `&AMP;` is its own HTML5 entity, `&Amp;`
+    // is not one at all.
+    try testing.expectEqualStrings("&", resolveEntity("&AMP;", &out).?);
+    try testing.expect(resolveEntity("&Amp;", &out) == null);
+
+    // Unrecognized: null, so the caller keeps the source spelling.
+    try testing.expect(resolveEntity("&nosuchentity;", &out) == null);
 }

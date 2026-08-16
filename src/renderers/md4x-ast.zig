@@ -332,50 +332,81 @@ const utf8_replacement_char = [_]u8{ 0xEF, 0xBF, 0xBD };
 // attribute disagreeing with its own text child — `[[a<NUL>b]]` rendered
 // `"target":"a\u0000b"` beside the child `"a<U+FFFD>b"` — and, before the
 // length became exact, silently truncated the value at the NUL.
+//
+// An `.entity` substring is likewise resolved to its UTF-8 form, matching the
+// text path (see jsonText) and the HTML renderer's render_attribute(). Handing
+// back the source spelling made `[x](?a=1&amp;b=2)` publish an `href` no
+// consumer could use without reimplementing entity resolution, and left an
+// `&amp;` in a `title`/`alt` to be re-escaped downstream as `&amp;amp;`.
 fn jsonAttrToStr(attr: *const c.Attribute) ?[:0]u8 {
     const total = attr.text.len;
     if (total == 0)
         return null;
 
-    // Count the NUL substrings first: each grows the value by 2 bytes.
-    var extra: usize = 0;
+    // Pass 1: the exact output size. Both substitutions change the byte count —
+    // a NUL grows from 1 byte to 3, an entity shrinks or grows to whatever its
+    // UTF-8 form is — so it cannot be derived from `total` alone.
+    var ent_buf: [slug.entity_max_len]u8 = undefined;
+    var out_len: usize = 0;
+    var covered: usize = 0;
+    var substituted = false;
     var i: usize = 0;
     while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) {
-        if (attr.substr_types[i] == c.TextType.nullchar)
-            extra += utf8_replacement_char.len - 1;
+        const off: usize = attr.substr_offsets[i];
+        const end: usize = attr.substr_offsets[i + 1];
+        covered = end;
+        switch (attr.substr_types[i]) {
+            c.TextType.nullchar => {
+                out_len += utf8_replacement_char.len;
+                substituted = true;
+            },
+            c.TextType.entity => {
+                if (slug.resolveEntity(attr.text[off..end], &ent_buf)) |resolved| {
+                    out_len += resolved.len;
+                    substituted = true;
+                } else {
+                    // Unrecognized: stays verbatim, as everywhere else.
+                    out_len += end - off;
+                }
+            },
+            else => out_len += end - off,
+        }
     }
+    // The substring table is contiguous and ends at `total`, but the walk is
+    // bounded rather than terminator-driven; account for any tail it did not
+    // cover, which pass 2 copies as-is.
+    if (covered < total)
+        out_len += total - covered;
 
-    const buf = allocStr(total + extra) orelse return null;
-    if (extra == 0) {
+    if (!substituted) {
         // Overwhelmingly the common case: no substitution, one copy.
+        const buf = allocStr(total) orelse return null;
         @memcpy(buf[0..total], attr.text);
         return buf;
     }
 
+    const buf = allocStr(out_len) orelse return null;
     var w: usize = 0;
-    var copied: usize = 0;
+    covered = 0;
     i = 0;
     while (i < attr.substr_types.len and attr.substr_offsets[i] < total) : (i += 1) {
         const off: usize = attr.substr_offsets[i];
         const end: usize = attr.substr_offsets[i + 1];
-        if (attr.substr_types[i] == c.TextType.nullchar) {
-            @memcpy(buf[w..][0..utf8_replacement_char.len], &utf8_replacement_char);
-            w += utf8_replacement_char.len;
-        } else {
-            @memcpy(buf[w..][0 .. end - off], attr.text[off..end]);
-            w += end - off;
-        }
-        copied = end;
+        covered = end;
+        const piece: []const u8 = switch (attr.substr_types[i]) {
+            c.TextType.nullchar => &utf8_replacement_char,
+            c.TextType.entity => slug.resolveEntity(attr.text[off..end], &ent_buf) orelse attr.text[off..end],
+            else => attr.text[off..end],
+        };
+        @memcpy(buf[w..][0..piece.len], piece);
+        w += piece.len;
     }
-    // The substring table is contiguous and ends at `total`, but the walk is
-    // bounded rather than terminator-driven; copy any tail it did not cover.
-    if (copied < total) {
-        @memcpy(buf[w..][0 .. total - copied], attr.text[copied..total]);
-        w += total - copied;
+    if (covered < total) {
+        @memcpy(buf[w..][0 .. total - covered], attr.text[covered..total]);
+        w += total - covered;
     }
-    if (w < buf.len)
-        buf[w] = 0;
-    return buf[0..w :0];
+    std.debug.assert(w == out_len);
+    return buf;
 }
 
 // Duplicate `src` into a NUL-terminated arena slice of the same length.
@@ -990,12 +1021,32 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
         };
     }
 
+    // Entities reach the tree RESOLVED, not as source bytes.
+    //
+    // `## A &amp; B` used to produce the node `["h2",{"id":"a--b"},"A &amp; B"]`
+    // — one result carrying two answers, since the id is slugged from the
+    // resolved text (see slug.appendText above) while the text child kept the
+    // source spelling. Every consumer that is not md4x's own HTML renderer then
+    // had to reimplement entity resolution or ship the bug: undocs rendered
+    // every `&copy;` / `&mdash;` / `&nbsp;` as its own spelling until it was
+    // worked around downstream.
+    //
+    // An unrecognized entity stays verbatim, which is what the parser and every
+    // other renderer do with one. Only `.entity` events are touched: `.code`,
+    // `.latexmath` and `.html` runs are literal by definition, and the parser
+    // never types their content as an entity in the first place.
+    var ent_buf: [slug.entity_max_len]u8 = undefined;
+    const body: []const u8 = if (text_type == c.TextType.entity)
+        slug.resolveEntity(text, &ent_buf) orelse text
+    else
+        text;
+
     // Inside an image: accumulate text as alt attribute.
     if (ctx.image_nesting > 0) {
         const src: []const u8 = switch (text_type) {
             .softbr => " ",
             .nullchar => &utf8_replacement_char,
-            else => text,
+            else => body,
         };
         if (jsonAppendText(cur, src) != 0) {
             ctx.err = 1;
@@ -1008,7 +1059,7 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
     // Dynamic components (tag_is_dynamic) must never match here, even if their
     // name collides with a built-in tag (e.g. ::pre, ::code).
     if (!cur.tag_is_dynamic and cur.tag != null and isLeafContainer(cur.tag_kind)) {
-        const src: []const u8 = if (text_type == c.TextType.nullchar) &utf8_replacement_char else text;
+        const src: []const u8 = if (text_type == c.TextType.nullchar) &utf8_replacement_char else body;
         if (jsonAppendText(cur, src) != 0) {
             ctx.err = 1;
             return -1;
@@ -1092,7 +1143,7 @@ fn jsonText(text_type: c.TextType, text: []const c.MD_CHAR, userdata: ?*anyopaqu
     const src: []const u8 = switch (text_type) {
         .softbr => "\n", // Softbreak → "\n" text.
         .nullchar => &utf8_replacement_char,
-        else => text,
+        else => body,
     };
 
     // Merge consecutive text nodes, by appending the source bytes STRAIGHT onto

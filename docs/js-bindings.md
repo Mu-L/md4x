@@ -297,7 +297,7 @@ The package exports TypeScript types for the Comark AST:
 - `ComarkTree` — Root container: `{ nodes: ComarkNode[], frontmatter: Record<string, unknown>, meta: Record<string, unknown> }`. `meta` is an open bag that always carries `headings` (and `title`, via `parseAST`); the renderer additionally sets `maxDepthExceeded: true` there when a document nested deeper than the AST renderer's 1024-level cap and the excess was collapsed (see `docs/renderers.md`)
 - `ComarkNode` — Either a `ComarkElement` (tuple array) or `ComarkText` (plain string)
 - `ComarkElement` — Tuple: `[tag: string | null, props: ComarkElementAttributes, ...children: ComarkNode[]]`
-- `ComarkText` — Plain string representing text content
+- `ComarkText` — Plain string representing text content. HTML entities arrive **resolved** (`## A &amp; B` gives the text `A & B`, and likewise for a link `href`/`title` and an image `src`/`alt`), so a consumer rendering the tree escapes it like any other string instead of reimplementing entity resolution. Code spans, fenced code, math and raw `html` nodes keep their bytes verbatim — they are literal content, not entities. See `docs/renderers.md`
 - `ComarkElementAttributes` — Key-value record: `{ [key: string]: unknown }`
 - `ComarkMeta` — Metadata object: `{ frontmatter: Record<string, unknown>, headings: ComarkHeading[], title?: string }`
 - `ComarkHeading` — Heading entry: `{ level: number, text: string, id: string }`, where `id` is a GitHub-compatible slug de-duplicated within the document (two `## Same` headings yield `same` and `same-1`) and `text` has entities resolved and raw HTML tags excluded

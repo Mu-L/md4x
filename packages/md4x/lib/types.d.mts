@@ -19,6 +19,11 @@ export type ComarkTree = {
 
 export type ComarkNode = ComarkElement | ComarkText;
 
+/**
+ * Text content, with HTML entities already resolved (`A &amp; B` -> `A & B`).
+ * Escape it as you would any other string when rendering. Literal content —
+ * code spans, fenced code, math, raw `html` nodes — keeps its source bytes.
+ */
 export type ComarkText = string;
 
 export type ComarkElement = [

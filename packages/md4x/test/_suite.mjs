@@ -647,6 +647,56 @@ export function defineSuite({
       expect(img[1].alt).toBe("Alt text");
     });
 
+    // Entities reach the tree RESOLVED. `## A &amp; B` used to emit the node
+    // `["h2",{"id":"a--b"},"A &amp; B"]` -- the id slugged from the resolved
+    // text, the text child keeping the source spelling, so one parseAST result
+    // answered "what does this heading say" two different ways and every
+    // consumer that is not md4x's own HTML renderer had to reimplement entity
+    // resolution or ship the bug.
+    it("resolves entities in text nodes", async () => {
+      const ast = await parseAST("## A &amp; B");
+      const h2 = ast.nodes[0];
+      expect(h2[0]).toBe("h2");
+      expect(h2[2]).toBe("A & B");
+      // The node text and the id derived from it now agree.
+      expect(h2[1].id).toBe("a--b");
+      expect(ast.meta.headings[0].text).toBe("A & B");
+
+      const p = await parseAST("&copy; &mdash; &nbsp; &#38; &#x26;");
+      expect(p.nodes[0][2]).toBe("© —   & &");
+    });
+
+    it("resolves entities in link and image attributes", async () => {
+      const ast = await parseAST(
+        '[l](https://e.com?a=1&amp;b=2 "t&mdash;t")\n\n![a&amp;b](/i&#38;.png)',
+      );
+      const a = ast.nodes[0][2];
+      expect(a[1].href).toBe("https://e.com?a=1&b=2");
+      expect(a[1].title).toBe("t—t");
+
+      const img = ast.nodes[1][2];
+      expect(img[1].src).toBe("/i&.png");
+      expect(img[1].alt).toBe("a&b");
+    });
+
+    it("leaves literal and unrecognized entity spellings alone", async () => {
+      // Inside a code span the bytes are content, not an entity: the parser
+      // never types them as one, so `&amp;` stays five characters.
+      const code = await parseAST("`&amp;`");
+      expect(code.nodes[0][2][2]).toBe("&amp;");
+
+      const fence = await parseAST("```\n&amp;\n```");
+      expect(fence.nodes[0][2][2]).toBe("&amp;\n");
+
+      // Unrecognized entities pass through verbatim, as in every renderer.
+      const unknown = await parseAST("&Amp; &nosuchentity;");
+      expect(unknown.nodes[0][2]).toBe("&Amp; &nosuchentity;");
+
+      // Not a Unicode scalar value -> U+FFFD (md4c #325), matching parseMeta.
+      const bad = await parseAST("&#0; &#xD800; &#x110000;");
+      expect(bad.nodes[0][2]).toBe("� � �");
+    });
+
     it("parses link with title AST", async () => {
       const ast = await parseAST('[Link](https://example.com "title")');
       const p = ast.nodes[0];
