@@ -2366,3 +2366,20 @@ x
 .
 --format=json
 ````````````````````````````````
+
+## Autolinks are distinguishable in the AST
+
+The AST renderer publishes the parser's `is_autolink` bit as an `autolink`
+prop, so a consumer can tell a link the author never spelled as one from a
+real `[text](href)`. One flag covers all four spellings — bracketed, `www.`,
+bare URL, bare email — because the parser synthesizes the `http://` /
+`mailto:` prefix and keeps no record of which form produced the href. The
+prop is emitted only when true.
+
+```````````````````````````````` example [no-normalize]
+x <https://a.com> www.b.com c@d.com [t](https://e.com)
+.
+{"nodes":[["p",{},"x ",["a",{"href":"https://a.com","autolink":true},"https://a.com"]," ",["a",{"href":"http://www.b.com","autolink":true},"www.b.com"]," ",["a",{"href":"mailto:c@d.com","autolink":true},"c@d.com"]," ",["a",{"href":"https://e.com"},"t"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````

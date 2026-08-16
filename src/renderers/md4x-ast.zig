@@ -187,6 +187,7 @@ const Detail = struct {
     // a
     a_href: ?[:0]u8 = null,
     a_title: ?[:0]u8 = null,
+    a_is_autolink: bool = false,
     // img
     img_src: ?[:0]u8 = null,
     img_title: ?[:0]u8 = null,
@@ -904,6 +905,7 @@ fn jsonEnterSpan(detail: *const c.SpanDetail, userdata: ?*anyopaque) c.CallbackR
             .a => |*d| {
                 n.detail.a_href = jsonAttrToStr(&d.href);
                 n.detail.a_title = jsonAttrToStr(&d.title);
+                n.detail.a_is_autolink = d.is_autolink;
                 if (d.raw_attrs.len > 0) {
                     if (dupNts(d.raw_attrs)) |dup|
                         n.raw_attrs = dup;
@@ -1451,6 +1453,14 @@ fn jsonWriteProps(w: *JsonWriter, node: *const JsonNode) void {
                 if (has_prop != 0) jsonWrite(w, ",", 1);
                 jsonWriteStr(w, "\"title\":");
                 jsonWriteSlice(w, title);
+                has_prop = 1;
+            }
+            // `<https://x>` and the permissive forms (`www.x`, bare URL, bare
+            // email) are indistinguishable here — the parser collapses all of
+            // them into one flag.
+            if (node.detail.a_is_autolink) {
+                if (has_prop != 0) jsonWrite(w, ",", 1);
+                jsonWriteStr(w, "\"autolink\":true");
                 has_prop = 1;
             }
         },

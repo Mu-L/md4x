@@ -12,8 +12,9 @@
   testing. The EXPECTED OUTPUTS are md4x's contract, verified case by case
   against Comark's own assertions; they are not a verbatim copy of them.
   Every example here is one where md4x and Comark agree (modulo md4x's
-  documented, deliberate differences in `meta.headings` and in the AST
-  renderer's unwrap rules). Cases where the two disagree were deliberately
+  documented, deliberate differences in `meta.headings`, in the AST
+  renderer's unwrap rules, and the `autolink` prop md4x adds to an `a`
+  node the author never spelled as a link). Cases where the two disagree were deliberately
   left out rather than pinned to md4x's answer; they are tracked in the
   import report, not here.
 
@@ -1285,7 +1286,7 @@ assert, which `spec.txt` (an HTML corpus) does not cover.
 ```````````````````````````````` example [no-normalize]
 Visit it on <https://nuxt.com>
 .
-{"nodes":[["p",{},"Visit it on ",["a",{"href":"https://nuxt.com"},"https://nuxt.com"]]],"frontmatter":{},"meta":{"headings":[]}}
+{"nodes":[["p",{},"Visit it on ",["a",{"href":"https://nuxt.com","autolink":true},"https://nuxt.com"]]],"frontmatter":{},"meta":{"headings":[]}}
 .
 --format=json
 ````````````````````````````````
