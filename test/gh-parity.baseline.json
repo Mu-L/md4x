@@ -10,7 +10,7 @@
       "diverge": 3
     },
     "spec-tables.txt": {
-      "cases": 14,
+      "cases": 18,
       "diverge": 3
     },
     "spec-tasklists.txt": {
@@ -597,17 +597,17 @@
     },
     {
       "suite": "spec-tables.txt",
-      "n": 7,
+      "n": 9,
       "cause": "unclassified"
     },
     {
       "suite": "spec-tables.txt",
-      "n": 12,
+      "n": 16,
       "cause": "markup-shape"
     },
     {
       "suite": "spec-tables.txt",
-      "n": 14,
+      "n": 18,
       "cause": "unclassified"
     },
     {

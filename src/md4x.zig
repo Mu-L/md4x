@@ -1500,14 +1500,15 @@ test "OOM: full md_parse sweep is crash- and leak-free under FailingAllocator" {
     // A document that exercises every ctx.alloc-routed allocation: link reference
     // definitions (ref_defs array + ref_def_hashtable + a duplicate to walk the
     // bucket path), headings/paragraphs/lists/code (block_bytes), emphasis
-    // (marks), a table (pipe_offs + align_arr scratch), a fenced code block with
+    // (marks), a table interrupting a paragraph (pipe_offs + align_arr scratch,
+    // plus md_split_off_table_header's two block-arena pushes), a fenced code block with
     // filename + highlight metadata (md_build_attribute info/lang/filename +
     // meta_buf/meta_copy), an inline link title with an entity (md_build_attribute
     // non-trivial path), inline/block components with attributes, and the three
     // md_merge_lines_alloc buffers (PLAN item 5 — see the tail of the document).
     // std.testing.allocator flags any leak; FailingAllocator turns each
     // successive internal allocation into OOM so every abort/cleanup path runs.
-    // The document currently makes 46 ctx.alloc allocations, 4 of them merges
+    // The document currently makes 47 ctx.alloc allocations, 4 of them merges
     // and 6 of them the footnote sites listed at the tail of the document.
     //
     // The second titled link carries a 15-substring title (8 entities separated
@@ -1522,7 +1523,9 @@ test "OOM: full md_parse sweep is crash- and leak-free under FailingAllocator" {
         "# Heading *em* `c`\n\nParagraph linking [a] and [b] with **strong**.\n\n" ++
         "A [titled](/u \"a &amp; b\") link and :badge[New]{color=\"blue\" #id .cls}.\n\n" ++
         "Grown [t](/u \"a&amp;b&amp;c&amp;d&amp;e&amp;f&amp;g&amp;h\") title.\n\n" ++
-        "| a | b |\n|:--|--:|\n| 1 | 2 |\n| 3 | 4 |\n\n" ++
+        // No blank line before the table: it INTERRUPTS this paragraph, so
+        // md_split_off_table_header's block-arena pushes are swept too.
+        "Table below:\n| a | b |\n|:--|--:|\n| 1 | 2 |\n| 3 | 4 |\n\n" ++
         "```js [app.js] {1-2,4} extra\ncode line\nmore code\n```\n\n" ++
         "::alert{type=\"info\"}\nNested **content** here.\n::\n\n" ++
         "Mail me@example.com or visit www.example.org for details.\n\n" ++

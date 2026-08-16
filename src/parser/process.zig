@@ -1410,6 +1410,13 @@ pub fn md_process_line(ctx: *MD_CTX, p_pivot_line: *[*c]const MD_LINE_ANALYSIS, 
 
     // .table_underline changes meaning of current block.
     if (line.type == .table_underline) {
+        // Only the block's last line is the header row. If the block holds more,
+        // the table is interrupting a paragraph: split the earlier lines off as
+        // a paragraph of their own first.
+        if (ctx.current_block.*.n_lines > 1) {
+            ret = blocks.md_split_off_table_header(ctx);
+            if (ret < 0) return ret;
+        }
         ctx.current_block.*.setType(c.BlockType.table);
         ctx.current_block.*.bits.data = @truncate(line.data);
         @as(*MD_LINE_ANALYSIS, @constCast(pivot_line)).type = .table;

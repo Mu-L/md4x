@@ -123,7 +123,10 @@ quux|quuz
 </table>
 ````````````````````````````````
 
-The table cannot interrupt a paragraph.
+A table CAN interrupt a paragraph: the line right above the underline is taken
+as the header row, and whatever precedes it stays a paragraph. (md4c required a
+blank line here and rendered the whole table as literal pipes; GitHub does not,
+and a missing blank line is a common authoring slip.)
 
 ```````````````````````````````` example
 Lorem ipsum dolor sit amet.
@@ -133,12 +136,100 @@ Lorem ipsum dolor sit amet.
 | baz      | qux
 | quux     | quuz
 .
-<p>Lorem ipsum dolor sit amet.
+<p>Lorem ipsum dolor sit amet.</p>
+<table>
+<thead>
+<tr><th>Column 1</th><th>Column 2</th></tr>
+</thead>
+<tbody>
+<tr><td>foo</td><td>bar</td></tr>
+<tr><td>baz</td><td>qux</td></tr>
+<tr><td>quux</td><td>quuz</td></tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Only the last line of the paragraph is the header; the rest keeps its soft
+breaks:
+
+```````````````````````````````` example
+one
+two
+Column 1 | Column 2
+---------|---------
+foo      | bar
+.
+<p>one
+two</p>
+<table>
+<thead>
+<tr><th>Column 1</th><th>Column 2</th></tr>
+</thead>
+<tbody>
+<tr><td>foo</td><td>bar</td></tr>
+</tbody>
+</table>
+````````````````````````````````
+
+The interrupted paragraph is still closed the normal way, so leading link
+reference definitions in it are still eaten:
+
+```````````````````````````````` example
+[ref]: /url
+Column 1 | Column 2
+---------|---------
+foo      | bar
+
+[ref]
+.
+<table>
+<thead>
+<tr><th>Column 1</th><th>Column 2</th></tr>
+</thead>
+<tbody>
+<tr><td>foo</td><td>bar</td></tr>
+</tbody>
+</table>
+<p><a href="/url">ref</a></p>
+````````````````````````````````
+
+It interrupts inside a container too:
+
+```````````````````````````````` example
+> Lorem ipsum
+> | Column 1 | Column 2
+> | ---------|---------
+> | foo      | bar
+.
+<blockquote>
+<p>Lorem ipsum</p>
+<table>
+<thead>
+<tr><th>Column 1</th><th>Column 2</th></tr>
+</thead>
+<tbody>
+<tr><td>foo</td><td>bar</td></tr>
+</tbody>
+</table>
+</blockquote>
+````````````````````````````````
+
+An underline that is only a LAZY continuation line does not, though — same rule
+as everywhere else, the underline has to belong to the same container as the
+header row:
+
+```````````````````````````````` example
+> Lorem ipsum
 | Column 1 | Column 2
 | ---------|---------
 | foo      | bar
-| baz      | qux
-| quux     | quuz</p>
+.
+<blockquote>
+<p>Lorem ipsum
+| Column 1 | Column 2
+| ---------|---------
+| foo      | bar</p>
+</blockquote>
 ````````````````````````````````
 
 Similarly, paragraph cannot interrupt a table:

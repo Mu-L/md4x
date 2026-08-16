@@ -49,7 +49,7 @@ mirrored in `napi.mjs`). Notably absent by default: `HEADING_IDS` (`0x20`), `FUL
 | Code fence info (`class="language-x"`) |     ✅     |                   ⚠️                    |              ✅               |
 | Raw HTML                               |     ✅     |             ⚠️ unsanitized              |              ✅               |
 | Entity escaping in attributes          |     ✅     |                   ⚠️                    |              ✅               |
-| Tables                                 |     —      |      ⚠️ can't interrupt paragraph       |              ✅               |
+| Tables                                 |     —      |     ⚠️ code span across a cell edge     |              ✅               |
 | Task lists                             |     —      |     ❌ missing classes / a11y attrs     |            ⚠️ same            |
 | Strikethrough                          |     —      |                   ✅                    |              ✅               |
 | Permissive autolinks                   |     ➕     |           ⚠️ scheme allowlist           |              ✅               |
@@ -122,17 +122,21 @@ Measured live against `api.github.com/markdown` in both `markdown` and `gfm` mod
 counts as parity if it matches either. Baseline: `test/gh-parity.baseline.json`,
 rationale in [.agents/github-parity.md](../.agents/github-parity.md).
 
-**186 divergences over 791 cases**, down from 192. The baseline was re-recorded after two
+**186 divergences over 795 cases**, down from 192. The baseline was re-recorded after two
 changes: the frontmatter body test took spec.txt 96 and 98 to parity, and removing wiki
 links took 548 and 559 (590 dropped to a plain `entity-escaping` divergence, and the two
 wiki cases in `spec-footnotes.txt` are gone). `md4x-extension` fell from 10 to 3 between
 them.
 
+Tables interrupting a paragraph (2026-08-16) closed one divergence and opened one, both in
+`spec-tables.txt` and both `unclassified`, so every total below is unchanged; only that
+suite was re-measured, and it grew from 14 cases to 18.
+
 | Suite                         |  Parity |
 | ----------------------------- | ------: |
 | spec.txt                      | 545/652 |
 | spec-gfm.txt                  |   14/17 |
-| spec-tables.txt               |   11/14 |
+| spec-tables.txt               |   15/18 |
 | spec-tasklists.txt            |     1/9 |
 | spec-footnotes.txt            |    9/36 |
 | spec-alerts.txt               |   11/43 |
@@ -153,7 +157,8 @@ them.
 100 of 186 are declared not-goals. **No divergence is an outright "md4x emits wrong HTML"
 bug** — each reduces to a not-goal, a decision already taken, a GitHub defect, or an open
 gap. Cases where md4x is the correct one include CommonMark-exact nested strong (8),
-`&#87654321;` (GitHub emits U+FFFD), footnote-in-link, and `[^nf]:` after a paragraph.
+`&#87654321;` (GitHub emits U+FFFD), footnote-in-link, `[^nf]:` after a paragraph, and a
+link reference definition on the line above a table header (GitHub leaves it as text).
 
 Open, undecided gaps:
 
@@ -164,8 +169,13 @@ Open, undecided gaps:
   wrap, `&#8617;` vs `↩` + `data-footnote-backref` + `aria-label`.
 - **Footnote anchor ids** (3–4 cases) — numbered `fn-1`/`fnref-1-1` instead of
   label-derived `fn-a`. Breaks deep links into GitHub-rendered documents.
-- **Tables cannot interrupt a paragraph** (1 case) — highest real-document risk here: a
-  missing blank line turns an entire table into paragraph text.
+
+_(Tables not being able to interrupt a paragraph used to be the fourth entry, and the
+highest real-document risk on it: a missing blank line turned an entire table into
+paragraph text. Closed 2026-08-16 — the header row now only has to be the **last** line of
+the paragraph, not its only line, and the lines above it stay a paragraph. `spec-tables.txt`
+pins the split, the lazy-continuation case that still declines, and the ref-def
+interaction.)_
 
 The other 16 `markup-shape` cases are not gaps: 8 are CommonMark-exact nested strong, 6
 are the `class="language-x"` fence spelling, and 2 are hosting artifacts (GitHub's camo

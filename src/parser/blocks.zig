@@ -244,6 +244,39 @@ pub fn md_end_current_block(ctx: *MD_CTX) c_int {
     return ret;
 }
 
+// Split the LAST line off the current paragraph block, so that line alone can
+// become a table header row and everything before it stays a paragraph. This is
+// what lets a table interrupt a paragraph (`md_process_line`'s .table_underline
+// arm calls it; the classifier already checked the block is a `p` with lines).
+//
+// The paragraph is closed through `md_end_current_block`, so it still gets its
+// leading link-reference / footnote definitions eaten — and may vanish entirely
+// if that is all it held, which is why nothing here may assume it survived.
+pub fn md_split_off_table_header(ctx: *MD_CTX) c_int {
+    const lines: [*c]MD_LINE = @ptrCast(@alignCast(ctx.current_block + 1));
+    const n_lines: MD_SIZE = ctx.current_block.*.n_lines;
+
+    // Nothing above the header row: the block already IS the header.
+    if (n_lines <= 1)
+        return 0;
+
+    // By value: the arena moves under md_push_block_bytes below.
+    const header: MD_LINE = lines[n_lines - 1];
+
+    // Close the paragraph without its last line.
+    ctx.current_block.*.n_lines = n_lines - 1;
+    ctx.n_block_bytes -= @sizeOf(MD_LINE);
+    var ret = md_end_current_block(ctx);
+    if (ret < 0) return ret;
+
+    // Reopen a one-line block holding just the header row. The caller retypes
+    // it to `table` immediately.
+    const header_analysis: MD_LINE_ANALYSIS = .{ .type = .text, .beg = header.beg, .end = header.end };
+    ret = md_start_new_block(ctx, &header_analysis);
+    if (ret < 0) return ret;
+    return md_add_line_into_current_block(ctx, &header_analysis);
+}
+
 pub fn md_add_line_into_current_block(ctx: *MD_CTX, analysis: *const MD_LINE_ANALYSIS) c_int {
     // MD_ASSERT(ctx->current_block != NULL);
     const bt = ctx.current_block.*.getType();
@@ -1923,7 +1956,14 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         {
             var col_count: c_uint = undefined;
 
-            if (ctx.current_block != null and ctx.current_block.*.n_lines == 1 and
+            // The header row is the block's LAST line, not necessarily its
+            // only one: md4c required `n_lines == 1`, so a table following a
+            // paragraph line with no blank line between them stayed paragraph
+            // text in full. GitHub lets the table interrupt, and the failure
+            // mode of not doing so is the whole table rendering as literal
+            // pipes. `md_split_off_table_header` splits the paragraph.
+            if (ctx.current_block != null and ctx.current_block.*.n_lines >= 1 and
+                ctx.current_block.*.getType() == c.BlockType.p and
                 md_is_table_underline(ctx, off, &off, &col_count))
             {
                 line.data = col_count;

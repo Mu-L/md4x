@@ -80,15 +80,15 @@ marker rather than from anything the author wrote, so scoring it would compare t
 identical decisions — and would charge md4x forever for the ~700-byte octicon GitHub
 inlines and md4x deliberately does not.
 
-## Baseline — 2026-08-15
+## Baseline — 2026-08-15, `spec-tables.txt` re-measured 2026-08-16
 
-791 cases. Parity by suite:
+795 cases. Parity by suite:
 
 | suite                           | parity  |
 | ------------------------------- | ------- |
 | `spec.txt` (CommonMark core)    | 545/652 |
 | `spec-gfm.txt`                  | 14/17   |
-| `spec-tables.txt`               | 11/14   |
+| `spec-tables.txt`               | 15/18   |
 | `spec-strikethrough.txt`        | 5/5     |
 | `spec-permissive-autolinks.txt` | 9/15    |
 | `spec-footnotes.txt`            | 9/36    |
@@ -111,6 +111,14 @@ Divergences by cause:
 The headline number is misleading on its own and should never be quoted bare: 100 of the
 186 divergences are causes md4x will not chase, and `spec.txt`'s 545/652 is almost
 entirely `sanitizer` plus `entity-escaping`. The number that matters is `unclassified`.
+
+The 2026-08-16 run covered `spec-tables.txt` only (the suite gained four examples when
+tables learned to interrupt a paragraph, which renumbers its cases). Every total above
+happens to be unchanged: the interrupt divergence closed and one new one opened in the
+same suite and the same `unclassified` bucket — see the [triage](#unclassified-23--triaged-still-open).
+The other seven suites are the 2026-08-15 figures, untouched by that change (the
+`diff-corpus.sh` sweep showed no other output moving). **Re-record the whole baseline
+(`--update`) with the next parity-affecting change** rather than hand-patching again.
 
 ## Not goals
 
@@ -168,7 +176,7 @@ produced no link at all" guard therefore missed three of these
 The rule fires only when every extra link is a genuine autolink — an anchor whose text
 _is_ its href. `spec.txt#500` (`[link](foo\)\:)`) used to slip in because its href has no
 recognised scheme, but it is an ordinary inline link that GitHub's URL filter dropped, and
-it now scores as `markup-shape`. Likewise `spec-tables.txt#12`, where the extra href is
+it now scores as `markup-shape`. Likewise `spec-tables.txt#16`, where the extra href is
 GitHub's camo image proxy wrapping an `<img>`.
 
 ### Autolink border rules (5)
@@ -244,7 +252,7 @@ these is a product decision nobody has taken.
   not; the backref is `&#8617;` with `class="footnote-backref"` against a literal `↩` with
   `data-footnote-backref` and an `aria-label`.
 
-- **Tables — 1 case**, and only because of camo image proxying the harness could not fully
+- **Tables — 1 case** (`spec-tables.txt#16`), and only because of camo image proxying the harness could not fully
   undo. Table markup is otherwise identical.
 
 - **`spec.txt#500` — 1 case**, and not a wrapper difference: `[link](foo\)\:)` is an
@@ -257,13 +265,18 @@ these is a product decision nobody has taken.
 
 Real behavioural differences. Three are GitHub being wrong.
 
-**Tables (2).** The only two table divergences that are not cosmetic, and the first is
-the most likely of anything here to bite a real document:
+**Tables (2).** The only two table divergences that are not cosmetic:
 
-| case                 | difference                                                                                                                                                                                           |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec-tables.txt#7`  | GitHub lets a table **interrupt a paragraph**; md4x requires a blank line first, so the whole table stays paragraph text. A common authoring mistake, and md4x's output is unusable when it happens. |
-| `spec-tables.txt#14` | GitHub does not let a **code span cross a cell boundary** — `` `foo \| bar` `` splits at the pipe into two cells. md4x keeps it as one code span and leaves the next cell empty.                     |
+| case                 | difference                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec-tables.txt#9`  | A link reference definition on the line above the header row: md4x consumes it as a ref def (CommonMark's rule for the start of a paragraph) and resolves the later `[ref]`; GitHub renders `<p>[ref]: /url</p>` and leaves the use unlinked. Both render the table. **GitHub is wrong** — cmark-gfm appears to skip the ref-def scan on the paragraph a table interrupted. |
+| `spec-tables.txt#18` | GitHub does not let a **code span cross a cell boundary** — `` `foo \| bar` `` splits at the pipe into two cells. md4x keeps it as one code span and leaves the next cell empty.                                                                                                                                                                                            |
+
+`spec-tables.txt#7` used to head this table: GitHub let a table **interrupt a paragraph**
+and md4x required a blank line first, so a whole table rendered as literal pipes. Closed
+on 2026-08-16 — the header row no longer has to be the block's only line, just its last
+(`md_split_off_table_header`). It was the highest real-document risk in the whole
+baseline, because the missing blank line is a routine authoring slip.
 
 **Alerts (13).** Almost all one finding: **md4x treats any `[!label]` as an alert**, GitHub
 only its five (`NOTE`, `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`). Cases 6, 17, 37, 38, 39,

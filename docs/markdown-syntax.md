@@ -33,6 +33,10 @@ on `meta.headings` for TOC building. A `{#custom-id}` block attribute overrides 
 
 - Alignment via colons: `:---` left, `:---:` center, `---:` right
 - Leading/trailing pipes optional (except single-column)
+- **A table may interrupt a paragraph** — no blank line needed above it. The line directly
+  above the `---|---` underline is the header row; anything before that stays a paragraph.
+  (An underline that is only a lazy continuation line does not open a table: it has to sit
+  in the same container as the header row.)
 - Max 128 columns (DoS protection)
 - Cell content supports inline markdown
 

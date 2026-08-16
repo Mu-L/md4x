@@ -376,6 +376,27 @@ from a whitespace/raw-HTML/container token alphabet, normalized through `test/no
 against markdown-it's `commonmark` preset reported 0 regressions and 762 inputs that newly
 agree with it.
 
+## Deliberate deviations — a table may interrupt a paragraph
+
+Also not an upstream commit. md4c gates the table underline on
+`ctx.current_block->n_lines == 1`, so the header row has to be the **only** line of the
+block: with no blank line above it, the underline is ordinary paragraph text and the whole
+table renders as literal pipes. md4x gates on the header being the block's **last** line
+instead (`blocks.zig`, the table-underline branch of `md_analyze_line`), and
+`md_split_off_table_header` closes the preceding lines as their own paragraph before
+`md_process_line` retypes the remainder to `table`.
+
+Why it diverges rather than staying in sync: GitHub interrupts here, cmark-gfm has always
+interrupted here, and the failure mode of not doing so is the worst in the parity baseline
+— a missing blank line is a routine authoring slip and it destroys the whole block rather
+than degrading it. It was `spec-tables.txt#7` in [`github-parity.md`](github-parity.md).
+
+Two things deliberately did **not** change: the underline must still sit in the same
+container as the header row (a lazy continuation line does not open a table), and the
+interrupted paragraph is still closed through `md_end_current_block`, so its leading link
+reference / footnote definitions are still consumed. GitHub drops the ref def in that last
+case; md4x keeps CommonMark's reading. All three are pinned in `test/spec-tables.txt`.
+
 ## Deliberate deviations — `test/spec.txt` is not CommonMark 0.31.2
 
 Everything above concerns md4x code diverging from md4c. This one is different in kind and
