@@ -36,6 +36,7 @@ const std = @import("std");
 const c = @import("abi");
 const util = @import("../parser/util.zig");
 const entity = @import("../entity.zig");
+const props = @import("md4x-props.zig");
 
 /// Accumulated heading text. Owned by the caller's allocator.
 pub const TextBuf = std.ArrayListUnmanaged(u8);
@@ -116,6 +117,48 @@ fn encodeUtf8(codepoint: u32, out: *[4]u8) []const u8 {
 
     const n = std.unicode.utf8Encode(@intCast(codepoint), out) catch return replacement;
     return out[0..n];
+}
+
+// ============================================================================
+// Explicit ids
+// ============================================================================
+
+/// The explicit id from a heading's trailing `{...}` run, if it has one, in
+/// either the `#id` shorthand or the `id="..."` key-value spelling. `null` means
+/// the heading has no explicit id and the generated slug applies.
+///
+/// This lives here rather than in each renderer because an explicit id is the
+/// *other* half of the "what is this heading's id" question that `slugify`
+/// answers. `meta.headings` used to answer it without this half: `## Custom
+/// {#my-anchor}` published `my-anchor` from the AST (and from the HTML anchor)
+/// but the generated `custom` from meta, so a table of contents built from
+/// `parseMeta` linked to a fragment the rendered document does not carry.
+///
+/// The returned slice borrows `raw_attrs`, which points into the parser's input
+/// buffer; a caller that keeps the id past the parse must copy it.
+pub fn explicitId(raw_attrs: []const u8) ?[]const u8 {
+    if (raw_attrs.len == 0) return null;
+
+    var parsed: props.MD_PARSED_PROPS = .{};
+    props.md_parse_props(raw_attrs.ptr, @intCast(raw_attrs.len), &parsed);
+    // The shorthand and the key-value spelling both land on the attribute name
+    // `id`, so either one has to suppress the generated slug.
+    if (!props.parsedHasId(&parsed)) return null;
+
+    if (parsed.id) |p| {
+        if (parsed.id_size > 0) return p[0..parsed.id_size];
+    }
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(parsed.n_props))) : (i += 1) {
+        const p = &parsed.props[i];
+        if (p.key_size == 2 and std.mem.eql(u8, p.key[0..2], "id")) {
+            // A valueless `{id}` is a boolean prop: it still occupies the `id`
+            // attribute, so it suppresses the slug and contributes nothing.
+            const v = p.value orelse return "";
+            return v[0..p.value_size];
+        }
+    }
+    return null;
 }
 
 // ============================================================================
@@ -293,6 +336,19 @@ test "Slugger disambiguates collisions" {
     // free name rather than stealing one already handed out.
     try testing.expectEqualStrings("same-1-1", try s.slug(alloc, "Same 1"));
     try testing.expectEqualStrings("other", try s.slug(alloc, "Other"));
+}
+
+test "explicitId reads both spellings" {
+    try testing.expectEqualStrings("my-anchor", explicitId("#my-anchor").?);
+    try testing.expectEqualStrings("kv-id", explicitId("id=\"kv-id\"").?);
+    try testing.expectEqualStrings("x", explicitId(".cls #x data-a=\"b\"").?);
+    // A valueless `{id}` still occupies the attribute, so it suppresses the
+    // generated slug while contributing nothing.
+    try testing.expectEqualStrings("", explicitId("id").?);
+    // No id in the run: the generated slug applies.
+    try testing.expect(explicitId("") == null);
+    try testing.expect(explicitId(".cls") == null);
+    try testing.expect(explicitId("#") == null);
 }
 
 test "appendText resolves entities and drops raw HTML" {

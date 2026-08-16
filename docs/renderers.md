@@ -433,6 +433,7 @@ frontmatter alone.
 - HTML entities in headings are resolved to UTF-8 characters
 - Raw HTML inside a heading is **excluded** from its text: `## a <b>x</b>` reads `a x`, which is what the id is slugged from
 - `id` is a GitHub-compatible slug (case-folded, punctuation stripped, spaces to `-`) de-duplicated within the document with a `-1`/`-2` suffix. The slugging lives in `src/renderers/md4x-slug.zig` and is driven from the same SAX text stream in the AST renderer, so the two entry points cannot publish different ids for one heading
+- An explicit `{#id}` (or `{id="..."}`) on the heading line **wins** over the generated slug, matching the AST renderer and the HTML anchor — a TOC built from `headings` has to point at the anchor the document actually carries. The explicit id is used verbatim: it is neither slugged nor registered as an occurrence, so it never renumbers a later generated slug (`## A {#x}` then `## A` gives `x`, `a`). The recognizer is `slug.explicitId`, shared with both other renderers
 - Footnote blocks and references are ignored — they contribute nothing to frontmatter or the heading list
 - Uses streaming renderer pattern (like HTML renderer), no AST construction
 

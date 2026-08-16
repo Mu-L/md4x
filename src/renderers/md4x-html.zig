@@ -1101,14 +1101,11 @@ fn heading_id(r: *MD_HTML) ?[]const u8 {
     return r.slugger.slug(arena.allocator(), r.heading_text.items) catch null;
 }
 
-// Whether the heading's trailing `{...}` run carries an explicit id, in either
-// the `#id` shorthand or the `id="..."` key-value spelling. Both land on the
-// same attribute name, so either one must suppress the generated slug.
+// Whether the heading's trailing `{...}` run carries an explicit id. The parse
+// lives in md4x-slug.zig alongside the slugger, so this anchor and the id the
+// AST and meta renderers publish for the same heading agree by construction.
 fn heading_attrs_have_id(r: *MD_HTML) bool {
-    if (r.heading_attrs.len == 0) return false;
-    var parsed: props.MD_PARSED_PROPS = .{};
-    props.md_parse_props(r.heading_attrs.ptr, @intCast(r.heading_attrs.len), &parsed);
-    return props.parsedHasId(&parsed);
+    return slug.explicitId(r.heading_attrs) != null;
 }
 
 // Case-fold the `[!TYPE]` name into the output, optionally with an initial

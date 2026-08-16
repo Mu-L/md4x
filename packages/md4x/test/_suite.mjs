@@ -2180,10 +2180,52 @@ export function defineSuite({
       ]);
     });
 
+    // An explicit `{#id}` is the anchor the rendered HTML actually carries, so
+    // it has to be the id a TOC built from `meta.headings` links to. This used
+    // to publish the generated slug (`custom`) here while parseAST and the HTML
+    // anchor both said `my-anchor`, pointing every such TOC entry at a fragment
+    // that does not exist in the document.
+    it("lets an explicit {#id} win over the generated slug", async () => {
+      const meta = await parseMeta(
+        '## Custom {#my-anchor}\n\n## Plain\n\n## Kv {id="kv-id"}',
+      );
+      expect(meta.headings.map((h) => h.id)).toEqual([
+        "my-anchor",
+        "plain",
+        "kv-id",
+      ]);
+    });
+
+    // An explicit id is not slugged, and does not register as an occurrence:
+    // the two later generated slugs number from the start, not from `x`.
+    it("keeps an explicit {#id} out of the de-duplication counter", async () => {
+      const meta = await parseMeta("## Custom {#x}\n\n## Custom\n\n## Custom");
+      expect(meta.headings.map((h) => h.id)).toEqual([
+        "x",
+        "custom",
+        "custom-1",
+      ]);
+    });
+
     it("agrees with parseAST on every heading id", async () => {
-      const src = "# A &amp; B\n\n## Same\n\n## Same\n\n## a <b>x</b>";
+      const src =
+        "# A &amp; B\n\n## Same\n\n## Same\n\n## a <b>x</b>\n\n" +
+        '## Custom {#my-anchor}\n\n## Kv {id="kv-id"}\n\n## Empty {#}\n\n' +
+        "## Classes {.cls}\n\n## Same {#same}\n\n## Same";
       const tree = await parseAST(src);
       expect((await parseMeta(src)).headings).toEqual(tree.meta.headings);
+    });
+
+    // ...and with the anchor the HTML renderer emits for the same heading, the
+    // third publisher of a heading id.
+    it("agrees with renderToHtml on every heading anchor", async () => {
+      const src =
+        '## Custom {#my-anchor}\n\n## Plain\n\n## Kv {id="kv-id"}\n\n' +
+        "## Same\n\n## Same";
+      const html = await renderToHtml(src, { headingIds: true });
+      for (const heading of (await parseMeta(src)).headings) {
+        expect(html).toContain(`id="${heading.id}"`);
+      }
     });
 
     it("falls back to first heading as title", async () => {

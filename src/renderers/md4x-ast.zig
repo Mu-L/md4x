@@ -531,26 +531,11 @@ const heading_tags = [_][:0]const u8{ "h0", "h1", "h2", "h3", "h4", "h5", "h6" }
 // Record a block's trailing `{...}` run on the node. Same channel the spans use,
 // so jsonWriteProps merges it after the block type's own props with no extra
 // case of its own. Best-effort on OOM, exactly like the span sites.
-// The explicit id from a heading's trailing `{...}` run, if it has one, in
-// either the `#id` shorthand or the `id="..."` key-value spelling.
+// The explicit id from a heading's trailing `{...}` run, read off the node's
+// stored attrs. The parse itself lives in md4x-slug.zig so the AST, HTML and
+// meta renderers cannot disagree about what counts as an explicit id.
 fn headingExplicitId(n: *JsonNode) ?[]const u8 {
-    const raw = n.raw_attrs orelse return null;
-    if (raw.len == 0) return null;
-    var parsed: props.MD_PARSED_PROPS = .{};
-    props.md_parse_props(raw.ptr, @intCast(raw.len), &parsed);
-    if (!props.parsedHasId(&parsed)) return null;
-    if (parsed.id) |p| {
-        if (parsed.id_size > 0) return p[0..parsed.id_size];
-    }
-    var i: usize = 0;
-    while (i < @as(usize, @intCast(parsed.n_props))) : (i += 1) {
-        const p = &parsed.props[i];
-        if (p.key_size == 2 and std.mem.eql(u8, p.key[0..2], "id")) {
-            const v = p.value orelse return "";
-            return v[0..p.value_size];
-        }
-    }
-    return null;
+    return slug.explicitId(n.raw_attrs orelse return null);
 }
 
 fn jsonSetBlockAttrs(n: *JsonNode, raw_attrs: []const u8) void {

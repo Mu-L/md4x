@@ -154,10 +154,22 @@ fn meta_leave_block(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callb
         // Store the completed heading, with the GitHub-compatible id consumers
         // used to have to derive (and de-duplicate) themselves.
         ctx.in_heading = false;
+        // An explicit `{#id}` on the heading line wins over the generated slug,
+        // exactly as it does in the AST and in the HTML anchor. `raw_attrs` is
+        // still populated on the detail at leave time (the leaf-block path hands
+        // the same `det` to both callbacks), so it is read here rather than
+        // stashed at enter.
+        const explicit = slug.explicitId(detail.h.raw_attrs);
         const store = struct {
-            fn run(cx: *META_CTX) !void {
+            fn run(cx: *META_CTX, exp: ?[]const u8) !void {
                 const text = try cx.alloc.dupe(u8, cx.heading_text.items);
-                const id = try cx.slugger.slug(cx.alloc, text);
+                // An explicit id bypasses the slugger entirely — it is not
+                // slugged and, matching the AST, not registered as an
+                // occurrence, so it cannot renumber a later generated slug.
+                const id = if (exp) |e|
+                    try cx.alloc.dupe(u8, e)
+                else
+                    try cx.slugger.slug(cx.alloc, text);
                 try cx.headings.append(cx.alloc, .{
                     .level = cx.heading_level,
                     .text = text,
@@ -165,7 +177,7 @@ fn meta_leave_block(detail: *const c.BlockDetail, userdata: ?*anyopaque) c.Callb
                 });
             }
         };
-        store.run(ctx) catch {
+        store.run(ctx, explicit) catch {
             ctx.err = 1;
             return -1;
         };
