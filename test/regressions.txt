@@ -2383,3 +2383,79 @@ x <https://a.com> www.b.com c@d.com [t](https://e.com)
 .
 --format=json
 ````````````````````````````````
+
+## An autolink's label resolves entities, like its destination
+
+`md_build_attribute()` has always decoded entity references in an autolink's
+destination — the `MD_BUILD_ATTR_NO_ESCAPES` flag it is handed gates only the
+backslash branch, never the `&` one. The label did not: `md_collect_marks`
+jumped from the opening `<` straight to `autolink_end`, so no entity mark was
+ever collected inside. One link then disagreed with itself, worst in the AST
+(`href` decoded, child text literal) and in the markdown renderer, which
+round-tripped the autolink into a plain link whose label and href differed.
+
+The label is the half that was wrong. cmark-gfm — what GitHub runs — decodes
+both, and CommonMark's entity section exempts only code spans and code blocks,
+so nothing exempts an autolink. Inherited byte-identically from md4c; see
+`.agents/upstream-sync.md`.
+
+```````````````````````````````` example
+<https://e.com/?a=1&amp;b=2>
+.
+<p><a href="https://e.com/?a=1&amp;b=2">https://e.com/?a=1&amp;b=2</a></p>
+````````````````````````````````
+
+A named entity outside ASCII percent-encodes in the destination and renders as
+the character in the label:
+
+```````````````````````````````` example
+<https://e.com/?x=&copy;y>
+.
+<p><a href="https://e.com/?x=%C2%A9y">https://e.com/?x=©y</a></p>
+````````````````````````````````
+
+The AST is where the two halves used to disagree:
+
+```````````````````````````````` example [no-normalize]
+<https://e.com/?x=&copy;y>
+.
+{"nodes":[["p",{},["a",{"href":"https://e.com/?x=©y","autolink":true},"https://e.com/?x=©y"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+Only a whole, valid entity is recognized. A bare `&`, an unterminated `&amp`, a
+stray `;`, an unknown name and an out-of-range numeric reference all stay
+literal — exactly as they do in ordinary text:
+
+```````````````````````````````` example
+<https://e.com/?a=&b=1&amp&nosuchentity;&#999999999;;>
+.
+<p><a href="https://e.com/?a=&amp;b=1&amp;amp&amp;nosuchentity;&amp;#999999999;;">https://e.com/?a=&amp;b=1&amp;amp&amp;nosuchentity;&amp;#999999999;;</a></p>
+````````````````````````````````
+
+Adjacent entities, and one ending flush against the closing `>`:
+
+```````````````````````````````` example
+<https://e.com/&amp;&copy;&#42;>
+.
+<p><a href="https://e.com/&amp;%C2%A9*">https://e.com/&amp;©*</a></p>
+````````````````````````````````
+
+Any URI autolink takes the same path, not just `http`/`https`:
+
+```````````````````````````````` example
+<ftp://e.com/p?a=&amp;b>
+.
+<p><a href="ftp://e.com/p?a=&amp;b">ftp://e.com/p?a=&amp;b</a></p>
+````````````````````````````````
+
+An **e-mail** autolink never reaches it: `;` is not in the local-part character
+set CommonMark's e-mail rule accepts, so an address carrying an entity is not
+an autolink at all and the whole thing stays literal text.
+
+```````````````````````````````` example
+<a&amp;b@e.com>
+.
+<p>&lt;a&amp;b@e.com&gt;</p>
+````````````````````````````````

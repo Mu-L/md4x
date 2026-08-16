@@ -777,16 +777,60 @@ pub fn md_collect_marks(ctx: *MD_CTX, lines: []const MD_LINE, table_mode: bool) 
                     var flags: u8 = MarkFlags.resolved | MarkFlags.autolink;
                     if (missing_mailto) flags |= MarkFlags.autolink_missing_mailto;
 
+                    const autolink_opener: c_int = ctx.nMarks();
                     if (addMark(ctx, '<', off, off + 1, MarkFlags.opener | flags) == null) {
                         ret = -1;
                         return ret;
                     }
+
+                    // The autolink's LABEL still resolves entities: `<...&amp;...>`
+                    // renders the text as `&`, matching the destination, which
+                    // `md_build_attribute()` has always decoded. md4c skips the
+                    // interior wholesale here, which decodes the destination but
+                    // leaves the label literal — the two halves of one link then
+                    // disagree, and the markdown renderer round-trips the autolink
+                    // into a plain link whose label and href differ. cmark-gfm (what
+                    // GitHub runs) decodes both, and CommonMark's entity section
+                    // exempts only code spans and code blocks, so the label is the
+                    // half that was wrong. Deliberate divergence from md4c; see
+                    // .agents/upstream-sync.md.
+                    //
+                    // Only whole, valid entities become marks, and they are emitted
+                    // pre-resolved in the shape `md_analyze_entity()` would have left
+                    // them (opener spanning `&`..`;`, closer on the `;`) — the
+                    // analysis phase never revisits a range inside a resolved
+                    // autolink. A bare `&` or a stray `;` collects nothing and stays
+                    // ordinary text.
+                    var ent_off: OFF = off + 1;
+                    while (ent_off + 1 < autolink_end - 1) : (ent_off += 1) {
+                        if (ctx.ch(ent_off) != '&') continue;
+
+                        var ent_end: OFF = undefined;
+                        if (!md_is_entity(ctx, ent_off, autolink_end - 1, &ent_end)) continue;
+
+                        const ent_opener: c_int = ctx.nMarks();
+                        if (addMark(ctx, '&', ent_off, ent_end, MarkFlags.opener | MarkFlags.resolved) == null) {
+                            ret = -1;
+                            return ret;
+                        }
+                        if (addMark(ctx, ';', ent_end - 1, ent_end, MarkFlags.closer | MarkFlags.resolved) == null) {
+                            ret = -1;
+                            return ret;
+                        }
+                        ctx.marks.items[@intCast(ent_opener)].next = ent_opener + 1;
+                        ctx.marks.items[@intCast(ent_opener + 1)].prev = ent_opener;
+
+                        // -1 offsets the loop's own increment.
+                        ent_off = ent_end - 1;
+                    }
+
+                    const autolink_closer: c_int = ctx.nMarks();
                     if (addMark(ctx, '>', autolink_end - 1, autolink_end, MarkFlags.closer | flags) == null) {
                         ret = -1;
                         return ret;
                     }
-                    ctx.marks.items[@intCast(ctx.nMarks() - 2)].next = ctx.nMarks() - 1;
-                    ctx.marks.items[@intCast(ctx.nMarks() - 1)].prev = ctx.nMarks() - 2;
+                    ctx.marks.items[@intCast(autolink_opener)].next = autolink_closer;
+                    ctx.marks.items[@intCast(autolink_closer)].prev = autolink_opener;
                     off = autolink_end;
                     continue :scan;
                 }

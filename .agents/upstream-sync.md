@@ -376,6 +376,53 @@ from a whitespace/raw-HTML/container token alphabet, normalized through `test/no
 against markdown-it's `commonmark` preset reported 0 regressions and 762 inputs that newly
 agree with it.
 
+## Deliberate deviations — an autolink's label resolves entities
+
+Also not an upstream commit. md4c decodes entity references in an autolink's
+**destination** but not in its **label**, so one link disagrees with itself.
+
+The asymmetry is structural, not a policy: `md_build_attribute()` (`util.zig`) is handed
+`MD_BUILD_ATTR_NO_ESCAPES` for autolinks, but that flag gates only the backslash branch —
+the `&` branch above it is unconditional, so the destination always decodes. The label
+went the other way for an unrelated reason: `md_collect_marks` (`inlines.zig`) set
+`off = autolink_end` after emitting the `<`/`>` pair, jumping the interior, so no entity
+mark was ever collected inside one. md4c HEAD still has both halves (md4c.c:1557-1574 and
+the autolink branch of its own `md_collect_marks`); the behavior is inherited
+byte-identically, and a built md4c HEAD reproduces it exactly.
+
+md4x now collects entity marks inside the autolink interior, pre-resolved in the shape
+`md_analyze_entity` would have left them, so both halves decode.
+
+| input                        | md4c / md4x ≤0.0.28                    | md4x now                          |
+| ---------------------------- | -------------------------------------- | --------------------------------- |
+| `<https://e.com/?x=&copy;y>` | href `…?x=%C2%A9y`, text `…?x=&copy;y` | href `…?x=%C2%A9y`, text `…?x=©y` |
+
+**Why the label is the half that was wrong, not the destination.** The two CommonMark
+reference implementations disagree here: commonmark.js keeps the entity literal in both,
+cmark decodes both. cmark is what matters — cmark-gfm is the engine GitHub runs, and
+`github-parity.md` makes GitHub the target. Built from source, cmark-gfm agrees with the
+new md4x byte-for-byte on every case in the `test/regressions.txt` section, including the
+non-entity edges (bare `&`, unterminated `&amp`, stray `;`, unknown name, out-of-range
+numeric reference). Spec 6.2 backs it: the only exemptions it names are code spans and
+code blocks, and the autolink section carries no entity example at all — which is why
+md4c and md4x both scored 100% on `spec.txt` while diverging.
+
+Two related behaviors deliberately did **not** change:
+
+- **The destination.** It was already right; the report that surfaced this asked for both
+  halves to stay literal, which would have moved the destination away from GitHub.
+- **Permissive (bare-URL) autolinks.** `https://e.com/?a=1&amp;b=2` unbracketed is not an
+  autolink in md4x at all — the entity marks resolve first and the `:`-driven segment
+  scanner never fires. GitHub links it, entity decoded. That is a separate mechanism
+  (`md_analyze_permissive_autolink`), it is inherited from md4c too — verified against
+  `md2html --fpermissive-autolinks` — and it is untouched here.
+
+Blast radius, measured: over `scripts/diff-corpus.sh`'s whole corpus × 6 formats with the
+corpus pinned at the pre-change tree, **zero** hashes move — no existing suite or seed
+input has an entity inside a bracketed autolink. All 18 `.txt` suites and the vitest
+bindings suite pass. Pinned by seven examples in `test/regressions.txt`
+(§ An autolink's label resolves entities, like its destination).
+
 ## Deliberate deviations — a table may interrupt a paragraph
 
 Also not an upstream commit. md4c gates the table underline on
