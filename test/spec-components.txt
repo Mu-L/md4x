@@ -553,6 +553,53 @@ Footer content here.
 --format=json
 ````````````````````````````````
 
+## A one-paragraph slot body with `{attrs}` keeps its paragraph
+
+The AST renderer unwraps a slot body that is exactly one paragraph, but not one
+carrying trailing `{attrs}`: the attributes live on the paragraph node, and
+`template` is a slot marker the consumer unwraps when mounting, so dropping the
+paragraph would drop them. This used to emit a bare `"Prose"`, losing the class
+and disagreeing with the HTML renderer, which has always emitted the `<p>`.
+
+```````````````````````````````` example [no-normalize]
+::card
+#description
+Prose {#x .text-lg data-k=1}
+::
+.
+{"nodes":[["card",{},["template",{"name":"description"},["p",{"id":"x","class":"text-lg","data-k":"1"},"Prose"]]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+The same source under the HTML renderer, unchanged:
+
+```````````````````````````````` example
+::card
+#description
+Prose {#x .text-lg data-k=1}
+::
+.
+<card>
+<template name="description">
+<p id="x" class="text-lg" data-k="1">Prose</p>
+</template>
+</card>
+````````````````````````````````
+
+A body with no attributes still unwraps:
+
+```````````````````````````````` example [no-normalize]
+::card
+#description
+Prose
+::
+.
+{"nodes":[["card",{},["template",{"name":"description"},"Prose"]]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
 ## Slot with rich markdown content
 
 ```````````````````````````````` example

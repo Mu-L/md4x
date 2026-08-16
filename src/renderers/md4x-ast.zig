@@ -1661,9 +1661,17 @@ fn jsonTransformTree(node: *JsonNode) void {
     // what element the slot sits in, so the paragraph is redundant at best and
     // a `<p>`-inside-`<p>` hydration mismatch at worst. A multi-block body keeps
     // its paragraphs, exactly as a loose list item does.
+    //
+    // A paragraph carrying trailing `{attrs}` is exempt: dropping it would drop
+    // the attributes with it, since they live on the paragraph node and the
+    // `template` is a slot marker the consumer unwraps when mounting. The tight
+    // list item this rule is modelled on keeps them too -- `- one {.x}` renders
+    // as `["li",{"class":"x"},"one"]`, not as a bare `li`.
     if (!node.tag_is_dynamic and node.tag_kind == .template) {
         if (node.first_child) |only| {
-            if (only.next_sibling == null and isBareParagraph(only)) {
+            if (only.next_sibling == null and isBareParagraph(only) and
+                only.raw_attrs == null)
+            {
                 node.first_child = only.first_child;
                 node.last_child = only.last_child;
             }

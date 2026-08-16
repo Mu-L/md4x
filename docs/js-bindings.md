@@ -313,7 +313,7 @@ The JSON renderer produces a **Comark AST** — a lightweight, array-based forma
 - **Raw HTML is a node, never loose text.** `["html", {}, "<b>"]` for an inline run and `["html", { "block": true }, "…"]` for an HTML block — one node per source event, so `<b>` and `</b>` stay separate and a literal `<` in prose stays a plain text character. Without this the two are indistinguishable inside one string.
 - **Headings carry an `id`** matching `meta.headings[].id`.
 - **A paragraph holding only MDC components is unwrapped.** A component written on its own line (`:pm-x{cmd=foo}`) is emitted at block level; one used mid-sentence keeps its paragraph. Matches `markdown-it-mdc`.
-- **A `template` slot body that is exactly one paragraph is unwrapped**, the same way a tight list item renders as `["li", {}, "one"]`. A multi-block body keeps its paragraphs.
+- **A `template` slot body that is exactly one paragraph is unwrapped**, the same way a tight list item renders as `["li", {}, "one"]`. A multi-block body keeps its paragraphs, and so does a single paragraph carrying trailing `{attrs}` — the attributes belong to the paragraph, and `template` is a slot marker the consumer unwraps when mounting, so unwrapping would drop them.
 - **`> [!NOTE]` reports `{"type":"note"}`**, lowercased so the GFM and `::alert{type=note}` spellings of one node agree.
 
 **Property type conventions in AST output:**

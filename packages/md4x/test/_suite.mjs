@@ -624,6 +624,23 @@ export function defineSuite({
       ]);
     });
 
+    it("keeps a one-paragraph slot body that carries {attrs}", async () => {
+      // The attributes live on the paragraph node, and `template` is a slot
+      // marker the consumer unwraps when mounting, so unwrapping here would
+      // drop them outright. Used to yield a bare "Prose", which also put the
+      // AST at odds with the HTML renderer's `<p class="text-lg">Prose</p>`.
+      const ast = await parseAST("::card\n#description\nProse {.text-lg}\n::");
+      expect(ast.nodes[0]).toEqual([
+        "card",
+        {},
+        [
+          "template",
+          { name: "description" },
+          ["p", { class: "text-lg" }, "Prose"],
+        ],
+      ]);
+    });
+
     it("keeps the paragraphs of a multi-block slot body", async () => {
       const ast = await parseAST("::card\n#description\nOne\n\nTwo\n::");
       expect(ast.nodes[0]).toEqual([
