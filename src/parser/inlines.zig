@@ -2240,6 +2240,41 @@ pub fn md_enter_leave_span_span(ctx: *MD_CTX, enter: bool, raw_attrs: [*c]const 
     return if (enter) mdEnterSpan(ctx, &d) else mdLeaveSpan(ctx, &d);
 }
 
+// Emit a verbatim (code / latexmath / raw HTML) text run from a table cell,
+// substituting `|` for every `\|`.
+//
+// GFM splits a table row on unescaped `|` *before* inline parsing, and drops the
+// backslash of an escaped one while building the cell's string. The escape
+// therefore takes effect even inside a code span, where an ordinary inline
+// backslash escape does nothing: `` `\|` `` is `<code>|</code>` (GFM example
+// 200). md4x parses cells in place -- there is no per-cell string to rewrite --
+// so the unescape happens at emission instead, by breaking the run into pieces
+// around each `\|`.
+//
+// Only verbatim runs need this. In normal text the `\|` was collected as an
+// escape mark and md_process_inlines already emits just the `|`.
+fn md_emit_verbatim_text(ctx: *MD_CTX, text_type: c.TextType, beg: OFF, end: OFF) c_int {
+    var seg: OFF = beg;
+    var off: OFF = beg;
+
+    while (off + 1 < end) : (off += 1) {
+        if (ctx.ch(off) != '\\' or ctx.ch(off + 1) != '|') continue;
+
+        if (off > seg) {
+            const ret = mdText(ctx, text_type, ctx.str(seg), off - seg);
+            if (ret != 0) return ret;
+        }
+        const ret = mdText(ctx, text_type, "|", 1);
+        if (ret != 0) return ret;
+
+        off += 1;
+        seg = off + 1;
+    }
+
+    if (end > seg) return mdText(ctx, text_type, ctx.str(seg), end - seg);
+    return 0;
+}
+
 // md4x.c ~4721. Render the output per the analyzed ctx.marks.
 pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
     var text_type: c.TextType = undefined;
@@ -2263,7 +2298,10 @@ pub fn md_process_inlines(ctx: *MD_CTX, lines: []const MD_LINE) c_int {
     main: while (true) {
         tmp = if (line.*.end < mark.*.beg) line.*.end else mark.*.beg;
         if (tmp > off) {
-            ret = mdText(ctx, text_type, ctx.str(off), tmp - off);
+            ret = if (ctx.in_table_cell and text_type != c.TextType.normal)
+                md_emit_verbatim_text(ctx, text_type, off, tmp)
+            else
+                mdText(ctx, text_type, ctx.str(off), tmp - off);
             if (ret != 0) return ret;
             off = tmp;
         }

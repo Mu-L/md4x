@@ -39,6 +39,12 @@ on `meta.headings` for TOC building. A `{#custom-id}` block attribute overrides 
   in the same container as the header row.)
 - Max 128 columns (DoS protection)
 - Cell content supports inline markdown
+- A pipe inside a code span, raw HTML tag, autolink or link does **not** split the cell, so
+  ``| `string | number` |`` is one cell (GitHub splits it — see
+  [compatibility.md](compatibility.md))
+- `\|` is a literal pipe anywhere in a cell, including inside a code span, raw HTML or
+  math, where a backslash escape is otherwise inert: `` `a\|b` `` is `<code>a|b</code>`.
+  This is GitHub's escape, so tables written for GitHub render the same here
 
 ## Extension: Task Lists
 

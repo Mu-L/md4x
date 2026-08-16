@@ -378,3 +378,34 @@ quux     | quuz
 </tbody>
 </table>
 ````````````````````````````````
+
+This is where md4x diverges from GFM, which splits the row on every unescaped
+pipe *before* inline parsing and so gets two cells here. The escape GFM
+documents for that case works either way: inside a cell, `\|` is a literal pipe
+even in a code span, in raw HTML and in math, where an ordinary inline backslash
+escape does nothing. GFM example 200 (imported in `test/spec-gfm.txt`) pins the
+code span; these are the other two verbatim contexts.
+
+```````````````````````````````` example
+Column 1 | Column 2
+---------|---------
+<span title="a\|b">x</span> | $c\|d$
+.
+<table>
+<thead>
+<tr><th>Column 1</th><th>Column 2</th></tr>
+</thead>
+<tbody>
+<tr><td><span title="a|b">x</span></td><td><x-equation>c|d</x-equation></td></tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Outside a table cell the same runs keep the backslash: nothing there was ever
+split on pipes, so there is no escape to undo.
+
+```````````````````````````````` example
+`a\|b` and <span title="a\|b">x</span> and $c\|d$
+.
+<p><code>a\|b</code> and <span title="a\|b">x</span> and <x-equation>c\|d</x-equation></p>
+````````````````````````````````

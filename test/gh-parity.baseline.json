@@ -6,12 +6,12 @@
       "diverge": 107
     },
     "spec-gfm.txt": {
-      "cases": 17,
+      "cases": 18,
       "diverge": 3
     },
     "spec-tables.txt": {
-      "cases": 18,
-      "diverge": 3
+      "cases": 20,
+      "diverge": 5
     },
     "spec-tasklists.txt": {
       "cases": 9,
@@ -42,7 +42,7 @@
     "unicode-punct": 2,
     "scheme-allowlist": 7,
     "autolink-rules": 5,
-    "md4x-extension": 3
+    "md4x-extension": 5
   },
   "divergences": [
     {
@@ -582,17 +582,17 @@
     },
     {
       "suite": "spec-gfm.txt",
-      "n": 7,
-      "cause": "markup-shape"
-    },
-    {
-      "suite": "spec-gfm.txt",
       "n": 8,
       "cause": "markup-shape"
     },
     {
       "suite": "spec-gfm.txt",
-      "n": 14,
+      "n": 9,
+      "cause": "markup-shape"
+    },
+    {
+      "suite": "spec-gfm.txt",
+      "n": 15,
       "cause": "scheme-allowlist"
     },
     {
@@ -609,6 +609,16 @@
       "suite": "spec-tables.txt",
       "n": 18,
       "cause": "unclassified"
+    },
+    {
+      "suite": "spec-tables.txt",
+      "n": 19,
+      "cause": "md4x-extension"
+    },
+    {
+      "suite": "spec-tables.txt",
+      "n": 20,
+      "cause": "md4x-extension"
     },
     {
       "suite": "spec-tasklists.txt",

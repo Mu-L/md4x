@@ -41,28 +41,28 @@ mirrored in `napi.mjs`). Notably absent by default: `HEADING_IDS` (`0x20`), `FUL
 ✅ matches · ➕ md4x extension — the reference has no such syntax · ⚠️ diverges on purpose ·
 ❌ gap or unsupported · — not applicable
 
-| Feature                                | CommonMark |                 GitHub                  |            Comark             |
-| -------------------------------------- | :--------: | :-------------------------------------: | :---------------------------: |
-| Core blocks & inlines                  |     ✅     |                   ✅                    |              ✅               |
-| Void tag spelling (`<hr>` vs `<hr />`) |     ⚠️     |                   ✅                    |              ✅               |
-| Nested strong (`****foo****`)          |     ✅     |                   ⚠️                    |              ✅               |
-| Code fence info (`class="language-x"`) |     ✅     |                   ⚠️                    |              ✅               |
-| Raw HTML                               |     ✅     |             ⚠️ unsanitized              |              ✅               |
-| Entity escaping in attributes          |     ✅     |                   ⚠️                    |              ✅               |
-| Tables                                 |     —      |     ⚠️ code span across a cell edge     |              ✅               |
-| Task lists                             |     —      |     ❌ missing classes / a11y attrs     |            ⚠️ same            |
-| Strikethrough                          |     —      |                   ✅                    |              ✅               |
-| Permissive autolinks                   |     ➕     |           ⚠️ scheme allowlist           |              ✅               |
-| Alerts                                 |     —      | ⚠️ `<blockquote>` not `<div>`; superset |              ✅               |
-| Footnotes                              |     —      |       ❌ scaffolding + anchor ids       |              ✅               |
-| Frontmatter                            |     ➕     |                   ➕                    |              ✅               |
-| Components (`:c`, `::c`)               |     ➕     |                   ➕                    |              ✅               |
-| Attributes (`{#id .cls}`)              |     ➕     |                   ➕                    |      ⚠️ spaced `[span]`       |
-| Highlight (`==x==`)                    |     ➕     |                   ➕                    |              ✅               |
-| LaTeX math (`$x$`)                     |     ➕     |                   ➕                    |      ➕ non-Comark node       |
-| Heading ids                            | ⚠️ opt-in  |            ❌ off by default            | ❌ off by default (HTML only) |
-| Emoji shortcodes                       |     —      |          ❌ build-time opt-in           |     ❌ build-time opt-in      |
-| Comments hidden from output            |     —      |                    —                    |  ❌ HTML renderer emits them  |
+| Feature                                | CommonMark |                  GitHub                   |            Comark             |
+| -------------------------------------- | :--------: | :---------------------------------------: | :---------------------------: |
+| Core blocks & inlines                  |     ✅     |                    ✅                     |              ✅               |
+| Void tag spelling (`<hr>` vs `<hr />`) |     ⚠️     |                    ✅                     |              ✅               |
+| Nested strong (`****foo****`)          |     ✅     |                    ⚠️                     |              ✅               |
+| Code fence info (`class="language-x"`) |     ✅     |                    ⚠️                     |              ✅               |
+| Raw HTML                               |     ✅     |              ⚠️ unsanitized               |              ✅               |
+| Entity escaping in attributes          |     ✅     |                    ⚠️                     |              ✅               |
+| Tables                                 |     —      | ⚠️ no split inside code spans (by choice) |              ✅               |
+| Task lists                             |     —      |      ❌ missing classes / a11y attrs      |            ⚠️ same            |
+| Strikethrough                          |     —      |                    ✅                     |              ✅               |
+| Permissive autolinks                   |     ➕     |            ⚠️ scheme allowlist            |              ✅               |
+| Alerts                                 |     —      |  ⚠️ `<blockquote>` not `<div>`; superset  |              ✅               |
+| Footnotes                              |     —      |        ❌ scaffolding + anchor ids        |              ✅               |
+| Frontmatter                            |     ➕     |                    ➕                     |              ✅               |
+| Components (`:c`, `::c`)               |     ➕     |                    ➕                     |              ✅               |
+| Attributes (`{#id .cls}`)              |     ➕     |                    ➕                     |      ⚠️ spaced `[span]`       |
+| Highlight (`==x==`)                    |     ➕     |                    ➕                     |              ✅               |
+| LaTeX math (`$x$`)                     |     ➕     |                    ➕                     |      ➕ non-Comark node       |
+| Heading ids                            | ⚠️ opt-in  |             ❌ off by default             | ❌ off by default (HTML only) |
+| Emoji shortcodes                       |     —      |           ❌ build-time opt-in            |     ❌ build-time opt-in      |
+| Comments hidden from output            |     —      |                     —                     |  ❌ HTML renderer emits them  |
 
 ➕ marks syntax md4x adds; it is additive by nature, so a reference that lacks it is not a
 failure on either side. No row carries **➕ ⚠️** any more — that mark was for an extension
@@ -122,21 +122,23 @@ Measured live against `api.github.com/markdown` in both `markdown` and `gfm` mod
 counts as parity if it matches either. Baseline: `test/gh-parity.baseline.json`,
 rationale in [.agents/github-parity.md](../.agents/github-parity.md).
 
-**186 divergences over 795 cases**, down from 192. The baseline was re-recorded after two
-changes: the frontmatter body test took spec.txt 96 and 98 to parity, and removing wiki
-links took 548 and 559 (590 dropped to a plain `entity-escaping` divergence, and the two
-wiki cases in `spec-footnotes.txt` are gone). `md4x-extension` fell from 10 to 3 between
-them.
+**188 divergences over 798 cases.** Whole-baseline re-record on 2026-08-16, after `\|`
+started unescaping inside table cells. All three new cases are the tests for that fix: GFM
+example 200, imported into `spec-gfm.txt` and **matching**, plus two `spec-tables.txt`
+cases pinning the same fix in math and raw HTML, which GitHub has no equivalent for and so
+count as `md4x-extension`. Every other total is unchanged — the fix closed a case that was
+never in the corpus.
 
-Tables interrupting a paragraph (2026-08-16) closed one divergence and opened one, both in
-`spec-tables.txt` and both `unclassified`, so every total below is unchanged; only that
-suite was re-measured, and it grew from 14 cases to 18.
+Earlier movement, for the record: 192 → 186 over two changes, when the frontmatter body
+test took `spec.txt` 96 and 98 to parity and removing wiki links took 548 and 559 (590
+dropped to a plain `entity-escaping` divergence, and the two wiki cases in
+`spec-footnotes.txt` are gone). `md4x-extension` fell from 10 to 3 between them.
 
 | Suite                         |  Parity |
 | ----------------------------- | ------: |
 | spec.txt                      | 545/652 |
-| spec-gfm.txt                  |   14/17 |
-| spec-tables.txt               |   15/18 |
+| spec-gfm.txt                  |   15/18 |
+| spec-tables.txt               |   15/20 |
 | spec-tasklists.txt            |     1/9 |
 | spec-footnotes.txt            |    9/36 |
 | spec-alerts.txt               |   11/43 |
@@ -149,12 +151,12 @@ suite was re-measured, and it grew from 14 cases to 18.
 | `sanitizer`        |  62 | not-goal — GitHub strips raw HTML, md4x does not   |
 | `unclassified`     |  23 | triaged, all documented                            |
 | `entity-escaping`  |  21 | not-goal                                           |
-| `md4x-extension`   |   3 | not-goal                                           |
+| `md4x-extension`   |   5 | not-goal                                           |
 | `scheme-allowlist` |   7 | not-goal — GitHub linkifies only http(s)/mailto    |
 | `autolink-rules`   |   5 | not-goal — which characters may border an autolink |
 | `unicode-punct`    |   2 | not-goal — GitHub's tables predate 0.31            |
 
-100 of 186 are declared not-goals. **No divergence is an outright "md4x emits wrong HTML"
+102 of 188 are declared not-goals. **No divergence is an outright "md4x emits wrong HTML"
 bug** — each reduces to a not-goal, a decision already taken, a GitHub defect, or an open
 gap. Cases where md4x is the correct one include CommonMark-exact nested strong (8),
 `&#87654321;` (GitHub emits U+FFFD), footnote-in-link, `[^nf]:` after a paragraph, and a
@@ -169,6 +171,17 @@ Open, undecided gaps:
   wrap, `&#8617;` vs `↩` + `data-footnote-backref` + `aria-label`.
 - **Footnote anchor ids** (3–4 cases) — numbered `fn-1`/`fnref-1-1` instead of
   label-derived `fn-a`. Breaks deep links into GitHub-rendered documents.
+- **Pipes inside code spans in a table cell** (1 case, `spec-tables.txt#18`) — the one
+  divergence md4x holds against the spec rather than against GitHub's house style, and
+  since 2026-08-16 a **decision, not a gap**. GFM splits a row on every unescaped `|`
+  _before_ inline parsing, so `` `foo | bar` `` is two cells there; md4x parses inlines
+  first and splits on what is left, so it stays one code span. Matching GFM would mangle
+  ``| `string | number` |`` — the everyday API-table cell — and would also start
+  splitting through links, raw HTML and autolinks, which is what GitHub does to all three.
+  The spec's own escape now works either way: `` `\|` `` renders `<code>|</code>` as of
+  2026-08-16 (GFM example 200, imported into `test/spec-gfm.txt` and passing), so a
+  document written for GitHub renders correctly here too. Reasoning in
+  [.agents/github-parity.md](../.agents/github-parity.md).
 
 _(Tables not being able to interrupt a paragraph used to be the fourth entry, and the
 highest real-document risk on it: a missing blank line turned an entire table into

@@ -132,7 +132,12 @@ pub fn md_process_table_cell(ctx: *MD_CTX, cell_type: c.BlockType, align_val: c.
 
     ret = mdEnterBlock(ctx, &det);
     if (ret != 0) return ret;
+    // Tells the inline emitter that `\|` is the cell-splitting escape and has to
+    // be unescaped even in verbatim runs (md_emit_verbatim_text).
+    const outer_in_table_cell = ctx.in_table_cell;
+    ctx.in_table_cell = true;
     ret = md_process_normal_block_contents(ctx, @as([*]const MD_LINE, @ptrCast(&line))[0..1]);
+    ctx.in_table_cell = outer_in_table_cell;
     if (ret < 0) return ret;
     ret = mdLeaveBlock(ctx, &det);
     if (ret != 0) return ret;

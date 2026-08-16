@@ -80,15 +80,15 @@ marker rather than from anything the author wrote, so scoring it would compare t
 identical decisions — and would charge md4x forever for the ~700-byte octicon GitHub
 inlines and md4x deliberately does not.
 
-## Baseline — 2026-08-15, `spec-tables.txt` re-measured 2026-08-16
+## Baseline — whole corpus re-recorded 2026-08-16
 
-795 cases. Parity by suite:
+798 cases. Parity by suite:
 
 | suite                           | parity  |
 | ------------------------------- | ------- |
 | `spec.txt` (CommonMark core)    | 545/652 |
-| `spec-gfm.txt`                  | 14/17   |
-| `spec-tables.txt`               | 15/18   |
+| `spec-gfm.txt`                  | 15/18   |
+| `spec-tables.txt`               | 15/20   |
 | `spec-strikethrough.txt`        | 5/5     |
 | `spec-permissive-autolinks.txt` | 9/15    |
 | `spec-footnotes.txt`            | 9/36    |
@@ -103,26 +103,27 @@ Divergences by cause:
 | `sanitizer`        |  62 | GitHub's HTML sanitizer rewrote or dropped raw HTML — **not a goal** |
 | `unclassified`     |  23 | triaged below                                                        |
 | `entity-escaping`  |  21 | `&quot;` vs `"` re-serialization — **not a goal**                    |
-| `md4x-extension`   |   3 | md4x syntax GitHub does not have — **not a goal**                    |
+| `md4x-extension`   |   5 | md4x syntax GitHub does not have — **not a goal**                    |
 | `scheme-allowlist` |   7 | GitHub only linkifies known URL schemes — **not a goal**             |
 | `autolink-rules`   |   5 | which characters may border an autolink — **not a goal**             |
 | `unicode-punct`    |   2 | GitHub's older Unicode tables — **not a goal**                       |
 
-The headline number is misleading on its own and should never be quoted bare: 100 of the
-186 divergences are causes md4x will not chase, and `spec.txt`'s 545/652 is almost
+The headline number is misleading on its own and should never be quoted bare: 102 of the
+188 divergences are causes md4x will not chase, and `spec.txt`'s 545/652 is almost
 entirely `sanitizer` plus `entity-escaping`. The number that matters is `unclassified`.
 
-The 2026-08-16 run covered `spec-tables.txt` only (the suite gained four examples when
-tables learned to interrupt a paragraph, which renumbers its cases). Every total above
-happens to be unchanged: the interrupt divergence closed and one new one opened in the
-same suite and the same `unclassified` bucket — see the [triage](#unclassified-23--triaged-still-open).
-The other seven suites are the 2026-08-15 figures, untouched by that change (the
-`diff-corpus.sh` sweep showed no other output moving). **Re-record the whole baseline
-(`--update`) with the next parity-affecting change** rather than hand-patching again.
+Whole-baseline `--update` run, 2026-08-16, after the `\|` unescape in table cells (below).
+Three suites moved and nothing else did: `spec-gfm.txt` gained upstream example 200, which
+now **matches** (14/17 → 15/18) and shifts that suite's later case numbers by one;
+`spec-tables.txt` gained the two verbatim-context examples pinning the same fix, both
+`md4x-extension` because they use math and raw HTML GitHub has no equivalent for (15/18 →
+15/20). `unclassified` is unchanged at 23 — this fix closed a case that was never in the
+corpus. Earlier hand-patching of single suites is what made the numbers hard to trust;
+keep re-recording the whole thing.
 
 ## Not goals
 
-Six causes, 100 of 186 divergences. Chasing any of them makes md4x worse.
+Six causes, 102 of 188 divergences. Chasing any of them makes md4x worse.
 
 ### GitHub's HTML sanitizer (62)
 
@@ -263,14 +264,53 @@ these is a product decision nobody has taken.
 
 ### `unclassified` (23) — triaged, still open
 
-Real behavioural differences. Three are GitHub being wrong.
+Real behavioural differences. Three are GitHub being wrong; one (`spec-tables.txt#18`) is
+md4x departing from the GFM spec on purpose.
 
 **Tables (2).** The only two table divergences that are not cosmetic:
 
 | case                 | difference                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `spec-tables.txt#9`  | A link reference definition on the line above the header row: md4x consumes it as a ref def (CommonMark's rule for the start of a paragraph) and resolves the later `[ref]`; GitHub renders `<p>[ref]: /url</p>` and leaves the use unlinked. Both render the table. **GitHub is wrong** — cmark-gfm appears to skip the ref-def scan on the paragraph a table interrupted. |
-| `spec-tables.txt#18` | GitHub does not let a **code span cross a cell boundary** — `` `foo \| bar` `` splits at the pipe into two cells. md4x keeps it as one code span and leaves the next cell empty.                                                                                                                                                                                            |
+| `spec-tables.txt#18` | GitHub does not let a **code span cross a cell boundary** — `` `foo \| bar` `` splits at the pipe into two cells. md4x keeps it as one code span and leaves the next cell empty. **Deliberate**, decided 2026-08-16 — see below.                                                                                                                                            |
+
+The `#18` case is the one place in this file where md4x is the outlier on a documented
+rule rather than on GitHub's house style. The GFM spec splits a row on every unescaped
+`|` **before** inline parsing; md4x parses the row's inlines first and splits on the pipes
+that are left over, so pipes inside code spans, raw HTML, autolinks and links never split
+a cell.
+
+**The escape half is closed; the splitting half stays open on purpose.** They are
+independent, and 2026-08-16 took only the first:
+
+- **Closed.** `` `\|` `` now yields `<code>|</code>`, matching GitHub. `md_emit_verbatim_text`
+  (`src/parser/inlines.zig`) breaks a cell's verbatim run — code span, raw HTML, math — at
+  each `\|` and emits a literal pipe; `md_process_table_cell` sets `ctx.in_table_cell`
+  around the cell. Nothing else moved: the corpus sweep was diff-clean, because a `\|`
+  inside a verbatim run in a table cell appears nowhere in it. This is what **GFM example
+  200** tests, now imported into `test/spec-gfm.txt` and passing.
+- **Open, deliberately.** Splitting still happens after inline parsing. Matching GitHub
+  here would mean ``| `string \| number` |`` — the ordinary TS-union API-table cell —
+  rendering as two mangled cells, which is what GitHub does and what md4x is better than.
+  It would also start splitting through links, raw HTML and autolinks (verified live
+  2026-08-16, `mode=markdown`: GitHub splits all of them), and silently drop the extra
+  cells past `col_count`. Doing it _without_ the escape half would have been the worst of
+  the three positions — no way to write a pipe in a cell's code span at all — which is why
+  the escape landed first and alone.
+
+Mechanically the splitting half is cheap and would _delete_ code (the `table_mode`
+pre-pass in `md_analyze_inlines`, `md_analyze_table_cell_boundary`, the three `MD_CTX`
+boundary fields, and `|` as a mark char in every paragraph). The cost is the output, not
+the patch.
+
+Everything the escape half can reach now matches byte-for-byte, verified live 2026-08-16:
+`` `\|` ``, `` `x\|` ``, `` `\|y` `` and even `` `a\\|b` `` — `<code>a\|b</code>` on both,
+since cmark-gfm strips one backslash while building the cell and inline parsing keeps the
+other, and md4x's emitter lands on the same two characters. The one case still diverging is
+`a\\|b` in **plain** cell text: GitHub keeps one cell reading `a|b`, md4x splits into `a\`
+and `b`, because md4x collects `\\` as a single escape mark and the `|` is then a bare
+boundary. That is the splitting rule again, not a missing unescape — it closes with the
+half above, and with nothing less.
 
 `spec-tables.txt#7` used to head this table: GitHub let a table **interrupt a paragraph**
 and md4x required a blank line first, so a whole table rendered as literal pipes. Closed

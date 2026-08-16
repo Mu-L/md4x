@@ -450,6 +450,11 @@ pub const MD_CTX = struct {
     table_cell_boundaries_head: c_int = 0,
     table_cell_boundaries_tail: c_int = 0,
 
+    // Set while the contents of a table cell are being processed, so the
+    // inline emitter knows to unescape `\|` in verbatim runs. See
+    // md_emit_verbatim_text.
+    in_table_cell: bool = false,
+
     // For resolving links.
     unresolved_link_head: c_int = 0,
     unresolved_link_tail: c_int = 0,

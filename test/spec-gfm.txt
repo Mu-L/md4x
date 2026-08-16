@@ -15,7 +15,7 @@ against the hand-written md4c-inherited suites (`test/spec-tables.txt`,
 
 **Imported:** the five `(extension)` sections only — Tables, Task list items,
 Strikethrough, Autolinks and Disallowed Raw HTML. Those hold 24 of the upstream
-file's 672 examples; 17 of the 24 are here.
+file's 672 examples; 18 of the 24 are here.
 
 **Deliberately not imported:** the other 648 examples. They are CommonMark
 **0.29**, which is *older* than `test/spec.txt` (CommonMark 0.31.2), so importing
@@ -49,15 +49,17 @@ void element.
 
 ## Examples excluded because MD4X and GFM 0.29 genuinely disagree
 
-Seven examples are left out rather than silently re-baselined to whatever MD4X
+Six examples are left out rather than silently re-baselined to whatever MD4X
 prints. Each is listed here with its upstream number and the disagreement, so the
 omission is auditable and none of it is lost.
 
-- **200** (Tables) — a table cell holding a code span with an escaped pipe in it,
-  ``| b `\|` az |``. GFM unescapes `\|` to `|` while splitting the row, so the
-  escape takes effect even inside a code span: `<code>|</code>`. MD4X
-  (like md4c) treats `\|` as an ordinary inline backslash escape, which code spans
-  suppress, and emits `<code>\|</code>`. Undocumented divergence.
+(**200** used to head this list: a table cell holding a code span with an escaped
+pipe, ``| b `\|` az |``. MD4X emitted `<code>\|</code>` where GFM unescapes to
+`<code>|</code>`. Closed 2026-08-16 and imported above — `md_emit_verbatim_text`
+unescapes `\|` in a cell's verbatim runs. Note this closed the *escape* half only:
+MD4X still does not split a row through a code span, so example 200's sibling case
+`` `foo | bar` `` remains one cell. See `.agents/github-parity.md`.)
+
 - **203** (Tables) — a delimiter row with fewer cells than the header row
   (`| abc | def |` over `| --- |`). GFM requires the counts to match and renders
   the whole thing as a paragraph; MD4X (like md4c) lets the delimiter row set the
@@ -127,6 +129,31 @@ bar | baz
 <tr>
 <td align="center">bar</td>
 <td align="right">baz</td>
+</tr>
+</tbody>
+</table>
+````````````````````````````````
+
+Upstream example 200.
+
+```````````````````````````````` example
+| f\|oo  |
+| ------ |
+| b `\|` az |
+| b **\|** im |
+.
+<table>
+<thead>
+<tr>
+<th>f|oo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b <code>|</code> az</td>
+</tr>
+<tr>
+<td>b <strong>|</strong> im</td>
 </tr>
 </tbody>
 </table>
