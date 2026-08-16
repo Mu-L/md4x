@@ -319,6 +319,127 @@ Paragraph two
 </card>
 ````````````````````````````````
 
+## A raw HTML block is closed by the component's `::`
+
+Containers are matched before leaf-block content, so the closer belongs to the
+component. This needs saying because an HTML block has no closing marker of its
+own: types 6 and 7 (`<div>`, `<my-tag>`) run to a blank line, so left to itself
+the block would swallow the `::` as HTML text and the component would never
+close — taking every following block into it.
+
+```````````````````````````````` example
+::note
+<div>x</div>
+::
+
+after
+.
+<note>
+<div>x</div>
+</note>
+<p>after</p>
+````````````````````````````````
+
+Type 7 covers unknown tags, which is what a bare component-ish tag parses as.
+
+```````````````````````````````` example
+::note
+<my-tag>
+::
+
+after
+.
+<note>
+<my-tag>
+</note>
+<p>after</p>
+````````````````````````````````
+
+An *unterminated* type 2 block (a comment with no `-->`) otherwise runs to the
+end of the document, so it loses the closer, `after`, and everything past it.
+
+```````````````````````````````` example
+::note
+<!-- c
+::
+
+after
+.
+<note>
+<!-- c
+</note>
+<p>after</p>
+````````````````````````````````
+
+Each closer ends the HTML block and its own component, so nesting unwinds one
+level at a time rather than collapsing.
+
+```````````````````````````````` example
+:::outer
+::inner
+<div>x</div>
+::
+:::
+
+after
+.
+<outer>
+<inner>
+<div>x</div>
+</inner>
+</outer>
+<p>after</p>
+````````````````````````````````
+
+The same in JSON output, where the flattening is visible as nesting depth.
+
+```````````````````````````````` example
+:::outer
+::inner
+<div>x</div>
+::
+:::
+
+after
+.
+{"nodes":[["outer",{},["inner",{},["html",{"block":true},"<div>x</div>\n"]]],["p",{},"after"]],"frontmatter":{},"meta":{"headings":[]}}
+.
+--format=json
+````````````````````````````````
+
+A fenced code block is literal, so a `::` inside one is content, not a closer —
+the fence still has to close first.
+
+```````````````````````````````` example
+::note
+```
+::
+```
+::
+
+after
+.
+<note>
+<pre><code>::
+</code></pre>
+</note>
+<p>after</p>
+````````````````````````````````
+
+With no component open there is nothing for a `::` to close, so an HTML block
+keeps it as text.
+
+```````````````````````````````` example
+<div>x</div>
+::
+
+after
+.
+<div>x</div>
+::
+<p>after</p>
+````````````````````````````````
+
 
 # Component Property Parsing
 

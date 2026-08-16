@@ -841,6 +841,28 @@ pub fn md_is_block_component_closer(ctx: *MD_CTX, off_in: OFF, p_end: *OFF) c_ui
     return colon_count;
 }
 
+// The open block component that a `::` closer at `off` actually closes, or null.
+// Recognizing a closer is not enough to act on one: an orphan `::` with no open
+// component stays literal text, and a closer belongs to the innermost component
+// whose opener was no wider than it, so `::` inside `:::outer` closes `:::outer`
+// rather than dangling. Reports the closer's end through `p_end` on a match.
+pub fn md_block_component_closer_target(ctx: *MD_CTX, off: OFF, p_end: *OFF) ?c_int {
+    if (off >= ctx.size or ctx.ch(off) != ':')
+        return null;
+
+    const closer_colons = md_is_block_component_closer(ctx, off, p_end);
+    if (closer_colons == 0)
+        return null;
+
+    var i: c_int = ctx.nContainers() - 1;
+    while (i >= 0) : (i -= 1) {
+        if (ctx.containers.items[@intCast(i)].ch == ':' and
+            ctx.containers.items[@intCast(i)].colon_count <= closer_colons)
+            return i;
+    }
+    return null;
+}
+
 // Is there a closing `---` fence somewhere after the opening one? `off_in` sits
 // at the opener's newline (or at the end of input). The scan mirrors the closer
 // test in md_analyze_line's frontmatter-continuation arm: at most a three-space
@@ -1275,6 +1297,8 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
     var n_brothers: c_int = 0;
     var n_children: c_int = 0;
     var inside_component: c_int = 0;
+    // Scratch for md_block_component_closer_target; only read after a match.
+    var closer_end: OFF = undefined;
     var container = MD_CONTAINER{};
     const prev_line_has_list_loosening_effect = ctx.last_line_has_list_loosening_effect;
     var off: OFF = beg;
@@ -1430,6 +1454,20 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
             if (n_parents < ctx.nContainers()) {
                 // HTML block ends implicitly when enclosing container ends.
                 ctx.html_block_type = 0;
+            } else if (ctx.block_component_nesting > 0 and
+                (line.indent < CODE_INDENT_OFFSET or inside_component != 0) and
+                md_block_component_closer_target(ctx, off, &closer_end) != null)
+            {
+                // Same implicit end, for the container whose end is a `::` line
+                // rather than a missing line prefix. Containers are matched
+                // before leaf-block content, so the closer belongs to the
+                // component, not to the HTML block -- and nothing below would
+                // hand it back: types 6 and 7 end only at a blank line, types
+                // 1-5 only at their own end condition, so the `::` would be
+                // eaten as HTML text and the component would never close.
+                // Tested before md_is_html_block_end_condition, which clobbers
+                // `off` on its no-match path (md_line_contains, type 1).
+                ctx.html_block_type = 0;
             } else {
                 const html_block_type = md_is_html_block_end_condition(ctx, off, &off);
                 if (html_block_type > 0) {
@@ -1454,32 +1492,21 @@ pub fn md_analyze_line(ctx: *MD_CTX, beg: OFF, p_end: *OFF, pivot_line_in: *cons
         if (ctx.block_component_nesting > 0 and
             (line.indent < CODE_INDENT_OFFSET or inside_component != 0) and off < ctx.size and ctx.ch(off) == ':')
         {
-            var tmp: OFF = undefined;
-            const closer_colons = md_is_block_component_closer(ctx, off, &tmp);
-            if (closer_colons > 0) {
-                // Find the innermost open block component with matching colon count.
-                var i: c_int = ctx.nContainers() - 1;
-                var matched: c_int = 0;
-                while (i >= 0) : (i -= 1) {
-                    if (ctx.containers.items[@intCast(i)].ch == ':' and ctx.containers.items[@intCast(i)].colon_count <= closer_colons) {
-                        // Close this component and everything inside it.
-                        if (n_children == 0) {
-                            ret = md_leave_child_containers(ctx, i);
-                            if (ret < 0) return ret;
-                        }
-
-                        line.type = .blank;
-                        ctx.last_line_has_list_loosening_effect = false;
-                        off = tmp;
-                        matched = 1;
-                        break;
-                    }
+            // Only `break :classify` on a match. An orphan `::` must fall through
+            // to the checks below with `line.type` untouched -- reading it back
+            // here to decide would read a stale/uninitialized value on the
+            // no-match path, nondeterministically dropping the line.
+            if (md_block_component_closer_target(ctx, off, &closer_end)) |i| {
+                // Close this component and everything inside it.
+                if (n_children == 0) {
+                    ret = md_leave_child_containers(ctx, i);
+                    if (ret < 0) return ret;
                 }
-                // Use a local flag rather than re-reading line.type, which on the
-                // no-match path may not have been set this call (stale/uninitialized
-                // -> nondeterministic dropping of an orphaned '::' closer line).
-                if (matched != 0)
-                    break :classify;
+
+                line.type = .blank;
+                ctx.last_line_has_list_loosening_effect = false;
+                off = closer_end;
+                break :classify;
             }
         }
 
